@@ -1,0 +1,23 @@
+{
+  "result_code": 1,
+  "data": {
+    "schedules": [
+      {
+        "schedule_id": "sch-1001",
+        "doctor_id": "doc-1",
+        "weekday": 2,
+        "day_period": "am",
+        "time_range": "08:00-08:30",
+        "status": "available"
+      },
+      {
+        "schedule_id": "sch-1002",
+        "doctor_id": "doc-2",
+        "weekday": 5,
+        "day_period": "pm",
+        "time_range": "16:00-16:30",
+        "status": "available"
+      }
+    ]
+  }
+}

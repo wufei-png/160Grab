@@ -1,0 +1,15 @@
+{
+  "result_code": 1,
+  "data": {
+    "schedules": [
+      {
+        "schedule_id": "sch-2001",
+        "doctor_id": "doc-3",
+        "weekday": 3,
+        "day_period": "pm",
+        "time_range": "14:00-14:30",
+        "status": "available"
+      }
+    ]
+  }
+}

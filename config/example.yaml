@@ -1,0 +1,16 @@
+# Copy this file to config.yaml before local runs.
+# Default flow: the script opens the login page, you log in manually,
+# navigate to a doctor detail page, then press Enter in the terminal.
+auth:
+  strategy: "manual"
+member_id:
+doctor_ids: []
+weeks: []
+days: []
+hours:
+  - "8-9"
+sleep_time: "3000-5000"
+brush_start_date:
+enable_appoint: false
+appoint_time:
+booking_strategy: "page"

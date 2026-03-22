@@ -30,6 +30,10 @@ packages = ["src/grab"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end tests",
+    "live: tests that talk to the real 91160 site",
+]
 
 # Ruff configuration
 [tool.ruff]

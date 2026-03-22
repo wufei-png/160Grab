@@ -1,6 +1,5 @@
 from loguru import logger
-
-from playwright.async_api import async_playwright, Browser, Page, BrowserContext
+from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 
 class PlaywrightClient:
@@ -29,6 +28,11 @@ class PlaywrightClient:
             raise RuntimeError("Call launch() first")
         await self.page.screenshot(path=path)
         logger.info(f"Screenshot saved to {path}")
+
+    async def run_in_page(self, script: str, arg: dict | None = None):
+        if self.page is None:
+            raise RuntimeError("Call launch() first")
+        return await self.page.evaluate(script, arg)
 
     async def close(self) -> None:
         if self.browser:
