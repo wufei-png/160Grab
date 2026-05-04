@@ -29,19 +29,25 @@ class FakeAuthService:
 
 
 class FakeSessionService:
-    def __init__(self):
-        self.target = DoctorPageTarget(
+    def __init__(self, target: DoctorPageTarget | None = None, resolved_target=None):
+        self.target = target or DoctorPageTarget(
             unit_id="21",
             dept_id="0",
             doctor_id="14765",
             source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-0/docid-14765.html",
         )
+        self.resolved_target = resolved_target or self.target
         self.capture_calls = 0
         self.member_calls = 0
+        self.resolution_calls = 0
 
     async def capture_target_from_current_page(self):
         self.capture_calls += 1
         return self.target
+
+    async def resolve_unit_dept_ids(self, target):
+        self.resolution_calls += 1
+        return self.resolved_target
 
     async def resolve_member_id(self):
         self.member_calls += 1
@@ -109,6 +115,7 @@ async def test_runner_prepares_target_and_member_before_polling(runner):
     await runner.run()
 
     assert runner.session_service.capture_calls == 1
+    assert runner.session_service.resolution_calls == 0
     assert runner.session_service.member_calls == 1
     assert runner.schedule_service.target.doctor_id == "14765"
     assert runner.booking_service.prepared[1] == "m1"
@@ -127,3 +134,72 @@ async def test_runner_stops_after_successful_booking(runner):
 
     assert result.success is True
     assert result.booked_slot_id == "sch-1001"
+
+
+@pytest.mark.asyncio
+async def test_runner_resolves_docid_only_target_before_polling(frozen_clock):
+    unresolved_target = DoctorPageTarget(
+        unit_id=None,
+        dept_id=None,
+        doctor_id="14765",
+        source_url="https://www.91160.com/doctors/index/docid-14765.html",
+        needs_resolution=True,
+    )
+    resolved_target = DoctorPageTarget(
+        unit_id="21",
+        dept_id="0",
+        doctor_id="14765",
+        source_url=unresolved_target.source_url,
+        needs_resolution=False,
+    )
+    config = GrabConfig(
+        enable_appoint=True,
+        appoint_time=frozen_clock.now() + timedelta(seconds=15),
+    )
+    runner = GrabRunner(
+        auth_service=FakeAuthService(),
+        session_service=FakeSessionService(
+            target=unresolved_target,
+            resolved_target=resolved_target,
+        ),
+        scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
+        schedule_service=FakeScheduleService(
+            [Slot(schedule_id="sch-1001", doctor_id="14765", time_range="08:00-08:30")]
+        ),
+        booking_service=FakeBookingService(
+            BookingResult(success=True, attempts=1, slot_id="sch-1001")
+        ),
+    )
+
+    await runner.run()
+
+    assert runner.session_service.resolution_calls == 1
+    assert runner.schedule_service.target.unit_id == "21"
+    assert runner.booking_service.prepared[0].dept_id == "0"
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_when_docid_only_target_stays_unresolved(frozen_clock):
+    unresolved_target = DoctorPageTarget(
+        unit_id=None,
+        dept_id=None,
+        doctor_id="14765",
+        source_url="https://www.91160.com/doctors/index/docid-14765.html",
+        needs_resolution=True,
+    )
+    config = GrabConfig(
+        enable_appoint=True,
+        appoint_time=frozen_clock.now() + timedelta(seconds=15),
+    )
+    runner = GrabRunner(
+        auth_service=FakeAuthService(),
+        session_service=FakeSessionService(target=unresolved_target),
+        scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
+        schedule_service=FakeScheduleService([]),
+        booking_service=FakeBookingService(
+            BookingResult(success=False, attempts=0, slot_id=None)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Could not resolve full doctor page target"):
+        await runner.run()

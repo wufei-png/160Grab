@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -21,13 +22,21 @@ def setup_logging(verbose: bool = False) -> None:
     logger.add(sys.stderr, level=level)
 
 
+def _optional_path_env(name: str) -> Path | None:
+    value = os.getenv(name)
+    if not value:
+        return None
+    return Path(value).expanduser()
+
+
 async def main() -> None:
     logger.info("160Grab - 健康160自动挂号")
     config_path = Path(sys.argv[1] if len(sys.argv) > 1 else "config.yaml")
     config = load_config(config_path)
     headless = config.auth.strategy != "manual"
+    debug_dir = _optional_path_env("GRAB_DEBUG_DIR")
 
-    async with PlaywrightClient(headless=headless) as client:
+    async with PlaywrightClient(headless=headless, debug_dir=debug_dir) as client:
         try:
             runner = build_runner(config, client)
             result = await runner.run()
@@ -44,7 +53,12 @@ def build_runner(config, client: PlaywrightClient) -> GrabRunner:
 
     page_api = BrowserPageApi(client.page)
     auth_service = AuthService(client.page, config, notify=logger.info)
-    session_service = SessionCaptureService(client.page, config)
+    session_service = SessionCaptureService(
+        client.page,
+        config,
+        debug_snapshot=client.capture_snapshot,
+        debug_state_provider=client.collect_debug_state,
+    )
     scheduler = Scheduler(config)
     schedule_service = ScheduleService(page_api, config=config, sleep=asyncio.sleep)
     booking_service = BookingService(page_strategy=PageBookingStrategy(client.page))

@@ -44,6 +44,21 @@ uv run python main.py config.yaml
 
 当前只支持医生详情页通道；科室排班页通道仍是 TODO。
 
+## 浏览器调试
+
+如果登录后页面没有跳转到医生详情页，可以把页面证据落盘，方便直接看真实 DOM 和截图：
+
+```bash
+GRAB_DEBUG_DIR=artifacts/browser-debug uv run python main.py config.yaml
+```
+
+当脚本在非医生详情页继续等待时，会自动保存：
+
+- 当前 URL 和标题
+- 页面 HTML
+- 全页截图
+- 最近的 console / pageerror / requestfailed 事件
+
 ## Live E2E
 
 live E2E 现在也是手动登录模型：浏览器会打开登录页，用户完成登录并导航到目标医生页后，在 pytest 所在终端按 Enter。默认允许真实排班查询、刷号、打开预约页和填写表单；只有 `LIVE_BOOKING=1` 时才会点击最终提交。

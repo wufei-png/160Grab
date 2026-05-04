@@ -66,10 +66,22 @@ class LoginResult(BaseModel):
 
 
 class DoctorPageTarget(BaseModel):
-    unit_id: str
-    dept_id: str
+    """
+    Represents a parsed doctor page URL target.
+
+    Supports two URL formats:
+    1. Full format: https://www.91160.com/doctors/index/unit_id-{unit_id}/dep_id-{dept_id}/docid-{doctor_id}.html
+    2. Docid-only format: https://www.91160.com/doctors/index/docid-{doctor_id}.html
+
+    When using docid-only format, unit_id and dept_id will be None and needs_resolution=True,
+    indicating that further resolution is required to obtain the full scheduling information.
+    """
+
+    unit_id: str | None = None
+    dept_id: str | None = None
     doctor_id: str
     source_url: str
+    needs_resolution: bool = False
 
 
 class MemberProfile(BaseModel):

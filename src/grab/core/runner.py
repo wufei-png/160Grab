@@ -19,6 +19,10 @@ class GrabRunner:
     async def run(self) -> RunResult:
         await self.auth_service.ensure_login()
         target = await self.session_service.capture_target_from_current_page()
+        if target.needs_resolution:
+            target = await self.session_service.resolve_unit_dept_ids(target)
+        if target.unit_id is None or target.dept_id is None:
+            raise ValueError("Could not resolve full doctor page target from current page")
         member_id = await self.session_service.resolve_member_id()
         self.schedule_service.set_target(target)
         self.booking_service.prepare(target, member_id)
