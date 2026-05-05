@@ -10,6 +10,9 @@ days: []
 hours:
   - "8-9"
 sleep_time: "3000-5000"
+page_action_sleep_time: "400-900"
+booking_retry_sleep_time: "2000-4000"
+rate_limit_sleep_time: "15000-25000"
 brush_start_date:
 enable_appoint: false
 appoint_time:

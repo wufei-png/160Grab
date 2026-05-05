@@ -45,6 +45,9 @@ class GrabConfig(BaseModel):
     days: list[str] = Field(default_factory=list)
     hours: list[str] = Field(default_factory=list)
     sleep_time: str = "3000"
+    page_action_sleep_time: str = "400-900"
+    booking_retry_sleep_time: str = "2000-4000"
+    rate_limit_sleep_time: str = "15000-25000"
     brush_start_date: date | None = None
     enable_appoint: bool = False
     appoint_time: datetime | None = None
