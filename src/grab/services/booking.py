@@ -1,7 +1,11 @@
 import re
 from typing import Protocol
 
-from grab.models.schemas import BookingForm, BookingResult, DoctorPageTarget
+from loguru import logger
+
+from grab.models.schemas import BookingForm, BookingResult, DoctorPageTarget, GrabConfig
+from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
+from grab.utils.runtime import parse_sleep_time
 
 
 class BookingStrategy(Protocol):
@@ -13,8 +17,10 @@ class BookingStrategy(Protocol):
 
 
 class PageBookingStrategy:
-    def __init__(self, page):
+    def __init__(self, page, config: GrabConfig | None = None, sleep=None):
         self.page = page
+        self.config = config
+        self._sleep = sleep
         self.member_id: str | None = None
         self.target: DoctorPageTarget | None = None
 
@@ -44,8 +50,11 @@ class PageBookingStrategy:
         )
 
     async def fetch_booking_form(self, slot_id: str) -> BookingForm:
+        await self._sleep_page_action("opening booking form")
         await self.page.goto(self.build_booking_url(slot_id))
-        return self.parse_booking_form(await self.page.content(), member_id=self.member_id)
+        html = await self.page.content()
+        raise_if_rate_limited(html, context="booking form page")
+        return self.parse_booking_form(html, member_id=self.member_id)
 
     def build_booking_url(self, slot_id: str) -> str:
         if self.target is None or self.member_id is None:
@@ -78,8 +87,11 @@ class PageBookingStrategy:
         )
 
     async def submit_booking_via_page(self, form: BookingForm) -> bool:
+        await self._sleep_page_action("submitting booking form")
         await self.page.click("#submit_booking")
-        return "预约成功" in await self.page.content()
+        html = await self.page.content()
+        raise_if_rate_limited(html, context="booking submit page")
+        return "预约成功" in html
 
     async def open_booking_form(self, slot_id: str) -> BookingForm:
         form = await self.fetch_booking_form(slot_id)
@@ -97,13 +109,61 @@ class PageBookingStrategy:
         max_attempts: int = 3,
     ) -> BookingResult:
         for attempt in range(1, max_attempts + 1):
-            form = await self.open_booking_form(slot_id)
-            if not form.is_valid:
+            try:
+                form = await self.open_booking_form(slot_id)
+                if not form.is_valid:
+                    if attempt < max_attempts:
+                        await self._sleep_retry_gap(attempt)
+                    continue
+                if await self.submit_booking_via_page(form):
+                    return BookingResult(
+                        success=True, attempts=attempt, slot_id=slot_id
+                    )
+            except RateLimitError as exc:
+                logger.warning(
+                    "Rate limit detected during booking attempt {} for slot {}: {}",
+                    attempt,
+                    slot_id,
+                    exc.message,
+                )
+                if attempt < max_attempts:
+                    await self._sleep_rate_limit_gap()
                 continue
-            if await self.submit_booking_via_page(form):
-                return BookingResult(success=True, attempts=attempt, slot_id=slot_id)
+
+            if attempt < max_attempts:
+                await self._sleep_retry_gap(attempt)
 
         return BookingResult(success=False, attempts=max_attempts, slot_id=slot_id)
+
+    async def _sleep_page_action(self, action: str) -> None:
+        if self.config is None:
+            return
+        await self._sleep_for(self.config.page_action_sleep_time, f"before {action}")
+
+    async def _sleep_retry_gap(self, attempt: int) -> None:
+        if self.config is None:
+            return
+        await self._sleep_for(
+            self.config.booking_retry_sleep_time,
+            f"before booking retry attempt {attempt + 1}",
+        )
+
+    async def _sleep_rate_limit_gap(self) -> None:
+        if self.config is None:
+            return
+        await self._sleep_for(
+            self.config.rate_limit_sleep_time,
+            "for booking rate-limit cooldown",
+        )
+
+    async def _sleep_for(self, delay_text: str, reason: str) -> None:
+        if self._sleep is None:
+            return
+        delay_ms = parse_sleep_time(delay_text)
+        if delay_ms <= 0:
+            return
+        logger.debug("Sleeping {} ms {}", delay_ms, reason)
+        await self._sleep(delay_ms / 1000)
 
 
 class BookingService:

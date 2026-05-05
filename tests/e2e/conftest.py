@@ -121,7 +121,13 @@ async def live_runner():
     auth_service = AuthService(client.page, config)
     session_service = SessionCaptureService(client.page, config)
     schedule_service = ScheduleService(page_api, config=config, sleep=asyncio.sleep)
-    booking_service = BookingService(page_strategy=PageBookingStrategy(client.page))
+    booking_service = BookingService(
+        page_strategy=PageBookingStrategy(
+            client.page,
+            config=config,
+            sleep=asyncio.sleep,
+        )
+    )
     scheduler = Scheduler(config)
 
     try:

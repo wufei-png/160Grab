@@ -1,6 +1,9 @@
 from datetime import date
 
+from loguru import logger
+
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
+from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
 from grab.utils.runtime import parse_sleep_time
 
 
@@ -17,7 +20,7 @@ class ScheduleService:
     async def fetch_doctor_schedule(self, date: str) -> dict:
         if self.target is None:
             raise RuntimeError("Doctor page target has not been captured yet")
-        return await self.page_api.get_json(
+        payload = await self.page_api.get_json(
             "/guahao/v1/pc/sch/doctor",
             params={
                 "unit_id": self.target.unit_id,
@@ -25,6 +28,8 @@ class ScheduleService:
                 "date": date,
             },
         )
+        raise_if_rate_limited(payload, context="doctor schedule polling")
+        return payload
 
     def parse_doctor_schedule(self, payload: dict) -> list[Slot]:
         return self._parse_slots(payload)
@@ -55,10 +60,22 @@ class ScheduleService:
             raise RuntimeError("ScheduleService config is required for polling")
 
         while True:
-            slots = await self.poll_once()
-            yield slots
-            if self._sleep is not None:
-                await self._sleep(parse_sleep_time(self.config.sleep_time) / 1000)
+            delay_ms: int | None = None
+            try:
+                slots = await self.poll_once()
+            except RateLimitError as exc:
+                delay_ms = parse_sleep_time(self.config.rate_limit_sleep_time)
+                logger.warning(
+                    "Rate limit detected during schedule polling: {}. Cooling down for {} ms.",
+                    exc.message,
+                    delay_ms,
+                )
+            else:
+                yield slots
+                delay_ms = parse_sleep_time(self.config.sleep_time)
+
+            if self._sleep is not None and delay_ms is not None:
+                await self._sleep(delay_ms / 1000)
 
     async def poll_once(self) -> list[Slot]:
         if self.config is None:

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from grab.models.schemas import GrabConfig
 from grab.services.booking import BookingService, PageBookingStrategy
 
 
@@ -100,10 +101,85 @@ async def test_open_booking_form_uses_91160_booking_url_shape(page_booking_strat
     )
 
 
-def test_prepare_target_must_run_before_opening_form(booking_page_html, booking_submit_success_html):
+def test_prepare_target_must_run_before_opening_form(
+    booking_page_html, booking_submit_success_html
+):
     strategy = PageBookingStrategy(
         page=FakeBookingPage(booking_page_html, booking_submit_success_html)
     )
 
     with pytest.raises(RuntimeError):
         strategy.build_booking_url("sch-1001")
+
+
+@pytest.mark.asyncio
+async def test_page_booking_strategy_waits_between_failed_attempts(
+    booking_page_html,
+    booking_submit_success_html,
+):
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float):
+        sleep_calls.append(seconds)
+
+    strategy = PageBookingStrategy(
+        page=FakeBookingPage(booking_page_html, booking_submit_success_html),
+        config=GrabConfig(
+            page_action_sleep_time="0",
+            booking_retry_sleep_time="2000",
+            rate_limit_sleep_time="10000",
+        ),
+        sleep=fake_sleep,
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    result = await strategy.submit_with_retry(
+        slot_id="sch-1001",
+        max_attempts=3,
+    )
+
+    assert result.success is True
+    assert sleep_calls == [2.0, 2.0]
+
+
+class RateLimitedBookingPage(FakeBookingPage):
+    def __init__(self, booking_html: str, success_html: str):
+        super().__init__(booking_html, success_html)
+        self.goto_calls = 0
+
+    async def goto(self, url: str):
+        self.last_url = url
+        self.goto_calls += 1
+        if self.goto_calls == 1:
+            self.current_html = "<html><body>您单位时间内访问次数过多！</body></html>"
+            return
+        self.current_html = self.booking_html
+
+
+@pytest.mark.asyncio
+async def test_page_booking_strategy_uses_longer_cooldown_after_rate_limit(
+    booking_page_html,
+    booking_submit_success_html,
+):
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float):
+        sleep_calls.append(seconds)
+
+    strategy = PageBookingStrategy(
+        page=RateLimitedBookingPage(booking_page_html, booking_submit_success_html),
+        config=GrabConfig(
+            page_action_sleep_time="0",
+            booking_retry_sleep_time="2000",
+            rate_limit_sleep_time="10000",
+        ),
+        sleep=fake_sleep,
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    await strategy.submit_with_retry(
+        slot_id="sch-1001",
+        max_attempts=2,
+    )
+
+    assert sleep_calls[0] == 10.0

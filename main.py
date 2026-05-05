@@ -61,7 +61,13 @@ def build_runner(config, client: PlaywrightClient) -> GrabRunner:
     )
     scheduler = Scheduler(config)
     schedule_service = ScheduleService(page_api, config=config, sleep=asyncio.sleep)
-    booking_service = BookingService(page_strategy=PageBookingStrategy(client.page))
+    booking_service = BookingService(
+        page_strategy=PageBookingStrategy(
+            client.page,
+            config=config,
+            sleep=asyncio.sleep,
+        )
+    )
     return GrabRunner(
         auth_service,
         session_service,
