@@ -3,6 +3,8 @@
 # navigate to a doctor detail page, then press Enter in the terminal.
 auth:
   strategy: "manual"
+browser:
+  stealth: true
 member_id:
 doctor_ids: []
 weeks: []

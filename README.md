@@ -24,6 +24,7 @@ uv run python main.py config.yaml
 `config/example.yaml` 覆盖当前支持的核心字段：
 
 - `auth.strategy`: 默认是 `manual`，程序会打开登录页并等待用户在目标医生页按 Enter 确认；`auto` 只保留占位，点击文字验证码尚未实现
+- `browser.stealth`: 默认是 `true`，启动后会应用 `playwright-stealth` 补丁；如遇兼容性问题可以手动关闭
 - `member_id`: 可选；若留空，程序会在登录后读取 `member.html`，列出当前账号下的就诊人并让用户选择
 - `doctor_ids` / `weeks` / `days` / `hours`: 刷号过滤条件，留空表示不限制
 - `sleep_time`: 刷号间隔，支持固定值或范围值，例如 `3000`、`3000-5000`
