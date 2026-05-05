@@ -13,9 +13,11 @@ class PlaywrightClient:
         self,
         headless: bool = True,
         debug_dir: str | Path | None = None,
+        stealth_enabled: bool = True,
     ):
         self.headless = headless
         self.debug_dir = Path(debug_dir) if debug_dir is not None else None
+        self.stealth_enabled = stealth_enabled
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
         self.page: Page | None = None
@@ -28,11 +30,12 @@ class PlaywrightClient:
         logger.info("Browser launched")
         self.context = await self.browser.new_context()
         self.page = await self.context.new_page()
-        # Apply stealth patches to avoid anti-bot detection
-        stealth = Stealth()
-        await stealth.apply_stealth_async(self.page)
+        if self.stealth_enabled:
+            # Apply stealth patches to avoid anti-bot detection.
+            stealth = Stealth()
+            await stealth.apply_stealth_async(self.page)
         self._install_page_listeners()
-        logger.info("Browser page ready with stealth mode")
+        logger.info("Browser page ready (stealth={})", self.stealth_enabled)
 
     async def goto(self, url: str) -> None:
         if self.page is None:

@@ -36,6 +36,10 @@ class AuthConfig(BaseModel):
     strategy: str = "manual"
 
 
+class BrowserConfig(BaseModel):
+    stealth: bool = True
+
+
 class GrabConfig(BaseModel):
     username: str | None = None
     password: str | None = None
@@ -53,6 +57,7 @@ class GrabConfig(BaseModel):
     appoint_time: datetime | None = None
     booking_strategy: str = "page"
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    browser: BrowserConfig = Field(default_factory=BrowserConfig)
     ocr: OcrConfig | None = None
 
     @field_validator("hours", mode="before")

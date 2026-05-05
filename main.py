@@ -36,7 +36,11 @@ async def main() -> None:
     headless = config.auth.strategy != "manual"
     debug_dir = _optional_path_env("GRAB_DEBUG_DIR")
 
-    async with PlaywrightClient(headless=headless, debug_dir=debug_dir) as client:
+    async with PlaywrightClient(
+        headless=headless,
+        debug_dir=debug_dir,
+        stealth_enabled=config.browser.stealth,
+    ) as client:
         try:
             runner = build_runner(config, client)
             result = await runner.run()
