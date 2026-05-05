@@ -19,6 +19,8 @@ appoint_time: "2026-03-24 08:00:00"
 booking_strategy: "page"
 auth:
   strategy: "manual"
+browser:
+  stealth: false
 """.strip()
     )
 
@@ -30,6 +32,7 @@ auth:
     assert config.enable_appoint is True
     assert config.booking_strategy == "page"
     assert config.auth.strategy == "manual"
+    assert config.browser.stealth is False
 
 
 def test_load_config_allows_missing_member_id_for_prompted_selection(tmp_path):
@@ -47,6 +50,7 @@ auth:
     config = load_config(config_file)
 
     assert config.member_id is None
+    assert config.browser.stealth is True
 
 
 def test_load_config_rejects_invalid_hour_format(tmp_path):
