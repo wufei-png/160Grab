@@ -14,17 +14,22 @@
 uv sync
 uv run playwright install chromium
 cp config/example.yaml config.yaml
+uv run python main.py config.yaml --create-profile
 uv run python main.py config.yaml
 ```
 
-`config.yaml` 只用于本地运行核心链路。默认模式下，不需要把账号、密码或 OCR 地址写进仓库；程序会打开登录页，由用户手动登录并导航到目标医生页。
+`config.yaml` 只用于本地运行核心链路。默认模式下，不需要把账号、密码或 OCR 地址写进仓库；程序会优先复用持久化浏览器 profile，然后打开登录页，由用户手动登录并导航到目标医生页。
 
 ## 配置说明
 
 `config/example.yaml` 覆盖当前支持的核心字段：
 
 - `auth.strategy`: 默认是 `manual`，程序会打开登录页并等待用户在目标医生页按 Enter 确认；`auto` 只保留占位，点击文字验证码尚未实现
+- `browser.launch_persistent_context`: 默认是 `true`，主链路优先复用持久化 profile；设为 `false` 时退回旧的临时浏览器上下文
+- `browser.profile_name`: 可选；为空时会自动检测唯一 profile，或在多 profile 情况下提示你选择
+- `browser.profiles_root_dir`: profile 根目录，默认是 `~/.160grab/browser-profiles`
 - `browser.stealth`: 默认是 `true`，启动后会应用 `playwright-stealth` 补丁；如遇兼容性问题可以手动关闭
+- 配置读写统一走 `ruamel.yaml`，其中 profile 回写会尽量保留原注释和格式
 - `member_id`: 可选；若留空，程序会在登录后读取 `member.html`，列出当前账号下的就诊人并让用户选择
 - `doctor_ids` / `weeks` / `days` / `hours`: 刷号过滤条件，留空表示不限制
 - `sleep_time`: 刷号间隔，支持固定值或范围值，例如 `3000`、`3000-5000`
@@ -35,6 +40,27 @@ uv run python main.py config.yaml
 - `hours` 会在预约页按真实可约时间点做区间匹配；例如 `9-19` 会命中 `09:00-09:30`、`09:30-10:00` 等时间点，并优先提交第一个匹配项
 - `enable_appoint` / `appoint_time`: 是否等待到指定时间再开始刷号
 - `booking_strategy`: 首版固定为 `page`
+
+## Profile 创建
+
+首次使用持久化 profile 时，先运行：
+
+```bash
+uv run python main.py config.yaml --create-profile
+```
+
+也可以显式指定 profile 名：
+
+```bash
+uv run python main.py config.yaml --create-profile --profile-name profile_1
+```
+
+create-profile 流程会：
+
+- 创建 profile 目录和 marker 文件
+- 用 `launch_persistent_context` 打开该 profile
+- 默认打开空白页，供你自行做少量暖机
+- 不强制要求登录 160，也不建议把登录 Chrome 账号当作必要步骤
 
 ## 默认交互流程
 

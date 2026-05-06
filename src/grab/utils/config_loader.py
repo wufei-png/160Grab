@@ -1,10 +1,11 @@
 from pathlib import Path
 
-import yaml
+from ruamel.yaml import YAML
 
 from grab.models.schemas import GrabConfig
 
 
 def load_config(path: str | Path) -> GrabConfig:
-    data = yaml.safe_load(Path(path).read_text()) or {}
+    yaml = YAML(typ="safe")
+    data = yaml.load(Path(path).read_text(encoding="utf-8")) or {}
     return GrabConfig.model_validate(data)

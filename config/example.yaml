@@ -4,6 +4,9 @@
 auth:
   strategy: "manual"
 browser:
+  launch_persistent_context: true
+  profile_name:
+  profiles_root_dir: "~/.160grab/browser-profiles"
   stealth: true
 member_id:
 doctor_ids: []

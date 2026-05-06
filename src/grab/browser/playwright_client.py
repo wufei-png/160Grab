@@ -1,10 +1,19 @@
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    async_playwright,
+)
+from playwright.async_api import (
+    Error as PlaywrightError,
+)
 from playwright_stealth.stealth import Stealth
 
 
@@ -14,28 +23,55 @@ class PlaywrightClient:
         headless: bool = True,
         debug_dir: str | Path | None = None,
         stealth_enabled: bool = True,
+        persistent_context_enabled: bool = False,
+        user_data_dir: str | Path | None = None,
     ):
         self.headless = headless
         self.debug_dir = Path(debug_dir) if debug_dir is not None else None
         self.stealth_enabled = stealth_enabled
+        self.persistent_context_enabled = persistent_context_enabled
+        self.user_data_dir = (
+            Path(user_data_dir).expanduser() if user_data_dir is not None else None
+        )
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
         self.page: Page | None = None
         self.playwright = None
         self._page_events: list[dict[str, Any]] = []
+        self._prepared_pages: set[int] = set()
+        self._page_prepare_tasks: set[asyncio.Task] = set()
 
     async def launch(self) -> None:
         self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=self.headless)
-        logger.info("Browser launched")
-        self.context = await self.browser.new_context()
-        self.page = await self.context.new_page()
-        if self.stealth_enabled:
-            # Apply stealth patches to avoid anti-bot detection.
-            stealth = Stealth()
-            await stealth.apply_stealth_async(self.page)
-        self._install_page_listeners()
-        logger.info("Browser page ready (stealth={})", self.stealth_enabled)
+        if self.persistent_context_enabled:
+            if self.user_data_dir is None:
+                raise RuntimeError(
+                    "user_data_dir is required when persistent_context_enabled is True"
+                )
+            try:
+                self.context = await self.playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(self.user_data_dir),
+                    headless=self.headless,
+                )
+            except PlaywrightError as exc:
+                self._raise_persistent_launch_error(exc)
+            logger.info("Persistent browser context launched at {}", self.user_data_dir)
+            self.browser = getattr(self.context, "browser", None)
+        else:
+            self.browser = await self.playwright.chromium.launch(headless=self.headless)
+            logger.info("Browser launched")
+            self.context = await self.browser.new_context()
+
+        if self.context is None:
+            raise RuntimeError("Playwright browser context is not initialized")
+
+        self.context.on("page", self._handle_new_page)
+        self.page = await self._select_or_create_page()
+        logger.info(
+            "Browser page ready (stealth={}, persistent_context={})",
+            self.stealth_enabled,
+            self.persistent_context_enabled,
+        )
 
     async def goto(self, url: str) -> None:
         if self.page is None:
@@ -180,7 +216,12 @@ class PlaywrightClient:
         return metadata
 
     async def close(self) -> None:
-        if self.browser:
+        for task in list(self._page_prepare_tasks):
+            await asyncio.gather(task, return_exceptions=True)
+        if self.persistent_context_enabled:
+            if self.context:
+                await self.context.close()
+        elif self.browser:
             await self.browser.close()
         if self.playwright:
             await self.playwright.stop()
@@ -193,14 +234,14 @@ class PlaywrightClient:
     async def __aexit__(self, *args) -> None:
         await self.close()
 
-    def _install_page_listeners(self) -> None:
-        if self.page is None:
+    def _install_page_listeners(self, page: Page) -> None:
+        if page is None:
             return
 
-        self.page.on("console", self._record_console_message)
-        self.page.on("pageerror", self._record_page_error)
-        self.page.on("response", self._record_response)
-        self.page.on("requestfailed", self._record_request_failed)
+        page.on("console", self._record_console_message)
+        page.on("pageerror", self._record_page_error)
+        page.on("response", self._record_response)
+        page.on("requestfailed", self._record_request_failed)
 
     def _record_console_message(self, message) -> None:
         self._append_event(
@@ -243,6 +284,53 @@ class PlaywrightClient:
         self._page_events.append(event)
         if len(self._page_events) > 200:
             del self._page_events[:-200]
+
+    async def _select_or_create_page(self) -> Page:
+        if self.context is None:
+            raise RuntimeError("Browser context is not initialized")
+
+        if self.context.pages:
+            page = self.context.pages[-1]
+            await self._prepare_page(page)
+            return page
+
+        page = await self.context.new_page()
+        await self._prepare_page(page)
+        return page
+
+    async def _prepare_page(self, page: Page) -> None:
+        page_id = id(page)
+        if page_id in self._prepared_pages:
+            return
+
+        self._prepared_pages.add(page_id)
+        if self.stealth_enabled:
+            stealth = Stealth()
+            await stealth.apply_stealth_async(page)
+        self._install_page_listeners(page)
+
+    def _handle_new_page(self, page: Page) -> None:
+        task = asyncio.create_task(self._prepare_page(page))
+        self._page_prepare_tasks.add(task)
+        task.add_done_callback(self._page_prepare_tasks.discard)
+
+    def _raise_persistent_launch_error(self, exc: Exception) -> None:
+        if self.user_data_dir is None:
+            raise RuntimeError("Persistent browser launch failed") from exc
+
+        lock_files = [
+            self.user_data_dir / "SingletonLock",
+            self.user_data_dir / "SingletonCookie",
+            self.user_data_dir / "SingletonSocket",
+        ]
+        if any(path.exists() for path in lock_files):
+            raise RuntimeError(
+                f"Profile at {self.user_data_dir} appears to be in use by another browser "
+                "instance. Close that browser before retrying."
+            ) from exc
+        raise RuntimeError(
+            f"Failed to launch persistent browser context at {self.user_data_dir}: {exc}"
+        ) from exc
 
     @staticmethod
     def _serialize_location(location: Any) -> dict[str, Any] | None:

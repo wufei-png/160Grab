@@ -21,6 +21,9 @@ auth:
   strategy: "manual"
 browser:
   stealth: false
+  launch_persistent_context: false
+  profile_name: "profile_7"
+  profiles_root_dir: "~/custom-profiles"
 """.strip()
     )
 
@@ -33,6 +36,9 @@ browser:
     assert config.booking_strategy == "page"
     assert config.auth.strategy == "manual"
     assert config.browser.stealth is False
+    assert config.browser.launch_persistent_context is False
+    assert config.browser.profile_name == "profile_7"
+    assert config.browser.profiles_root_dir == "~/custom-profiles"
 
 
 def test_load_config_allows_missing_member_id_for_prompted_selection(tmp_path):
@@ -51,6 +57,9 @@ auth:
 
     assert config.member_id is None
     assert config.browser.stealth is True
+    assert config.browser.launch_persistent_context is True
+    assert config.browser.profile_name is None
+    assert config.browser.profiles_root_dir == "~/.160grab/browser-profiles"
 
 
 def test_load_config_rejects_invalid_hour_format(tmp_path):
@@ -58,6 +67,21 @@ def test_load_config_rejects_invalid_hour_format(tmp_path):
     config_file.write_text(
         """
 hours: ["9.25-10"]
+auth:
+  strategy: "manual"
+""".strip()
+    )
+
+    with pytest.raises(ValidationError):
+        load_config(config_file)
+
+
+def test_load_config_rejects_invalid_profile_name(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        """
+browser:
+  profile_name: "bad name"
 auth:
   strategy: "manual"
 """.strip()

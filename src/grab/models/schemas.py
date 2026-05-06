@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from grab.utils.profile_name import validate_profile_name
 from grab.utils.runtime import normalize_hour_value
 
 
@@ -38,6 +39,29 @@ class AuthConfig(BaseModel):
 
 class BrowserConfig(BaseModel):
     stealth: bool = True
+    launch_persistent_context: bool = True
+    profile_name: str | None = None
+    profiles_root_dir: str = "~/.160grab/browser-profiles"
+
+    @field_validator("profile_name", mode="before")
+    @classmethod
+    def normalize_profile_name(cls, value):
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            return None
+        return validate_profile_name(candidate)
+
+    @field_validator("profiles_root_dir", mode="before")
+    @classmethod
+    def normalize_profiles_root_dir(cls, value):
+        if value is None:
+            return "~/.160grab/browser-profiles"
+        candidate = str(value).strip()
+        if not candidate:
+            raise ValueError("browser.profiles_root_dir cannot be empty")
+        return candidate
 
 
 class GrabConfig(BaseModel):
