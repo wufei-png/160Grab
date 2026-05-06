@@ -20,8 +20,16 @@ def test_normalize_hour_value_supports_compact_integer_ranges():
 
 def test_normalize_hour_value_preserves_precise_format():
     assert normalize_hour_value("08:00-08:30") == "08:00-08:30"
+    assert normalize_hour_value("9:30-10") == "09:30-10:00"
+    assert normalize_hour_value("9-9:30") == "09:00-09:30"
+
+
+def test_normalize_hour_value_supports_half_hour_decimal_format():
+    assert normalize_hour_value("9-9.5") == "09:00-09:30"
+    assert normalize_hour_value("9.5-10") == "09:30-10:00"
+    assert normalize_hour_value("9.5-19") == "09:30-19:00"
 
 
 def test_normalize_hour_value_rejects_invalid_format():
     with pytest.raises(ValueError):
-        normalize_hour_value("8:30-9")
+        normalize_hour_value("9.25-10")

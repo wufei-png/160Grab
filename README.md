@@ -31,7 +31,8 @@ uv run python main.py config.yaml
 - `page_action_sleep_time`: 页面动作间隔，用于打开预约页、点击提交前增加随机停顿
 - `booking_retry_sleep_time`: 同一号源重试间隔，避免 `goto/click` 短时间连续突发
 - `rate_limit_sleep_time`: 命中“访问次数过多”提示后的冷却时间
-- `hours` 支持精确时间段和整点简写，例如 `08:00-08:30`、`8-9`、`18-18`
+- `hours` 支持整点/半小时区间写法，例如 `08:00-08:30`、`8-9`、`9.5-10`、`9:30-10`
+- `hours` 会在预约页按真实可约时间点做区间匹配；例如 `9-19` 会命中 `09:00-09:30`、`09:30-10:00` 等时间点，并优先提交第一个匹配项
 - `enable_appoint` / `appoint_time`: 是否等待到指定时间再开始刷号
 - `booking_strategy`: 首版固定为 `page`
 

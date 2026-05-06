@@ -1,8 +1,9 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from grab.models.schemas import GrabConfig
+from grab.models.schemas import BookingResult, GrabConfig, Slot
 from grab.services.booking import BookingService, PageBookingStrategy
 
 
@@ -13,6 +14,7 @@ class FakeBookingPage:
         self.current_html = booking_html
         self.evaluated: list[dict] = []
         self.submit_attempts = 0
+        self.response_status = 302
 
     async def goto(self, url: str):
         self.last_url = url
@@ -21,14 +23,66 @@ class FakeBookingPage:
     async def content(self) -> str:
         return self.current_html
 
+    async def wait_for_load_state(self, _state: str, timeout: int = 0):
+        return None
+
+    async def wait_for_function(self, script: str, arg=None, timeout: int = 0, **kwargs):
+        return None
+
     async def click(self, selector: str):
         assert selector == "#submit_booking"
         self.submit_attempts += 1
         if self.submit_attempts == 3:
             self.current_html = self.success_html
 
-    async def evaluate(self, script: str, arg: dict):
-        self.evaluated.append(arg)
+    async def evaluate(self, script: str, arg: dict | None = None):
+        if arg is not None:
+            self.evaluated.append(arg)
+            return {
+                "appointmentSelected": bool(arg.get("appointmentValue")),
+                "memberSelected": True,
+            }
+        if "candidateSelectors" in script:
+            self.submit_attempts += 1
+            if self.submit_attempts == 3:
+                self.current_html = self.success_html
+            return {"method": "selector", "target": "#suborder #submitbtn"}
+        if "paymethod-sure" in script or "const sure =" in script:
+            return None
+        return {
+            "url": "https://www.91160.com/guahao/ystep1/uid-u1/depid-d1/schid-sch-1001.html",
+            "title": "预约页",
+            "hasBookingForm": self.current_html != self.success_html,
+            "hasSubmitButton": self.current_html != self.success_html,
+            "selectedTimes": ["09:00-09:30"],
+            "checkedMembers": [{"name": "mid", "value": "member-1"}],
+            "hiddenFields": [],
+            "visibleMessages": [],
+        }
+
+    def expect_response(self, _predicate, timeout: int = 0):
+        page = self
+
+        class _ResponseContext:
+            async def __aenter__(self_inner):
+                return self_inner
+
+            async def __aexit__(self_inner, exc_type, exc, tb):
+                return False
+
+            @property
+            def value(self_inner):
+                async def _get():
+                    return SimpleNamespace(
+                        status=page.response_status,
+                        ok=200 <= page.response_status < 400,
+                        url="https://www.91160.com/guahao/ysubmit.html",
+                        request=SimpleNamespace(method="POST"),
+                    )
+
+                return _get()
+
+        return _ResponseContext()
 
 
 @pytest.fixture
@@ -64,6 +118,8 @@ def test_page_booking_strategy_builds_form_from_booking_page(
 
     assert form.member_id == "member-1"
     assert form.schedule_id == "sch-1001"
+    assert form.appointment_value == "detl-1"
+    assert form.appointment_label == "09:00-09:30"
 
 
 @pytest.mark.asyncio
@@ -89,6 +145,91 @@ async def test_open_booking_form_prefills_member_id(page_booking_strategy):
 
     assert form.member_id == "member-1"
     assert page_booking_strategy.page.evaluated[0]["memberId"] == "member-1"
+    assert page_booking_strategy.page.evaluated[0]["appointmentValue"] == "detl-1"
+
+
+@pytest.mark.asyncio
+async def test_booking_service_books_first_matching_slot_only(booking_page_html):
+    class FakeStrategy:
+        def __init__(self):
+            self.received_slot_ids: list[str] = []
+
+        async def submit_with_retry(self, slot_id: str, max_attempts: int = 3):
+            self.received_slot_ids.append(slot_id)
+            return BookingResult(success=True, attempts=1, slot_id=slot_id)
+
+    strategy = FakeStrategy()
+    service = BookingService(page_strategy=strategy)
+
+    result = await service.try_book_first_available(
+        [
+            Slot(schedule_id="sch-1", doctor_id="doc-1", time_range="09:00-09:30"),
+            Slot(schedule_id="sch-2", doctor_id="doc-1", time_range="09:30-10:00"),
+        ]
+    )
+
+    assert result.slot_id == "sch-1"
+    assert strategy.received_slot_ids == ["sch-1"]
+
+
+@pytest.mark.asyncio
+async def test_booking_service_tries_later_slots_when_earlier_slot_fails():
+    class FakeStrategy:
+        def __init__(self):
+            self.received_slot_ids: list[str] = []
+
+        async def submit_with_retry(self, slot_id: str, max_attempts: int = 3):
+            self.received_slot_ids.append(slot_id)
+            return BookingResult(
+                success=slot_id == "sch-2",
+                attempts=1,
+                slot_id=slot_id if slot_id == "sch-2" else None,
+            )
+
+    strategy = FakeStrategy()
+    service = BookingService(page_strategy=strategy)
+
+    result = await service.try_book_first_available(
+        [
+            Slot(schedule_id="sch-1", doctor_id="doc-1", time_range=""),
+            Slot(schedule_id="sch-2", doctor_id="doc-1", time_range=""),
+        ]
+    )
+
+    assert result.success is True
+    assert result.slot_id == "sch-2"
+    assert strategy.received_slot_ids == ["sch-1", "sch-2"]
+
+
+def test_page_booking_strategy_selects_first_matching_appointment_by_hour_filter(
+    booking_page_html, booking_submit_success_html
+):
+    strategy = PageBookingStrategy(
+        page=FakeBookingPage(booking_page_html, booking_submit_success_html),
+        config=GrabConfig(hours=["09:30-10:00"]),
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    form = strategy.parse_booking_form(booking_page_html, member_id="member-1")
+
+    assert form.is_valid is True
+    assert form.appointment_value == "detl-2"
+    assert form.appointment_label == "09:30-10:00"
+
+
+def test_page_booking_strategy_marks_form_invalid_when_no_appointment_matches_hours(
+    booking_page_html, booking_submit_success_html
+):
+    strategy = PageBookingStrategy(
+        page=FakeBookingPage(booking_page_html, booking_submit_success_html),
+        config=GrabConfig(hours=["13:00-13:30"]),
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    form = strategy.parse_booking_form(booking_page_html, member_id="member-1")
+
+    assert form.is_valid is False
+    assert form.appointment_value is None
 
 
 @pytest.mark.asyncio

@@ -56,22 +56,29 @@ def build_runner(config, client: PlaywrightClient) -> GrabRunner:
         raise RuntimeError("Playwright page is not initialized")
 
     page_api = BrowserPageApi(client.page)
+    page_strategy = PageBookingStrategy(
+        client.page,
+        config=config,
+        sleep=asyncio.sleep,
+        debug_snapshot=client.capture_snapshot,
+    )
+
+    def sync_active_page(page) -> None:
+        client.page = page
+        page_api.page = page
+        page_strategy.page = page
+
     auth_service = AuthService(client.page, config, notify=logger.info)
     session_service = SessionCaptureService(
         client.page,
         config,
         debug_snapshot=client.capture_snapshot,
         debug_state_provider=client.collect_debug_state,
+        on_page_change=sync_active_page,
     )
     scheduler = Scheduler(config)
     schedule_service = ScheduleService(page_api, config=config, sleep=asyncio.sleep)
-    booking_service = BookingService(
-        page_strategy=PageBookingStrategy(
-            client.page,
-            config=config,
-            sleep=asyncio.sleep,
-        )
-    )
+    booking_service = BookingService(page_strategy=page_strategy)
     return GrabRunner(
         auth_service,
         session_service,

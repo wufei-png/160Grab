@@ -1,5 +1,9 @@
+import asyncio
+import math
 import re
 from urllib.parse import urlparse, urlunparse
+
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from grab.models.schemas import DoctorPageTarget, GrabConfig, MemberProfile
 
@@ -20,6 +24,8 @@ class SessionCaptureService:
         prompt_text=None,
         debug_snapshot=None,
         debug_state_provider=None,
+        sleep=None,
+        on_page_change=None,
     ):
         self.page = page
         self.config = config
@@ -27,6 +33,71 @@ class SessionCaptureService:
         self.prompt_text = prompt_text or (lambda message: input(message))
         self.debug_snapshot = debug_snapshot
         self.debug_state_provider = debug_state_provider
+        self.sleep = sleep or asyncio.sleep
+        self.on_page_change = on_page_change
+
+    def _set_page(self, page) -> None:
+        self.page = page
+        if self.on_page_change is not None:
+            self.on_page_change(page)
+
+    def _prefer_meaningful_id(self, *values: str | None) -> str | None:
+        for value in values:
+            if value is None:
+                continue
+            normalized = str(value).strip()
+            if normalized and normalized != "0":
+                return normalized
+        return None
+
+    def _extract_unit_dept_ids_from_html(
+        self, html: str
+    ) -> tuple[str | None, str | None]:
+        attr_match = re.search(
+            r'id="addMark"[^>]*\bdep_id="(?P<dept_id>[^"]+)"[^>]*\bunit_id="(?P<unit_id>[^"]+)"',
+            html,
+        )
+        if attr_match is not None:
+            return (
+                self._prefer_meaningful_id(attr_match.group("unit_id")),
+                self._prefer_meaningful_id(attr_match.group("dept_id")),
+            )
+
+        booking_match = re.search(
+            r'/guahao/ystep1/uid-(?P<unit_id>[^/]+)/depid-(?P<dept_id>[^/]+)/schid-',
+            html,
+        )
+        if booking_match is not None:
+            return (
+                self._prefer_meaningful_id(booking_match.group("unit_id")),
+                self._prefer_meaningful_id(booking_match.group("dept_id")),
+            )
+
+        dept_page_match = re.search(r'/dep/show/depid-(?P<dept_id>[^/.]+)\.html', html)
+        schedule_row_match = re.search(
+            r'<li[^>]+class="[^"]*liClassData[^"]*"[^>]+id="(?P<dept_id>[^"_]+)_[^"]+"',
+            html,
+        )
+        return (
+            None,
+            self._prefer_meaningful_id(
+                dept_page_match.group("dept_id") if dept_page_match else None,
+                schedule_row_match.group("dept_id") if schedule_row_match else None,
+            ),
+        )
+
+    async def _goto_member_page(self, page=None) -> None:
+        page = page or self.page
+        member_url = "https://user.91160.com/member.html"
+        try:
+            await page.goto(member_url, wait_until="domcontentloaded")
+        except PlaywrightTimeoutError:
+            if page.url.startswith(member_url):
+                print(
+                    "⚠️ member.html 已打开，但等待 DOMContentLoaded 超时；继续读取当前页面。"
+                )
+                return
+            raise
 
     async def probe_logged_in_state_from_login_page(self) -> bool | None:
         current_url = self.page.url
@@ -34,7 +105,7 @@ class SessionCaptureService:
             return None
 
         try:
-            await self.page.goto("https://user.91160.com/member.html")
+            await self._goto_member_page()
         except Exception as exc:
             print(f"⚠️ Could not probe member.html for login state: {exc}")
             return None
@@ -155,12 +226,13 @@ class SessionCaptureService:
             url,
         )
         if full_format_match is not None:
+            dept_id = full_format_match.group("dept_id")
             return DoctorPageTarget(
                 unit_id=full_format_match.group("unit_id"),
-                dept_id=full_format_match.group("dept_id"),
+                dept_id=dept_id,
                 doctor_id=full_format_match.group("doctor_id"),
                 source_url=url,
-                needs_resolution=False,
+                needs_resolution=dept_id == "0",
             )
 
         docid_only_match = re.fullmatch(
@@ -203,8 +275,28 @@ class SessionCaptureService:
                     "已把自动化切换到该标签。"
                 )
                 print(f"   该页 URL: {p.url}")
-            self.page = p
+            self._set_page(p)
             return target
+        if last_error is not None:
+            raise last_error
+        raise ValueError("No browser tabs available.")
+
+    async def _wait_for_doctor_target(
+        self,
+        timeout_seconds: float = 1.5,
+        poll_interval_seconds: float = 0.2,
+    ) -> DoctorPageTarget:
+        attempts = max(1, math.ceil(timeout_seconds / poll_interval_seconds))
+        last_error: ValueError | None = None
+        for attempt in range(attempts):
+            try:
+                return self._parse_doctor_target_from_any_tab()
+            except ValueError as exc:
+                last_error = exc
+                if attempt == attempts - 1:
+                    break
+                await self.sleep(poll_interval_seconds)
+
         if last_error is not None:
             raise last_error
         raise ValueError("No browser tabs available.")
@@ -213,7 +305,7 @@ class SessionCaptureService:
         while True:
             self.prompt_enter("请先完成登录并停留在目标医生页，准备好后按 Enter 继续: ")
             try:
-                return self._parse_doctor_target_from_any_tab()
+                return await self._wait_for_doctor_target()
             except ValueError as e:
                 print(f"❌ {e}")
                 print(f"   程序当前读到的地址栏 URL: {self.page.url}")
@@ -278,15 +370,48 @@ class SessionCaptureService:
 
         try:
             result = await self.page.evaluate(
-                """() => {
+                r"""() => {
+                    const normalize = (value) => {
+                        if (value === undefined || value === null) return '';
+                        return String(value).trim();
+                    };
+                    const keepMeaningful = (value) => {
+                        const normalized = normalize(value);
+                        return normalized && normalized !== '0' ? normalized : '';
+                    };
+                    const firstAttr = (selectors, attrs) => {
+                        for (const selector of selectors) {
+                            const node = document.querySelector(selector);
+                            if (!node) continue;
+                            for (const attr of attrs) {
+                                const value = keepMeaningful(node.getAttribute(attr));
+                                if (value) return value;
+                            }
+                        }
+                        return '';
+                    };
+                    const firstHrefMatch = (selectors, pattern, groupIndex) => {
+                        for (const selector of selectors) {
+                            const node = document.querySelector(selector);
+                            const href = normalize(node?.getAttribute('href'));
+                            if (!href) continue;
+                            const match = href.match(pattern);
+                            if (match?.[groupIndex]) {
+                                const value = keepMeaningful(match[groupIndex]);
+                                if (value) return value;
+                            }
+                        }
+                        return '';
+                    };
+
                     // Try to extract from window variables (common in 91160 pages)
-                    let unitId = window.unit_id
+                    let unitId = keepMeaningful(window.unit_id)
                         || window.UnitId
                         || window.UnitID
                         || window.__INITIAL_STATE__?.unitId
                         || window.__NUXT__?.unitId;
 
-                    let deptId = window.dept_id
+                    let deptId = keepMeaningful(window.dept_id)
                         || window.DeptId
                         || window.DeptID
                         || window.__INITIAL_STATE__?.deptId
@@ -302,6 +427,46 @@ class SessionCaptureService:
                         if (deptAttr) deptId = deptAttr.dataset.deptId;
                     }
 
+                    // Try explicit 91160 doctor-page attributes.
+                    if (!unitId || !deptId) {
+                        unitId = unitId || firstAttr(
+                            ['#addMark', '.focus_btn', '[unit_id]', '[doctor_id][unit_id]'],
+                            ['unit_id', 'unitId', 'data-unit-id']
+                        );
+                        deptId = deptId || firstAttr(
+                            ['#addMark', '.focus_btn', '[dep_id]', '[doctor_id][dep_id]'],
+                            ['dep_id', 'depId', 'data-dept-id']
+                        );
+                    }
+
+                    // Try links rendered on the schedule area.
+                    if (!unitId || !deptId) {
+                        unitId = unitId || firstHrefMatch(
+                            ['a.orderLogin[href*="/guahao/ystep1/"]', 'a[href*="/guahao/ystep1/uid-"]'],
+                            /uid-([^/]+)\/depid-([^/]+)\//,
+                            1
+                        );
+                        deptId = deptId || firstHrefMatch(
+                            ['a.orderLogin[href*="/guahao/ystep1/"]', 'a[href*="/guahao/ystep1/uid-"]'],
+                            /uid-([^/]+)\/depid-([^/]+)\//,
+                            2
+                        );
+                        deptId = deptId || firstHrefMatch(
+                            ['a[href*="/dep/show/depid-"]'],
+                            /depid-([^/.]+)\.html/,
+                            1
+                        );
+                    }
+
+                    // Try schedule row ids like "369_200226241_pm".
+                    if (!deptId) {
+                        const row = document.querySelector('li.liClassData[id*="_"]');
+                        const match = normalize(row?.id).match(/^([^_]+)_/);
+                        if (match?.[1]) {
+                            deptId = keepMeaningful(match[1]);
+                        }
+                    }
+
                     // Try to extract from meta tags
                     if (!unitId || !deptId) {
                         const metas = document.querySelectorAll('meta');
@@ -310,11 +475,11 @@ class SessionCaptureService:
                             const content = meta.getAttribute('content') || '';
                             if (name === 'unit_id' || content.includes('unit_id=')) {
                                 const match = content.match(/unit_id[=:]([^&,]+)/);
-                                if (match) unitId = match[1].trim();
+                                if (match) unitId = keepMeaningful(match[1]);
                             }
                             if (name === 'dept_id' || content.includes('dept_id=')) {
                                 const match = content.match(/dept_id[=:]([^&,]+)/);
-                                if (match) deptId = match[1].trim();
+                                if (match) deptId = keepMeaningful(match[1]);
                             }
                         });
                     }
@@ -322,9 +487,9 @@ class SessionCaptureService:
                     // Try to extract from URL in page context
                     if (!unitId || !deptId) {
                         const docMatch = window.location.pathname.match(/unit_id-([^/]+)/);
-                        if (docMatch) unitId = docMatch[1];
+                        if (docMatch) unitId = keepMeaningful(docMatch[1]);
                         const deptMatch = window.location.pathname.match(/dep_id-([^/]+)/);
-                        if (deptMatch) deptId = deptMatch[1];
+                        if (deptMatch) deptId = keepMeaningful(deptMatch[1]);
                     }
 
                     return { unitId, deptId };
@@ -333,6 +498,24 @@ class SessionCaptureService:
 
             resolved_unit_id = result.get("unitId")
             resolved_dept_id = result.get("deptId")
+
+            if not resolved_unit_id or not resolved_dept_id:
+                html_unit_id, html_dept_id = self._extract_unit_dept_ids_from_html(
+                    await self.page.content()
+                )
+                resolved_unit_id = self._prefer_meaningful_id(
+                    resolved_unit_id, html_unit_id, target.unit_id
+                )
+                resolved_dept_id = self._prefer_meaningful_id(
+                    resolved_dept_id, html_dept_id, target.dept_id
+                )
+            else:
+                resolved_unit_id = self._prefer_meaningful_id(
+                    resolved_unit_id, target.unit_id
+                )
+                resolved_dept_id = self._prefer_meaningful_id(
+                    resolved_dept_id, target.dept_id
+                )
 
             if resolved_unit_id and resolved_dept_id:
                 print(
@@ -350,7 +533,7 @@ class SessionCaptureService:
                 if not resolved_unit_id:
                     print("   - unit_id not found in page")
                 if not resolved_dept_id:
-                    print("   - dept_id not found in page")
+                    print("   - dept_id not found in page or still stayed at placeholder 0")
                 return target
 
         except Exception as e:
@@ -358,8 +541,26 @@ class SessionCaptureService:
             return target
 
     async def fetch_member_profiles(self) -> list[MemberProfile]:
-        await self.page.goto("https://user.91160.com/member.html")
-        return self.parse_member_profiles(await self.page.content())
+        context = getattr(self.page, "context", None)
+        request = getattr(context, "request", None)
+        member_url = "https://user.91160.com/member.html"
+        if request is not None:
+            response = await request.get(member_url)
+            return self.parse_member_profiles(await response.text())
+
+        member_page = self.page
+        owns_temp_page = False
+        new_page = getattr(context, "new_page", None)
+        if callable(new_page):
+            member_page = await new_page()
+            owns_temp_page = True
+
+        try:
+            await self._goto_member_page(member_page)
+            return self.parse_member_profiles(await member_page.content())
+        finally:
+            if owns_temp_page and hasattr(member_page, "close"):
+                await member_page.close()
 
     def parse_member_profiles(self, html: str) -> list[MemberProfile]:
         rows = re.findall(
@@ -379,6 +580,29 @@ class SessionCaptureService:
             for member_id, name, status in rows
         ]
 
+    def _normalize_member_selection(
+        self,
+        raw_value: str,
+        member_map: dict[str, MemberProfile],
+    ) -> str | None:
+        candidate = raw_value.strip()
+        if candidate in member_map:
+            return candidate
+
+        for separator in (":", "："):
+            if separator in candidate:
+                prefix = candidate.split(separator, 1)[0].strip()
+                if prefix in member_map:
+                    return prefix
+
+        bracket_match = re.match(r"^\[(?P<member_id>[^\]]+)\]", candidate)
+        if bracket_match is not None:
+            member_id = bracket_match.group("member_id").strip()
+            if member_id in member_map:
+                return member_id
+
+        return None
+
     async def resolve_member_id(self) -> str:
         members = await self.fetch_member_profiles()
         member_map = {member.member_id: member for member in members}
@@ -390,14 +614,25 @@ class SessionCaptureService:
                 )
             return self.config.member_id
 
+        if len(members) == 1:
+            only_member = members[0]
+            print(
+                "ℹ️ 当前账号下只有一个就诊人，自动选中: "
+                f"{only_member.member_id}: {only_member.name}"
+                + ("" if only_member.certified else "（未认证）")
+            )
+            return only_member.member_id
+
         member_lines = [
             f"{member.member_id}: {member.name}"
             + ("" if member.certified else "（未认证）")
             for member in members
         ]
-        selected = self.prompt_text(
-            "请选择就诊人编号: " + " / ".join(member_lines) + " "
-        ).strip()
-        if selected not in member_map:
-            raise ValueError("Selected member_id was not found in current account")
-        return selected
+        while True:
+            selected = self.prompt_text(
+                "请选择就诊人编号: " + " / ".join(member_lines) + " "
+            )
+            normalized = self._normalize_member_selection(selected, member_map)
+            if normalized is not None:
+                return normalized
+            print("❌ 输入无效，请输入列表里的就诊人编号。")

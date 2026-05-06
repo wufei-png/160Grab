@@ -32,9 +32,9 @@ class FakeSessionService:
     def __init__(self, target: DoctorPageTarget | None = None, resolved_target=None):
         self.target = target or DoctorPageTarget(
             unit_id="21",
-            dept_id="0",
+            dept_id="369",
             doctor_id="14765",
-            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-0/docid-14765.html",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
         )
         self.resolved_target = resolved_target or self.target
         self.capture_calls = 0
@@ -147,7 +147,7 @@ async def test_runner_resolves_docid_only_target_before_polling(frozen_clock):
     )
     resolved_target = DoctorPageTarget(
         unit_id="21",
-        dept_id="0",
+        dept_id="369",
         doctor_id="14765",
         source_url=unresolved_target.source_url,
         needs_resolution=False,
@@ -175,7 +175,7 @@ async def test_runner_resolves_docid_only_target_before_polling(frozen_clock):
 
     assert runner.session_service.resolution_calls == 1
     assert runner.schedule_service.target.unit_id == "21"
-    assert runner.booking_service.prepared[0].dept_id == "0"
+    assert runner.booking_service.prepared[0].dept_id == "369"
 
 
 @pytest.mark.asyncio
@@ -185,6 +185,33 @@ async def test_runner_fails_when_docid_only_target_stays_unresolved(frozen_clock
         dept_id=None,
         doctor_id="14765",
         source_url="https://www.91160.com/doctors/index/docid-14765.html",
+        needs_resolution=True,
+    )
+    config = GrabConfig(
+        enable_appoint=True,
+        appoint_time=frozen_clock.now() + timedelta(seconds=15),
+    )
+    runner = GrabRunner(
+        auth_service=FakeAuthService(),
+        session_service=FakeSessionService(target=unresolved_target),
+        scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
+        schedule_service=FakeScheduleService([]),
+        booking_service=FakeBookingService(
+            BookingResult(success=False, attempts=0, slot_id=None)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Could not resolve full doctor page target"):
+        await runner.run()
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_when_dep_id_stays_placeholder_zero(frozen_clock):
+    unresolved_target = DoctorPageTarget(
+        unit_id="131",
+        dept_id="0",
+        doctor_id="200254692",
+        source_url="https://www.91160.com/doctors/index/unit_id-131/dep_id-0/docid-200254692.html",
         needs_resolution=True,
     )
     config = GrabConfig(

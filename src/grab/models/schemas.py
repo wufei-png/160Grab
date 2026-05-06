@@ -101,6 +101,8 @@ class MemberProfile(BaseModel):
 class BookingForm(BaseModel):
     member_id: str
     schedule_id: str
+    appointment_value: str | None = None
+    appointment_label: str | None = None
     is_valid: bool = True
 
 
