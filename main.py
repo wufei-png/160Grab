@@ -1,7 +1,9 @@
 import argparse
 import asyncio
 import os
+import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
@@ -24,6 +26,10 @@ from grab.utils.profile_manager import (
     resolve_profile_for_run,
 )
 
+APP_NAME = "160Grab"
+CONFIG_FILENAME = "config.yaml"
+CONFIG_TEMPLATE_PATH = Path("config") / "example.yaml"
+
 
 def setup_logging(verbose: bool = False) -> None:
     logger.remove()
@@ -38,9 +44,28 @@ def _optional_path_env(name: str) -> Path | None:
     return Path(value).expanduser()
 
 
+def is_frozen_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def get_executable_dir(executable: str | Path | None = None) -> Path:
+    target = Path(executable or sys.executable)
+    return target.resolve().parent
+
+
+def get_resource_root() -> Path:
+    if is_frozen_app():
+        return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return Path(__file__).resolve().parent
+
+
+def get_template_config_path() -> Path:
+    return get_resource_root() / CONFIG_TEMPLATE_PATH
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="160Grab CLI")
-    parser.add_argument("config_path", nargs="?", default="config.yaml")
+    parser.add_argument("config_path", nargs="?")
     parser.add_argument(
         "--create-profile",
         action="store_true",
@@ -50,19 +75,78 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--profile-name",
         help="Explicit profile name for --create-profile.",
     )
+    parser.add_argument(
+        "--smoke-browser",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
     if args.profile_name and not args.create_profile:
         parser.error("--profile-name can only be used together with --create-profile")
     return args
 
 
+def resolve_config_path(
+    args: argparse.Namespace,
+    *,
+    frozen: bool | None = None,
+    executable: str | Path | None = None,
+) -> tuple[Path, bool]:
+    if args.config_path is not None:
+        return Path(args.config_path).expanduser(), True
+
+    frozen_app = is_frozen_app() if frozen is None else frozen
+    if frozen_app:
+        return get_executable_dir(executable) / CONFIG_FILENAME, False
+
+    return Path(CONFIG_FILENAME).expanduser(), False
+
+
+def ensure_frozen_default_config(
+    config_path: Path,
+    *,
+    template_path: Path | None = None,
+    output: Callable[[str], None] = print,
+) -> bool:
+    if config_path.exists():
+        return False
+
+    template = template_path or get_template_config_path()
+    if not template.exists():
+        raise FileNotFoundError(f"Config template was not found: {template}")
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(template, config_path)
+    output(f"未找到 {CONFIG_FILENAME}，已在 {config_path} 生成配置模板。")
+    output("请先按需修改配置后重新运行。")
+    return True
+
+
+async def run_smoke_browser(*, debug_dir: Path | None) -> None:
+    async with PlaywrightClient(
+        headless=True,
+        debug_dir=debug_dir,
+        stealth_enabled=True,
+        persistent_context_enabled=False,
+    ) as client:
+        await client.goto("about:blank")
+
+
 async def main(argv: list[str] | None = None) -> None:
-    logger.info("160Grab - 健康160自动挂号")
     args = parse_args(argv)
-    config_path = Path(args.config_path).expanduser()
+    debug_dir = _optional_path_env("GRAB_DEBUG_DIR")
+    logger.info("{} - 健康160自动挂号", APP_NAME)
+    if args.smoke_browser:
+        await run_smoke_browser(debug_dir=debug_dir)
+        raise SystemExit(0)
+
+    config_path, config_path_explicit = resolve_config_path(args)
+    if is_frozen_app() and not config_path_explicit:
+        if ensure_frozen_default_config(config_path):
+            raise SystemExit(0)
+
     config = load_config(config_path)
     headless = config.auth.strategy != "manual"
-    debug_dir = _optional_path_env("GRAB_DEBUG_DIR")
     if args.create_profile:
         await run_create_profile_flow(
             config=config,

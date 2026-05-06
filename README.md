@@ -187,6 +187,41 @@ GRAB_DEBUG_DIR=artifacts/browser-debug uv run python main.py config.yaml
 
 除页面快照外，程序现在还会在 `logging.jsonl_dir` 下写入结构化 JSONL 运行事件，便于回放一次运行中的关键阶段、限频命中、预约失败诊断和通知投递结果。
 
+## 打包与发布
+
+仓库现在提供了基于 PyInstaller 的跨平台打包入口，目标是保留当前“终端交互 + headed Chromium”的运行方式，同时让目标机器不需要预装 Python。
+
+手动构建：
+
+```bash
+./packaging/build-macos.sh
+```
+
+Windows PowerShell：
+
+```powershell
+./packaging/build-windows.ps1
+```
+
+构建脚本会先把 Chromium 下载到独立 staging 目录，再在冻结完成后拷回最终 bundle，避免 macOS 上 PyInstaller 处理 Chromium 内部 app bundle 时触发签名冲突。
+
+构建产物会输出到 `dist/release/`，其中包含：
+
+- `160Grab-<platform>-<arch>.zip`
+- 解压后的同名目录
+- 对应的 `.sha256` 校验文件
+
+校验 zip 完整性时，可以把本地计算出的 SHA-256 与同名 `.sha256` 文件中的第一列进行比对，例如：
+
+- macOS: `shasum -a 256 dist/release/160Grab-macos-arm64.zip`
+- Linux: `sha256sum dist/release/160Grab-macos-arm64.zip`
+- Windows PowerShell: `(Get-FileHash .\dist\release\160Grab-windows-x64.zip -Algorithm SHA256).Hash`
+
+发布流水线：
+
+- `.github/workflows/ci.yml` 在 `push` / `pull_request` 时执行 `uv sync --extra dev` 和 `uv run pytest -q`
+- `.github/workflows/release.yml` 在推送 `v*` tag 或手动触发时构建 Windows/macOS 发布包，并通过 `gh release create` 发布到 GitHub Releases
+
 ## Live E2E
 
 live E2E 现在也是手动登录模型：浏览器会打开登录页，用户完成登录并导航到目标医生页后，在 pytest 所在终端按 Enter。默认允许真实排班查询、刷号、打开预约页和填写表单；只有 `LIVE_BOOKING=1` 时才会点击最终提交。
