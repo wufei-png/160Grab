@@ -12,6 +12,7 @@ class FakeSnapshotPage:
         self.url = "https://user.91160.com/login.html"
         self.screenshot_calls: list[tuple[str, bool]] = []
         self.listeners: dict[str, object] = {}
+        self.closed = False
 
     async def title(self) -> str:
         return "健康160登录"
@@ -39,6 +40,9 @@ class FakeSnapshotPage:
 
     def on(self, event: str, handler):
         self.listeners[event] = handler
+
+    def is_closed(self) -> bool:
+        return self.closed
 
 
 class FakeLaunchPage(FakeSnapshotPage):
@@ -238,3 +242,23 @@ async def test_launch_persistent_context_reuses_existing_page_and_closes_context
 
     assert context.close_calls == 1
     assert playwright.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_prepare_page_ignores_closed_target_errors(monkeypatch):
+    class ClosedTargetStealth:
+        async def apply_stealth_async(self, page):
+            page.closed = True
+            raise playwright_client_module.PlaywrightError(
+                "Target page, context or browser has been closed"
+            )
+
+    monkeypatch.setattr(playwright_client_module, "Stealth", ClosedTargetStealth)
+
+    client = PlaywrightClient(stealth_enabled=True)
+    page = FakeLaunchPage(url="https://example.com")
+
+    await client._prepare_page(page)
+
+    assert id(page) in client._prepared_pages
+    assert page.listeners == {}

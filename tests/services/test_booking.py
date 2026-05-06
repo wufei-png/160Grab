@@ -246,6 +246,38 @@ def test_page_booking_strategy_marks_form_invalid_when_no_appointment_matches_ho
 
     assert form.is_valid is False
     assert form.appointment_value is None
+    assert form.invalid_reason == "hour_filter_mismatch"
+
+
+def test_page_booking_strategy_marks_form_invalid_when_booking_page_has_no_time_options(
+    booking_submit_success_html,
+):
+    booking_page_without_time_options = """
+    <html>
+      <body>
+        <form id="booking-form">
+          <input type="hidden" name="schedule_id" value="sch-1001" />
+          <button id="submit_booking" type="button">提交预约</button>
+        </form>
+      </body>
+    </html>
+    """
+    strategy = PageBookingStrategy(
+        page=FakeBookingPage(
+            booking_page_without_time_options,
+            booking_submit_success_html,
+        ),
+        config=GrabConfig(hours=["09:00-19:00"]),
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    form = strategy.parse_booking_form(
+        booking_page_without_time_options,
+        member_id="member-1",
+    )
+
+    assert form.is_valid is False
+    assert form.invalid_reason == "no_appointment_options"
 
 
 @pytest.mark.asyncio
@@ -340,6 +372,53 @@ async def test_page_booking_strategy_uses_longer_cooldown_after_rate_limit(
     )
 
     assert sleep_calls[0] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_page_booking_strategy_does_not_retry_deterministic_invalid_form(
+    booking_submit_success_html,
+):
+    booking_page_without_time_options = """
+    <html>
+      <body>
+        <form id="booking-form">
+          <input type="hidden" name="schedule_id" value="sch-1001" />
+          <button id="submit_booking" type="button">提交预约</button>
+        </form>
+      </body>
+    </html>
+    """
+    sleep_calls: list[float] = []
+    reporter = FakeReporter()
+
+    async def fake_sleep(seconds: float):
+        sleep_calls.append(seconds)
+
+    page = FakeBookingPage(
+        booking_page_without_time_options,
+        booking_submit_success_html,
+    )
+    strategy = PageBookingStrategy(
+        page=page,
+        config=GrabConfig(
+            hours=["09:00-19:00"],
+            page_action_sleep_time="0",
+            booking_retry_sleep_time="2000",
+        ),
+        sleep=fake_sleep,
+        reporter=reporter,
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    result = await strategy.submit_with_retry(
+        slot_id="sch-1001",
+        max_attempts=3,
+    )
+
+    assert result.success is False
+    assert result.attempts == 1
+    assert sleep_calls == []
+    assert reporter.events[-1]["data"]["invalid_reason"] == "no_appointment_options"
 
 
 class FirstTrySuccessBookingPage(FakeBookingPage):

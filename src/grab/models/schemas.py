@@ -190,6 +190,7 @@ class BookingForm(BaseModel):
     appointment_value: str | None = None
     appointment_label: str | None = None
     is_valid: bool = True
+    invalid_reason: str | None = None
 
 
 class BookingResult(BaseModel):

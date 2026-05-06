@@ -304,15 +304,37 @@ class PlaywrightClient:
             return
 
         self._prepared_pages.add(page_id)
-        if self.stealth_enabled:
-            stealth = Stealth()
-            await stealth.apply_stealth_async(page)
-        self._install_page_listeners(page)
+        try:
+            if self.stealth_enabled:
+                stealth = Stealth()
+                await stealth.apply_stealth_async(page)
+            self._install_page_listeners(page)
+        except PlaywrightError as exc:
+            if self._is_closed_target_error(page, exc):
+                logger.debug(
+                    "Skipping page preparation because target closed before stealth finished: {}",
+                    exc,
+                )
+                return
+            self._prepared_pages.discard(page_id)
+            raise
+        except Exception:
+            self._prepared_pages.discard(page_id)
+            raise
 
     def _handle_new_page(self, page: Page) -> None:
         task = asyncio.create_task(self._prepare_page(page))
         self._page_prepare_tasks.add(task)
-        task.add_done_callback(self._page_prepare_tasks.discard)
+        task.add_done_callback(self._finalize_page_prepare_task)
+
+    def _finalize_page_prepare_task(self, task: asyncio.Task) -> None:
+        self._page_prepare_tasks.discard(task)
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.opt(exception=exc).warning("New page preparation failed.")
 
     def _raise_persistent_launch_error(self, exc: Exception) -> None:
         if self.user_data_dir is None:
@@ -347,3 +369,12 @@ class PlaywrightClient:
         slug = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in label)
         slug = slug.strip("-")
         return slug or "snapshot"
+
+    @staticmethod
+    def _is_closed_target_error(page: Page, exc: PlaywrightError) -> bool:
+        try:
+            if hasattr(page, "is_closed") and page.is_closed():
+                return True
+        except Exception:
+            pass
+        return "has been closed" in str(exc).lower()

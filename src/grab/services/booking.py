@@ -58,6 +58,7 @@ class PageBookingStrategy:
             booking_page_html,
             appointment_options,
         )
+        invalid_reason = None
         if appointment_options:
             logger.info(
                 "Booking page time options for schedule {}: {}",
@@ -71,22 +72,33 @@ class PageBookingStrategy:
                     schedule_id or "<missing>",
                     appointment_label,
                 )
+            elif not appointment_options:
+                logger.info(
+                    "Booking page exposed no appointment time options for schedule {} while filters {} were set",
+                    schedule_id or "<missing>",
+                    self.config.hours if self.config is not None else [],
+                )
             else:
                 logger.info(
                     "No appointment time matched filters {} for schedule {}",
                     self.config.hours if self.config is not None else [],
                     schedule_id or "<missing>",
                 )
+        if not schedule_id:
+            invalid_reason = "missing_schedule_id"
+        elif self._requires_precise_appointment_selection() and appointment_value is None:
+            invalid_reason = (
+                "hour_filter_mismatch"
+                if appointment_options
+                else "no_appointment_options"
+            )
         return BookingForm(
             member_id=member_id,
             schedule_id=schedule_id,
             appointment_value=appointment_value,
             appointment_label=appointment_label,
-            is_valid=bool(schedule_id)
-            and (
-                not self._requires_precise_appointment_selection()
-                or appointment_value is not None
-            ),
+            is_valid=invalid_reason is None,
+            invalid_reason=invalid_reason,
         )
 
     def _requires_precise_appointment_selection(self) -> bool:
@@ -605,25 +617,37 @@ class PageBookingStrategy:
         slot_id: str,
         max_attempts: int = 3,
     ) -> BookingResult:
+        attempts_made = 0
         for attempt in range(1, max_attempts + 1):
+            attempts_made = attempt
             try:
                 form = await self.open_booking_form(slot_id)
                 if self.reporter is not None:
                     self.reporter.reset_rate_limit_streak()
                 if not form.is_valid:
+                    message = self._build_invalid_form_message(
+                        slot_id=slot_id,
+                        attempt=attempt,
+                        form=form,
+                    )
                     if self.reporter is not None:
                         await self.reporter.emit_event(
                             "booking_submit_failed",
                             level="warning",
-                            message=(
-                                f"Booking form is invalid for schedule {slot_id} "
-                                f"on attempt {attempt}."
-                            ),
+                            message=message,
                             data={
                                 "schedule_id": slot_id,
                                 "attempt": attempt,
+                                "invalid_reason": form.invalid_reason,
                             },
                         )
+                    if self._is_deterministic_invalid_form(form):
+                        logger.info(
+                            "Skipping booking retries for schedule {} because invalid_reason={} is deterministic",
+                            slot_id,
+                            form.invalid_reason,
+                        )
+                        break
                     if attempt < max_attempts:
                         await self._sleep_retry_gap(attempt)
                     continue
@@ -651,7 +675,38 @@ class PageBookingStrategy:
             if attempt < max_attempts:
                 await self._sleep_retry_gap(attempt)
 
-        return BookingResult(success=False, attempts=max_attempts, slot_id=slot_id)
+        return BookingResult(
+            success=False,
+            attempts=attempts_made,
+            slot_id=slot_id,
+        )
+
+    def _build_invalid_form_message(
+        self,
+        *,
+        slot_id: str,
+        attempt: int,
+        form: BookingForm,
+    ) -> str:
+        if form.invalid_reason == "no_appointment_options":
+            return (
+                f"Booking form for schedule {slot_id} exposed no appointment time "
+                f"options on attempt {attempt}."
+            )
+        if form.invalid_reason == "hour_filter_mismatch":
+            return (
+                f"Booking form for schedule {slot_id} had appointment times, but none "
+                f"matched filters {self.config.hours if self.config is not None else []} "
+                f"on attempt {attempt}."
+            )
+        return f"Booking form is invalid for schedule {slot_id} on attempt {attempt}."
+
+    @staticmethod
+    def _is_deterministic_invalid_form(form: BookingForm) -> bool:
+        return form.invalid_reason in {
+            "hour_filter_mismatch",
+            "no_appointment_options",
+        }
 
     async def _sleep_page_action(self, action: str) -> None:
         if self.config is None:
