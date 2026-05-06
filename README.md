@@ -111,6 +111,12 @@ uv run python main.py config.yaml
 - `browser.profile_name`: 可选；为空时会自动检测唯一 profile，或在多 profile 情况下提示你选择
 - `browser.profiles_root_dir`: profile 根目录，默认是 `~/.160grab/browser-profiles`
 - `browser.stealth`: 默认是 `true`，启动后会应用 `playwright-stealth` 补丁；如遇兼容性问题可以手动关闭
+- `logging.jsonl_dir`: 结构化运行事件日志目录，默认是 `~/.160grab/logs`
+- `logging.heartbeat_interval_seconds`: 长时间刷号时输出轮询心跳摘要的间隔秒数
+- `notifications.desktop`: 是否启用桌面通知；会自动检测当前系统并在 Windows / macOS 上尝试发送本地通知
+- `notifications.rate_limit_threshold`: 连续命中限频多少次后触发“持续限频”通知
+- `notifications.webhook.url`: 可选；配置后会在成功、致命失败、持续限频时发送 JSON webhook
+- `notifications.webhook.timeout_seconds` / `notifications.webhook.headers`: webhook 超时和请求头配置
 - 配置读写统一走 `ruamel.yaml`，其中 profile 回写会尽量保留原注释和格式
 - `member_id`: 可选；若留空，程序会在登录后读取 `member.html`，列出当前账号下的就诊人并让用户选择
 - `doctor_ids` / `weeks` / `days` / `hours`: 刷号过滤条件，留空表示不限制
@@ -178,6 +184,8 @@ GRAB_DEBUG_DIR=artifacts/browser-debug uv run python main.py config.yaml
 - 页面 HTML
 - 全页截图
 - 最近的 console / pageerror / requestfailed 事件
+
+除页面快照外，程序现在还会在 `logging.jsonl_dir` 下写入结构化 JSONL 运行事件，便于回放一次运行中的关键阶段、限频命中、预约失败诊断和通知投递结果。
 
 ## Live E2E
 

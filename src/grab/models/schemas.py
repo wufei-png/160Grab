@@ -64,6 +64,66 @@ class BrowserConfig(BaseModel):
         return candidate
 
 
+class LoggingConfig(BaseModel):
+    jsonl_dir: str = "~/.160grab/logs"
+    heartbeat_interval_seconds: int = 300
+
+    @field_validator("jsonl_dir", mode="before")
+    @classmethod
+    def normalize_jsonl_dir(cls, value):
+        if value is None:
+            return "~/.160grab/logs"
+        candidate = str(value).strip()
+        if not candidate:
+            raise ValueError("logging.jsonl_dir cannot be empty")
+        return candidate
+
+    @field_validator("heartbeat_interval_seconds")
+    @classmethod
+    def validate_heartbeat_interval_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("logging.heartbeat_interval_seconds must be positive")
+        return value
+
+
+class WebhookNotificationConfig(BaseModel):
+    url: str | None = None
+    timeout_seconds: int = 5
+    headers: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def normalize_url(cls, value):
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        if not candidate:
+            return None
+        return candidate
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def validate_timeout_seconds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("notifications.webhook.timeout_seconds must be positive")
+        return value
+
+
+class NotificationsConfig(BaseModel):
+    desktop: bool = True
+    rate_limit_threshold: int = 3
+    webhook: WebhookNotificationConfig = Field(
+        default_factory=WebhookNotificationConfig
+    )
+
+    @field_validator("rate_limit_threshold")
+    @classmethod
+    def validate_rate_limit_threshold(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("notifications.rate_limit_threshold must be positive")
+        return value
+
+
 class GrabConfig(BaseModel):
     username: str | None = None
     password: str | None = None
@@ -82,6 +142,8 @@ class GrabConfig(BaseModel):
     booking_strategy: str = "page"
     auth: AuthConfig = Field(default_factory=AuthConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     ocr: OcrConfig | None = None
 
     @field_validator("hours", mode="before")

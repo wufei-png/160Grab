@@ -24,6 +24,17 @@ browser:
   launch_persistent_context: false
   profile_name: "profile_7"
   profiles_root_dir: "~/custom-profiles"
+logging:
+  jsonl_dir: "~/logs"
+  heartbeat_interval_seconds: 120
+notifications:
+  desktop: false
+  rate_limit_threshold: 5
+  webhook:
+    url: "https://example.com/hook"
+    timeout_seconds: 8
+    headers:
+      X-Test: "1"
 """.strip()
     )
 
@@ -39,6 +50,13 @@ browser:
     assert config.browser.launch_persistent_context is False
     assert config.browser.profile_name == "profile_7"
     assert config.browser.profiles_root_dir == "~/custom-profiles"
+    assert config.logging.jsonl_dir == "~/logs"
+    assert config.logging.heartbeat_interval_seconds == 120
+    assert config.notifications.desktop is False
+    assert config.notifications.rate_limit_threshold == 5
+    assert config.notifications.webhook.url == "https://example.com/hook"
+    assert config.notifications.webhook.timeout_seconds == 8
+    assert config.notifications.webhook.headers == {"X-Test": "1"}
 
 
 def test_load_config_allows_missing_member_id_for_prompted_selection(tmp_path):
@@ -60,6 +78,13 @@ auth:
     assert config.browser.launch_persistent_context is True
     assert config.browser.profile_name is None
     assert config.browser.profiles_root_dir == "~/.160grab/browser-profiles"
+    assert config.logging.jsonl_dir == "~/.160grab/logs"
+    assert config.logging.heartbeat_interval_seconds == 300
+    assert config.notifications.desktop is True
+    assert config.notifications.rate_limit_threshold == 3
+    assert config.notifications.webhook.url is None
+    assert config.notifications.webhook.timeout_seconds == 5
+    assert config.notifications.webhook.headers == {}
 
 
 def test_load_config_rejects_invalid_hour_format(tmp_path):

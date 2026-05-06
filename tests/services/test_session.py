@@ -8,6 +8,14 @@ from grab.models.schemas import GrabConfig
 from grab.services.session import SessionCaptureService
 
 
+class FakeReporter:
+    def __init__(self):
+        self.events: list[dict] = []
+
+    async def emit_event(self, event: str, **kwargs):
+        self.events.append({"event": event, **kwargs})
+
+
 class FakePage:
     def __init__(
         self,
@@ -310,6 +318,37 @@ async def test_print_login_page_diagnostics_reports_missing_post_and_ticket(caps
     assert "没有看到 POST /login.html 响应" in output
     assert "验证码票据: ticket=no, randstr=no" in output
     assert "更像是验证码没有完成" in output
+
+
+@pytest.mark.asyncio
+async def test_print_login_page_diagnostics_emits_structured_event():
+    async def debug_state_provider():
+        return {
+            "events": [],
+            "login_form": {
+                "ticket_present": False,
+                "randstr_present": False,
+                "target_value": "https://user.91160.com/login.html",
+                "error_num": "1",
+                "visible_messages": ["验证码错误"],
+            },
+        }
+
+    reporter = FakeReporter()
+    service = SessionCaptureService(
+        page=FakePage(
+            url="https://user.91160.com/login.html",
+            member_html="",
+        ),
+        config=GrabConfig(),
+        debug_state_provider=debug_state_provider,
+        reporter=reporter,
+    )
+
+    await service.print_login_page_diagnostics()
+
+    assert reporter.events[-1]["event"] == "login_page_diagnostics"
+    assert reporter.events[-1]["data"]["visible_messages"] == ["验证码错误"]
 
 
 @pytest.mark.asyncio

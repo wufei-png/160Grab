@@ -24,11 +24,13 @@ class PageBookingStrategy:
         config: GrabConfig | None = None,
         sleep=None,
         debug_snapshot=None,
+        reporter=None,
     ):
         self.page = page
         self.config = config
         self._sleep = sleep
         self.debug_snapshot = debug_snapshot
+        self.reporter = reporter
         self.member_id: str | None = None
         self.target: DoctorPageTarget | None = None
 
@@ -515,6 +517,8 @@ class PageBookingStrategy:
                 logger.info("Booking submit did not leave booking form within 5s")
         html = await self.page.content()
         raise_if_rate_limited(html, context="booking submit page")
+        if self.reporter is not None:
+            self.reporter.reset_rate_limit_streak()
         diagnostics = await self._collect_booking_page_diagnostics()
         success = self._is_booking_success(before_url, diagnostics)
         if success:
@@ -524,6 +528,28 @@ class PageBookingStrategy:
                 form.appointment_label,
                 diagnostics.get("url"),
             )
+            if self.reporter is not None:
+                await self.reporter.emit_event(
+                    "booking_succeeded",
+                    level="info",
+                    message=(
+                        f"Booking succeeded for schedule {form.schedule_id}"
+                        + (
+                            f" at {form.appointment_label}"
+                            if form.appointment_label
+                            else ""
+                        )
+                        + "."
+                    ),
+                    data={
+                        "schedule_id": form.schedule_id,
+                        "appointment_label": form.appointment_label,
+                        "url": diagnostics.get("url"),
+                    },
+                    notify=True,
+                    notification_title="160Grab 挂号成功",
+                    notification_severity="info",
+                )
         else:
             logger.info(
                 "Booking submit page diagnostics: url={}, title={}, has_booking_form={}, has_submit_button={}, selected_times={}, checked_members={}, hidden_fields={}, visible_messages={}",
@@ -538,12 +564,36 @@ class PageBookingStrategy:
             )
             if self.debug_snapshot is not None:
                 await self.debug_snapshot("booking-submit-not-success")
+            if self.reporter is not None:
+                await self.reporter.emit_event(
+                    "booking_submit_failed",
+                    level="warning",
+                    message=(
+                        f"Booking submit did not complete successfully for "
+                        f"schedule {form.schedule_id}."
+                    ),
+                    data={
+                        "schedule_id": form.schedule_id,
+                        "appointment_label": form.appointment_label,
+                        "diagnostics": diagnostics,
+                    },
+                )
         return success
 
     async def open_booking_form(self, slot_id: str) -> BookingForm:
         form = await self.fetch_booking_form(slot_id)
         if form.is_valid:
             await self.fill_booking_form(form)
+            if self.reporter is not None:
+                await self.reporter.emit_event(
+                    "booking_form_opened",
+                    level="info",
+                    message=f"Opened booking form for schedule {slot_id}.",
+                    data={
+                        "schedule_id": form.schedule_id,
+                        "appointment_label": form.appointment_label,
+                    },
+                )
         return form
 
     async def submit_open_form(self, form: BookingForm) -> BookingResult:
@@ -558,7 +608,22 @@ class PageBookingStrategy:
         for attempt in range(1, max_attempts + 1):
             try:
                 form = await self.open_booking_form(slot_id)
+                if self.reporter is not None:
+                    self.reporter.reset_rate_limit_streak()
                 if not form.is_valid:
+                    if self.reporter is not None:
+                        await self.reporter.emit_event(
+                            "booking_submit_failed",
+                            level="warning",
+                            message=(
+                                f"Booking form is invalid for schedule {slot_id} "
+                                f"on attempt {attempt}."
+                            ),
+                            data={
+                                "schedule_id": slot_id,
+                                "attempt": attempt,
+                            },
+                        )
                     if attempt < max_attempts:
                         await self._sleep_retry_gap(attempt)
                     continue
@@ -573,6 +638,12 @@ class PageBookingStrategy:
                     slot_id,
                     exc.message,
                 )
+                if self.reporter is not None:
+                    await self.reporter.record_rate_limit(
+                        context="booking",
+                        message=exc.message,
+                        data={"attempt": attempt, "slot_id": slot_id},
+                    )
                 if attempt < max_attempts:
                     await self._sleep_rate_limit_gap()
                 continue

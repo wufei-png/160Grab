@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import date
 from typing import Any
 
@@ -10,10 +11,20 @@ from grab.utils.runtime import parse_sleep_time
 
 
 class ScheduleService:
-    def __init__(self, page_api, config: GrabConfig | None = None, sleep=None):
+    def __init__(
+        self,
+        page_api,
+        config: GrabConfig | None = None,
+        sleep=None,
+        reporter=None,
+        monotonic=None,
+    ):
         self.page_api = page_api
         self.config = config
         self._sleep = sleep
+        self.reporter = reporter
+        self._monotonic = monotonic or time.monotonic
+        self._last_heartbeat_at: float | None = None
         self.target: DoctorPageTarget | None = None
 
     def set_target(self, target: DoctorPageTarget) -> None:
@@ -238,7 +249,18 @@ class ScheduleService:
                     exc.message,
                     delay_ms,
                 )
+                if self.reporter is not None:
+                    await self.reporter.record_rate_limit(
+                        context="schedule_polling",
+                        message=exc.message,
+                        data={
+                            "attempt": attempt,
+                            "cooldown_ms": delay_ms,
+                        },
+                    )
             else:
+                if self.reporter is not None:
+                    self.reporter.reset_rate_limit_streak()
                 yield slots
                 delay_ms = parse_sleep_time(self.config.sleep_time)
                 logger.info(
@@ -247,6 +269,34 @@ class ScheduleService:
                     len(slots),
                     delay_ms,
                 )
+                if self.reporter is not None:
+                    await self.reporter.emit_event(
+                        "schedule_poll_completed",
+                        level="info",
+                        message=(
+                            f"Polling attempt {attempt} completed with "
+                            f"{len(slots)} matching slot(s)."
+                        ),
+                        data={
+                            "attempt": attempt,
+                            "matching_slots": len(slots),
+                            "next_poll_delay_ms": delay_ms,
+                            "target_date": self._resolve_target_date(),
+                        },
+                    )
+                    if self._should_emit_heartbeat():
+                        await self.reporter.emit_event(
+                            "schedule_poll_heartbeat",
+                            level="info",
+                            message=(
+                                f"Still polling schedules after {attempt} attempt(s)."
+                            ),
+                            data={
+                                "attempt": attempt,
+                                "matching_slots": len(slots),
+                            },
+                        )
+                        self._last_heartbeat_at = self._monotonic()
 
             if self._sleep is not None and delay_ms is not None:
                 await self._sleep(delay_ms / 1000)
@@ -293,3 +343,12 @@ class ScheduleService:
     def _resolve_target_date(self) -> str:
         target = self.config.brush_start_date or date.today()
         return target.isoformat()
+
+    def _should_emit_heartbeat(self) -> bool:
+        if self.config is None:
+            return False
+        if self._last_heartbeat_at is None:
+            self._last_heartbeat_at = self._monotonic()
+            return False
+        elapsed = self._monotonic() - self._last_heartbeat_at
+        return elapsed >= self.config.logging.heartbeat_interval_seconds

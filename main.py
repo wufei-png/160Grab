@@ -11,6 +11,7 @@ from grab.browser.playwright_client import PlaywrightClient
 from grab.core.runner import GrabRunner
 from grab.core.scheduler import Scheduler
 from grab.models.schemas import GrabConfig
+from grab.observability import build_run_reporter
 from grab.services.auth import AuthService
 from grab.services.booking import BookingService, PageBookingStrategy
 from grab.services.schedule import ScheduleService
@@ -70,56 +71,123 @@ async def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(0)
 
-    selected_profile: BrowserProfile | None = None
-    profile_source = "transient"
-    if config.browser.launch_persistent_context:
-        resolved_profile = resolve_profile_for_run(
-            root_dir=config.browser.profiles_root_dir,
-            configured_profile_name=config.browser.profile_name,
-            config_path=config_path,
-            prompt_text=input,
-            notify=print,
-            is_interactive=sys.stdin.isatty(),
-            persist_profile_name=write_browser_profile_name,
-        )
-        selected_profile = resolved_profile.profile
-        profile_source = resolved_profile.source
-        logger.info(
-            "Using persistent context with profile '{}' at {} (source={})",
-            selected_profile.name,
-            selected_profile.path,
-            profile_source,
-        )
+    reporter = build_run_reporter(config)
+    if reporter.jsonl_path is not None:
+        logger.info("Structured run events will be written to {}", reporter.jsonl_path)
     else:
-        logger.info("Using transient browser context (persistent disabled)")
+        logger.warning(
+            "Structured run events are disabled because the JSONL sink could not be initialized"
+        )
+    await reporter.emit_event(
+        "run_started",
+        level="info",
+        message="Run started.",
+        data={
+            "config_path": str(config_path),
+            "debug_dir": str(debug_dir) if debug_dir is not None else None,
+            "desktop_notifications": config.notifications.desktop,
+            "webhook_enabled": bool(config.notifications.webhook.url),
+            "jsonl_path": str(reporter.jsonl_path),
+        },
+    )
 
-    async with PlaywrightClient(
-        headless=headless,
-        debug_dir=debug_dir,
-        stealth_enabled=config.browser.stealth,
-        persistent_context_enabled=config.browser.launch_persistent_context,
-        user_data_dir=selected_profile.path if selected_profile is not None else None,
-    ) as client:
-        try:
-            runner = build_runner(config, client)
+    runner_started = False
+    try:
+        selected_profile: BrowserProfile | None = None
+        profile_source = "transient"
+        if config.browser.launch_persistent_context:
+            resolved_profile = resolve_profile_for_run(
+                root_dir=config.browser.profiles_root_dir,
+                configured_profile_name=config.browser.profile_name,
+                config_path=config_path,
+                prompt_text=input,
+                notify=print,
+                is_interactive=sys.stdin.isatty(),
+                persist_profile_name=write_browser_profile_name,
+            )
+            selected_profile = resolved_profile.profile
+            profile_source = resolved_profile.source
+            logger.info(
+                "Using persistent context with profile '{}' at {} (source={})",
+                selected_profile.name,
+                selected_profile.path,
+                profile_source,
+            )
+        else:
+            logger.info("Using transient browser context (persistent disabled)")
+
+        async with PlaywrightClient(
+            headless=headless,
+            debug_dir=debug_dir,
+            stealth_enabled=config.browser.stealth,
+            persistent_context_enabled=config.browser.launch_persistent_context,
+            user_data_dir=selected_profile.path if selected_profile is not None else None,
+        ) as client:
+            runner = build_runner(config, client, reporter=reporter)
+            runner_started = True
             result = await runner.run()
-        except Exception as exc:
-            logger.exception("Run failed")
-            raise SystemExit(1) from exc
+    except Exception as exc:
+        if not runner_started:
+            await reporter.emit_event(
+                "run_failed",
+                level="error",
+                message=f"Run failed during phase {reporter.current_phase}: {exc}",
+                data={
+                    "phase": reporter.current_phase,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+                notify=True,
+                notification_title="160Grab 运行失败",
+                notification_severity="error",
+            )
+        await reporter.emit_event(
+            "run_finished",
+            level="info",
+            message="Run finished with failure.",
+            data={
+                "success": False,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+        logger.exception("Run failed")
+        raise SystemExit(1) from exc
 
-        raise SystemExit(0 if result.success else 1)
+    await reporter.emit_event(
+        "run_finished",
+        level="info" if result.success else "warning",
+        message=(
+            "Run finished successfully."
+            if result.success
+            else "Run finished without a successful booking."
+        ),
+        data={
+            "success": result.success,
+            "booked_slot_id": result.booked_slot_id,
+        },
+    )
+    raise SystemExit(0 if result.success else 1)
 
 
-def build_runner(config, client: PlaywrightClient) -> GrabRunner:
+def build_runner(config, client: PlaywrightClient, reporter=None) -> GrabRunner:
     if client.page is None:
         raise RuntimeError("Playwright page is not initialized")
 
     page_api = BrowserPageApi(client.page)
+
+    async def capture_snapshot(label: str):
+        path = await client.capture_snapshot(label)
+        if reporter is not None and path is not None:
+            await reporter.record_snapshot(label=label, path=path)
+        return path
+
     page_strategy = PageBookingStrategy(
         client.page,
         config=config,
         sleep=asyncio.sleep,
-        debug_snapshot=client.capture_snapshot,
+        debug_snapshot=capture_snapshot,
+        reporter=reporter,
     )
 
     def sync_active_page(page) -> None:
@@ -127,16 +195,27 @@ def build_runner(config, client: PlaywrightClient) -> GrabRunner:
         page_api.page = page
         page_strategy.page = page
 
-    auth_service = AuthService(client.page, config, notify=logger.info)
+    auth_service = AuthService(
+        client.page,
+        config,
+        notify=logger.info,
+        reporter=reporter,
+    )
     session_service = SessionCaptureService(
         client.page,
         config,
-        debug_snapshot=client.capture_snapshot,
+        debug_snapshot=capture_snapshot,
         debug_state_provider=client.collect_debug_state,
         on_page_change=sync_active_page,
+        reporter=reporter,
     )
-    scheduler = Scheduler(config)
-    schedule_service = ScheduleService(page_api, config=config, sleep=asyncio.sleep)
+    scheduler = Scheduler(config, reporter=reporter)
+    schedule_service = ScheduleService(
+        page_api,
+        config=config,
+        sleep=asyncio.sleep,
+        reporter=reporter,
+    )
     booking_service = BookingService(page_strategy=page_strategy)
     return GrabRunner(
         auth_service,
@@ -144,6 +223,7 @@ def build_runner(config, client: PlaywrightClient) -> GrabRunner:
         scheduler,
         schedule_service,
         booking_service,
+        reporter=reporter,
     )
 
 

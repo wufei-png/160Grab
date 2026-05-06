@@ -8,6 +8,16 @@ browser:
   profile_name:
   profiles_root_dir: "~/.160grab/browser-profiles"
   stealth: true
+logging:
+  jsonl_dir: "~/.160grab/logs"
+  heartbeat_interval_seconds: 300
+notifications:
+  desktop: true
+  rate_limit_threshold: 3
+  webhook:
+    url:
+    timeout_seconds: 5
+    headers: {}
 member_id:
 doctor_ids: []
 weeks: []

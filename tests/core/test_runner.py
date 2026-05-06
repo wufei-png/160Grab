@@ -82,6 +82,21 @@ class FakeBookingService:
         return self.result
 
 
+class FakeReporter:
+    def __init__(self):
+        self.phase = "startup"
+        self.events: list[dict] = []
+
+    def set_phase(self, phase: str) -> None:
+        self.phase = phase
+
+    async def emit_event(self, event: str, **kwargs):
+        self.events.append({"event": event, **kwargs, "phase": self.phase})
+
+    def reset_rate_limit_streak(self) -> None:
+        return None
+
+
 @pytest.fixture
 def frozen_clock():
     return FrozenClock()
@@ -230,3 +245,36 @@ async def test_runner_fails_when_dep_id_stays_placeholder_zero(frozen_clock):
 
     with pytest.raises(ValueError, match="Could not resolve full doctor page target"):
         await runner.run()
+
+
+@pytest.mark.asyncio
+async def test_runner_emits_run_failed_event_on_unresolved_target(frozen_clock):
+    unresolved_target = DoctorPageTarget(
+        unit_id=None,
+        dept_id=None,
+        doctor_id="14765",
+        source_url="https://www.91160.com/doctors/index/docid-14765.html",
+        needs_resolution=True,
+    )
+    reporter = FakeReporter()
+    config = GrabConfig(
+        enable_appoint=True,
+        appoint_time=frozen_clock.now() + timedelta(seconds=15),
+    )
+    runner = GrabRunner(
+        auth_service=FakeAuthService(),
+        session_service=FakeSessionService(target=unresolved_target),
+        scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
+        schedule_service=FakeScheduleService([]),
+        booking_service=FakeBookingService(
+            BookingResult(success=False, attempts=0, slot_id=None)
+        ),
+        reporter=reporter,
+    )
+
+    with pytest.raises(ValueError, match="Could not resolve full doctor page target"):
+        await runner.run()
+
+    assert reporter.events[-1]["event"] == "run_failed"
+    assert reporter.events[-1]["notify"] is True
+    assert reporter.events[-1]["data"]["phase"] == "resolve_target"

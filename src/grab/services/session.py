@@ -26,6 +26,7 @@ class SessionCaptureService:
         debug_state_provider=None,
         sleep=None,
         on_page_change=None,
+        reporter=None,
     ):
         self.page = page
         self.config = config
@@ -35,6 +36,7 @@ class SessionCaptureService:
         self.debug_state_provider = debug_state_provider
         self.sleep = sleep or asyncio.sleep
         self.on_page_change = on_page_change
+        self.reporter = reporter
 
     def _set_page(self, page) -> None:
         self.page = page
@@ -201,12 +203,38 @@ class SessionCaptureService:
                 + " | ".join(event.get("url") or "" for event in captcha_failures[-2:])
             )
 
+        inference = None
         if not login_post_events and not login_form.get("ticket_present"):
-            print("   - 推断: 更像是验证码没有完成，或登录表单根本没有真正提交。")
+            inference = "更像是验证码没有完成，或登录表单根本没有真正提交。"
+            print(f"   - 推断: {inference}")
         elif login_post_events and visible_messages:
-            print("   - 推断: 表单提交过，但页面返回了前端可见的错误提示。")
+            inference = "表单提交过，但页面返回了前端可见的错误提示。"
+            print(f"   - 推断: {inference}")
         elif login_post_events:
-            print("   - 推断: 表单提交过，但还需要结合快照或网络响应继续判断。")
+            inference = "表单提交过，但还需要结合快照或网络响应继续判断。"
+            print(f"   - 推断: {inference}")
+
+        if self.reporter is not None:
+            await self.reporter.emit_event(
+                "login_page_diagnostics",
+                level="warning",
+                message="Collected login page diagnostics while waiting for doctor page.",
+                data={
+                    "visible_messages": visible_messages,
+                    "page_errors": page_errors,
+                    "login_post_status": (
+                        login_post_events[-1].get("status") if login_post_events else None
+                    ),
+                    "ticket_present": login_form.get("ticket_present"),
+                    "randstr_present": login_form.get("randstr_present"),
+                    "target_value": login_form.get("target_value"),
+                    "error_num": login_form.get("error_num"),
+                    "captcha_failures": [
+                        event.get("url") for event in captcha_failures[-2:]
+                    ],
+                    "inference": inference,
+                },
+            )
 
     def parse_doctor_page_url(self, url: str) -> DoctorPageTarget:
         """
@@ -303,6 +331,15 @@ class SessionCaptureService:
 
     async def capture_target_from_current_page(self) -> DoctorPageTarget:
         while True:
+            if self.reporter is not None:
+                await self.reporter.emit_event(
+                    "manual_login_waiting",
+                    level="info",
+                    message=(
+                        "Waiting for user to finish login and navigate to a doctor detail page."
+                    ),
+                    data={"current_url": self.page.url},
+                )
             self.prompt_enter("请先完成登录并停留在目标医生页，准备好后按 Enter 继续: ")
             try:
                 return await self._wait_for_doctor_target()
@@ -335,6 +372,19 @@ class SessionCaptureService:
                     print("   当前停留在就诊人页面，先回到医生详情页再按 Enter。")
                 if self.debug_snapshot is not None:
                     await self.debug_snapshot("unexpected-page-after-manual-login")
+                if self.reporter is not None:
+                    await self.reporter.emit_event(
+                        "target_capture_failed",
+                        level="warning",
+                        message="Current browser page is not a supported doctor detail page.",
+                        data={
+                            "current_url": self.page.url,
+                            "available_urls": [
+                                page.url for page in self.page.context.pages
+                            ],
+                            "error": str(e),
+                        },
+                    )
                 print(
                     "支持的URL格式:\n"
                     "  1. Full: https://www.91160.com/doctors/index/unit_id-xx/dep_id-xx/docid-xx.html\n"
@@ -534,10 +584,34 @@ class SessionCaptureService:
                     print("   - unit_id not found in page")
                 if not resolved_dept_id:
                     print("   - dept_id not found in page or still stayed at placeholder 0")
+                if self.reporter is not None:
+                    await self.reporter.emit_event(
+                        "target_resolution_failed",
+                        level="warning",
+                        message="Could not resolve full doctor target from current page.",
+                        data={
+                            "doctor_id": target.doctor_id,
+                            "source_url": target.source_url,
+                            "resolved_unit_id": resolved_unit_id,
+                            "resolved_dept_id": resolved_dept_id,
+                        },
+                    )
                 return target
 
         except Exception as e:
             print(f"⚠️ Error resolving unit_id/dept_ids: {e}")
+            if self.reporter is not None:
+                await self.reporter.emit_event(
+                    "target_resolution_failed",
+                    level="warning",
+                    message="Error while resolving full doctor target from current page.",
+                    data={
+                        "doctor_id": target.doctor_id,
+                        "source_url": target.source_url,
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                    },
+                )
             return target
 
     async def fetch_member_profiles(self) -> list[MemberProfile]:

@@ -7,6 +7,22 @@ from grab.models.schemas import BookingResult, GrabConfig, Slot
 from grab.services.booking import BookingService, PageBookingStrategy
 
 
+class FakeReporter:
+    def __init__(self):
+        self.events: list[dict] = []
+        self.rate_limit_resets = 0
+        self.rate_limit_events: list[dict] = []
+
+    async def emit_event(self, event: str, **kwargs):
+        self.events.append({"event": event, **kwargs})
+
+    def reset_rate_limit_streak(self) -> None:
+        self.rate_limit_resets += 1
+
+    async def record_rate_limit(self, **kwargs):
+        self.rate_limit_events.append(kwargs)
+
+
 class FakeBookingPage:
     def __init__(self, booking_html: str, success_html: str):
         self.booking_html = booking_html
@@ -324,3 +340,63 @@ async def test_page_booking_strategy_uses_longer_cooldown_after_rate_limit(
     )
 
     assert sleep_calls[0] == 10.0
+
+
+class FirstTrySuccessBookingPage(FakeBookingPage):
+    async def evaluate(self, script: str, arg: dict | None = None):
+        if arg is not None:
+            self.evaluated.append(arg)
+            return {
+                "appointmentSelected": bool(arg.get("appointmentValue")),
+                "memberSelected": True,
+            }
+        if "candidateSelectors" in script:
+            self.submit_attempts += 1
+            self.current_html = self.success_html
+            return {"method": "selector", "target": "#suborder #submitbtn"}
+        if "paymethod-sure" in script or "const sure =" in script:
+            return None
+        return await super().evaluate(script, arg)
+
+
+@pytest.mark.asyncio
+async def test_submit_booking_via_page_emits_success_event_and_notification(
+    booking_page_html,
+    booking_submit_success_html,
+):
+    reporter = FakeReporter()
+    strategy = PageBookingStrategy(
+        page=FirstTrySuccessBookingPage(
+            booking_page_html,
+            booking_submit_success_html,
+        ),
+        reporter=reporter,
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    form = await strategy.open_booking_form("sch-1001")
+    success = await strategy.submit_booking_via_page(form)
+
+    assert success is True
+    assert reporter.events[-1]["event"] == "booking_succeeded"
+    assert reporter.events[-1]["notify"] is True
+
+
+@pytest.mark.asyncio
+async def test_submit_booking_via_page_emits_failure_event_with_diagnostics(
+    booking_page_html,
+    booking_submit_success_html,
+):
+    reporter = FakeReporter()
+    strategy = PageBookingStrategy(
+        page=FakeBookingPage(booking_page_html, booking_submit_success_html),
+        reporter=reporter,
+    )
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    form = await strategy.open_booking_form("sch-1001")
+    success = await strategy.submit_booking_via_page(form)
+
+    assert success is False
+    assert reporter.events[-1]["event"] == "booking_submit_failed"
+    assert "diagnostics" in reporter.events[-1]["data"]
