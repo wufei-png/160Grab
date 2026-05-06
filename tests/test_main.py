@@ -1,9 +1,16 @@
+import io
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
-from main import ensure_frozen_default_config, parse_args, resolve_config_path
+import main as main_module
+from main import (
+    emit_console_message,
+    ensure_frozen_default_config,
+    parse_args,
+    resolve_config_path,
+)
 
 
 def test_parse_args_supports_create_profile_mode():
@@ -91,3 +98,38 @@ def test_ensure_frozen_default_config_is_noop_when_config_exists(tmp_path):
 
     assert created is False
     assert config_path.read_text(encoding="utf-8") == "existing\n"
+
+
+def test_emit_console_message_falls_back_for_non_utf8_stream():
+    buffer = io.BytesIO()
+    stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+
+    emit_console_message("未找到 config.yaml", stream=stream)
+
+    stream.flush()
+    rendered = buffer.getvalue().decode("cp1252")
+    assert "config.yaml" in rendered
+    assert "\\u672a\\u627e\\u5230" in rendered
+
+
+def test_ensure_frozen_default_config_default_output_handles_cp1252_stdout(
+    tmp_path, monkeypatch
+):
+    template_path = tmp_path / "example.yaml"
+    template_path.write_text("auth:\n  strategy: manual\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    buffer = io.BytesIO()
+    stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+    monkeypatch.setattr(main_module.sys, "stdout", stream)
+
+    created = ensure_frozen_default_config(
+        config_path,
+        template_path=template_path,
+    )
+
+    stream.flush()
+    rendered = buffer.getvalue().decode("cp1252")
+    assert created is True
+    assert config_path.exists()
+    assert "config.yaml" in rendered
+    assert "\\u8bf7\\u5148\\u6309\\u9700\\u4fee\\u6539" in rendered

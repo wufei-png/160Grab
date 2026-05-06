@@ -5,6 +5,7 @@ import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import TextIO
 
 from loguru import logger
 
@@ -63,6 +64,27 @@ def get_template_config_path() -> Path:
     return get_resource_root() / CONFIG_TEMPLATE_PATH
 
 
+def emit_console_message(
+    message: str,
+    *,
+    stream: TextIO | None = None,
+    end: str = "\n",
+) -> None:
+    target = stream or sys.stdout
+    payload = f"{message}{end}"
+    try:
+        target.write(payload)
+    except UnicodeEncodeError:
+        encoding = getattr(target, "encoding", None) or "utf-8"
+        safe_payload = payload.encode(encoding, errors="backslashreplace").decode(
+            encoding
+        )
+        target.write(safe_payload)
+    flush = getattr(target, "flush", None)
+    if callable(flush):
+        flush()
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="160Grab CLI")
     parser.add_argument("config_path", nargs="?")
@@ -106,7 +128,7 @@ def ensure_frozen_default_config(
     config_path: Path,
     *,
     template_path: Path | None = None,
-    output: Callable[[str], None] = print,
+    output: Callable[[str], None] | None = None,
 ) -> bool:
     if config_path.exists():
         return False
@@ -117,8 +139,9 @@ def ensure_frozen_default_config(
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(template, config_path)
-    output(f"未找到 {CONFIG_FILENAME}，已在 {config_path} 生成配置模板。")
-    output("请先按需修改配置后重新运行。")
+    writer = output or emit_console_message
+    writer(f"未找到 {CONFIG_FILENAME}，已在 {config_path} 生成配置模板。")
+    writer("请先按需修改配置后重新运行。")
     return True
 
 
@@ -321,13 +344,13 @@ async def run_create_profile_flow(
         config.browser.profiles_root_dir,
         profile_name=requested_profile_name,
     )
-    print(f"✅ 已创建 profile: {profile.name}")
-    print(f"   路径: {profile.path}")
-    print(
+    emit_console_message(f"✅ 已创建 profile: {profile.name}")
+    emit_console_message(f"   路径: {profile.path}")
+    emit_console_message(
         "ℹ️ 将打开一个持久化浏览器用于暖机。"
         "你可以自行访问 160、登录 160，或做少量普通浏览。"
     )
-    print("   关闭浏览器窗口后，此命令会自动结束。")
+    emit_console_message("   关闭浏览器窗口后，此命令会自动结束。")
 
     async with PlaywrightClient(
         headless=False,
