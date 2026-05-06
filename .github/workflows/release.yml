@@ -109,14 +109,15 @@ jobs:
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           cd release-artifacts
           mapfile -t zip_files < <(find . -type f -name '*.zip' | sort)
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" "${zip_files[@]}" SHA256SUMS --clobber
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GH_REPO}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${zip_files[@]}" SHA256SUMS --repo "${GH_REPO}" --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" "${zip_files[@]}" SHA256SUMS \
+            gh release create "${GITHUB_REF_NAME}" "${zip_files[@]}" SHA256SUMS --repo "${GH_REPO}" \
               --title "${GITHUB_REF_NAME}" \
               --generate-notes
           fi
