@@ -72,6 +72,18 @@
 - **节流与退避可配置**：`sleep_time`、`page_action_sleep_time`、`booking_retry_sleep_time`、`rate_limit_sleep_time` 可以分别控制轮询、页面动作、重试和风控冷却
 - **调试证据可落盘**：通过 `GRAB_DEBUG_DIR` 可以保存 HTML、截图和最近的页面事件，便于定位真实站点变化
 
+## 后续改进
+
+结合 `91160-cli` 的成熟能力、当前代码结构和已有 handoff 文档，下一阶段最值得做的并不是“把所有缺失功能一次补齐”，而是按下面的顺序推进：
+
+- 先建立真实站点 smoke 基线，并把医生页、`member.html`、排班接口、预约页的真实变化固化回测试夹具
+- 在当前持久化 profile 路线之上补 `channel="chrome"` 一类 branded browser 支持，优先提升真实浏览器一致性
+- 借鉴 `91160-cli` 的 `init` 体验，但只做适配当前手动接管模型的轻量写回助手，而不是重做一整套 ID 初始化系统
+- 增加成功通知、结构化运行日志和更清晰的诊断输出，提升长时间刷号时的可用性
+- 仅在前面几项稳定后，再考虑把 `91160-cli` 的第二刷号通道思路作为 fallback 引回当前架构
+
+更详细的优先级、原因和取舍见 [docs/future-improvements.md](/Users/wufei2/github.com/wufei-png/160Grab/docs/future-improvements.md)。
+
 ## 环境要求
 
 - Python 3.11+
