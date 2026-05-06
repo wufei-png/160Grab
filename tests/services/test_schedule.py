@@ -37,7 +37,9 @@ class FakePageApi:
 
 @pytest.fixture
 def channel_2_payload():
-    return json.loads(Path("tests/fixtures/channel_2_schedule.json").read_text())
+    return json.loads(
+        Path("tests/fixtures/channel_2_schedule.json").read_text(encoding="utf-8")
+    )
 
 
 @pytest.fixture

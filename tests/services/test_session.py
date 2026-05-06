@@ -61,7 +61,7 @@ class FakePage:
 
 @pytest.fixture
 def member_page_html():
-    return Path("tests/fixtures/member_page.html").read_text()
+    return Path("tests/fixtures/member_page.html").read_text(encoding="utf-8")
 
 
 def test_parse_doctor_page_url_extracts_required_ids(member_page_html):

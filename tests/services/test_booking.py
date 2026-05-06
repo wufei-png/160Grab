@@ -103,12 +103,14 @@ class FakeBookingPage:
 
 @pytest.fixture
 def booking_page_html():
-    return Path("tests/fixtures/booking_page.html").read_text()
+    return Path("tests/fixtures/booking_page.html").read_text(encoding="utf-8")
 
 
 @pytest.fixture
 def booking_submit_success_html():
-    return Path("tests/fixtures/booking_submit_success.html").read_text()
+    return Path("tests/fixtures/booking_submit_success.html").read_text(
+        encoding="utf-8"
+    )
 
 
 @pytest.fixture
