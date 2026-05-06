@@ -150,6 +150,8 @@ create-profile 流程会：
 - 默认打开空白页，供你自行做少量暖机
 - 不强制要求登录 160，也不建议把登录 Chrome 账号当作必要步骤
 
+如果直接运行主程序且当前机器还没有任何 profile，程序现在会自动创建一个 `profile_1` 并继续主流程，不再因为“缺少 profile”直接退出；`--create-profile` 仍然适合想先单独暖机的人。
+
 ## 默认交互流程
 
 1. 程序打开 `https://user.91160.com/login.html`

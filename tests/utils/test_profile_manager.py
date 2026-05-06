@@ -59,6 +59,24 @@ def test_resolve_profile_for_run_auto_detects_single_profile(tmp_path):
     assert "唯一 profile" in messages[0]
 
 
+def test_resolve_profile_for_run_auto_creates_first_profile_when_none_exist(tmp_path):
+    messages: list[str] = []
+
+    resolved = resolve_profile_for_run(
+        root_dir=tmp_path,
+        configured_profile_name=None,
+        config_path=tmp_path / "config.yaml",
+        prompt_text=lambda _message: "",
+        notify=messages.append,
+        is_interactive=True,
+    )
+
+    assert resolved.profile.name == "profile_1"
+    assert resolved.source == "auto-created"
+    assert resolved.profile.marker_path.exists()
+    assert "自动创建" in messages[0]
+
+
 def test_resolve_profile_for_run_prompts_for_selection_and_persists(tmp_path):
     create_profile(tmp_path, profile_name="alpha")
     target = create_profile(tmp_path, profile_name="beta")

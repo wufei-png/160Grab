@@ -23,7 +23,7 @@ class BrowserProfile:
 @dataclass(frozen=True)
 class ResolvedBrowserProfile:
     profile: BrowserProfile
-    source: Literal["configured", "auto-detected", "selected"]
+    source: Literal["configured", "auto-created", "auto-detected", "selected"]
 
 
 def expand_profiles_root_dir(value: str | Path) -> Path:
@@ -144,10 +144,12 @@ def resolve_profile_for_run(
 
     profiles = list_profiles(resolved_root)
     if not profiles:
-        raise ValueError(
-            f"No browser profiles found under {resolved_root}. "
-            "Run `uv run python main.py config.yaml --create-profile` first."
+        profile = create_profile(resolved_root)
+        notify(
+            "ℹ️ 未检测到可用 profile，已自动创建: "
+            f"{profile.name} ({profile.path})"
         )
+        return ResolvedBrowserProfile(profile=profile, source="auto-created")
 
     if len(profiles) == 1:
         profile = profiles[0]

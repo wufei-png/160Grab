@@ -208,7 +208,7 @@ async def main(argv: list[str] | None = None) -> None:
                 configured_profile_name=config.browser.profile_name,
                 config_path=config_path,
                 prompt_text=input,
-                notify=print,
+                notify=emit_console_message,
                 is_interactive=sys.stdin.isatty(),
                 persist_profile_name=write_browser_profile_name,
             )
