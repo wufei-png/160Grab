@@ -193,6 +193,19 @@ GRAB_DEBUG_DIR=artifacts/browser-debug uv run python main.py config.yaml
 
 仓库现在提供了基于 PyInstaller 的跨平台打包入口，目标是保留当前“终端交互 + headed Chromium”的运行方式，同时让目标机器不需要预装 Python。
 
+如果你只是想直接使用，可以从 [GitHub Releases](https://github.com/wufei-png/160Grab/releases) 下载已经构建好的发布包，当前提供：
+
+- `160Grab-macos-arm64.zip`：适用于 Apple Silicon Mac
+- `160Grab-macos-intel.zip`：适用于 Intel Mac
+- `160Grab-windows-x64.zip`：适用于 64 位 Windows
+
+下载对应 zip 后，解压即可直接运行：
+
+- macOS：双击 `160Grab.command`
+- Windows：双击 `160Grab.exe`
+
+首次运行会在解压目录内创建或复用 `config.yaml`；当前 v1 发布包未签名，macOS Gatekeeper 或 Windows SmartScreen 首次可能会提示确认。
+
 手动构建：
 
 ```bash
