@@ -275,3 +275,7 @@ src/grab/
 ├── services/  # 手动登录接管、排班、预约
 └── utils/     # 配置加载、访问频率提示解析与运行时工具
 ```
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=wufei-png/160Grab&type=Date)](https://star-history.com/#wufei-png/160Grab&Date)
