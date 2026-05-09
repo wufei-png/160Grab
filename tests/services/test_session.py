@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from grab.models.schemas import GrabConfig
+from grab.models.schemas import DoctorPageTarget, GrabConfig
 from grab.services.session import SessionCaptureService
 
 
@@ -57,6 +57,16 @@ class FakePage:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class FakeRequest:
+    def __init__(self, final_urls: dict[str, str] | None = None):
+        self.final_urls = final_urls or {}
+        self.calls: list[str] = []
+
+    async def get(self, url: str):
+        self.calls.append(url)
+        return SimpleNamespace(url=self.final_urls.get(url, url))
 
 
 @pytest.fixture
@@ -237,6 +247,37 @@ async def test_capture_target_from_current_page_waits_for_redirect_after_enter(
     assert target.unit_id == "131"
     assert target.dept_id == "369"
     assert sleep_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_session_for_polling_touches_member_and_target_urls(
+    member_page_html,
+):
+    request = FakeRequest()
+    context = SimpleNamespace(pages=[], request=request)
+    page = FakePage(
+        url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        member_html=member_page_html,
+        context=context,
+    )
+    context.pages = [page]
+    service = SessionCaptureService(page=page, config=GrabConfig())
+
+    await service.refresh_session_for_polling(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        ),
+        aggressive=True,
+        reason="missing_schedule_user_key",
+    )
+
+    assert request.calls == [
+        "https://user.91160.com/member.html",
+        "https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+    ]
 
 
 @pytest.mark.asyncio

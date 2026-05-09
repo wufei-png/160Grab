@@ -5,6 +5,7 @@ from typing import Any
 
 from loguru import logger
 
+from grab.errors import SessionExpiredError, TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
 from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
 from grab.utils.runtime import parse_sleep_time
@@ -18,6 +19,7 @@ class ScheduleService:
         sleep=None,
         reporter=None,
         monotonic=None,
+        session_refresh=None,
     ):
         self.page_api = page_api
         self.config = config
@@ -25,7 +27,9 @@ class ScheduleService:
         self.reporter = reporter
         self._monotonic = monotonic or time.monotonic
         self._last_heartbeat_at: float | None = None
+        self._last_session_refresh_at: float | None = None
         self.target: DoctorPageTarget | None = None
+        self._session_refresh = session_refresh
 
     def set_target(self, target: DoctorPageTarget) -> None:
         self.target = target
@@ -40,17 +44,27 @@ class ScheduleService:
             self.target.dept_id,
             date,
         )
-        user_key = None
-        if hasattr(self.page_api, "get_global_value"):
-            user_key = await self.page_api.get_global_value("_user_key")
-        if hasattr(self.page_api, "get_cookie_value"):
-            user_key = user_key or await self.page_api.get_cookie_value(
-                "access_hash",
-                domain_contains="91160.com",
-            )
+        user_key = await self._resolve_schedule_user_key()
         if not user_key:
-            raise RuntimeError(
-                "Could not find access_hash cookie required for doctor schedule polling"
+            logger.warning(
+                "Schedule polling could not resolve _user_key/access_hash. "
+                "Attempting aggressive session refresh before failing."
+            )
+            try:
+                await self._refresh_session(
+                    aggressive=True,
+                    reason="missing_schedule_user_key",
+                )
+            except TransientSessionRefreshError as exc:
+                logger.warning(
+                    "Aggressive session refresh failed while recovering missing "
+                    "_user_key/access_hash: {}",
+                    exc,
+                )
+            user_key = await self._resolve_schedule_user_key()
+        if not user_key:
+            raise SessionExpiredError(
+                "Could not resolve _user_key/access_hash for doctor schedule polling"
             )
         fetch_json = getattr(self.page_api, "get_json_via_page_ajax", self.page_api.get_json)
         payload = await asyncio.wait_for(
@@ -241,6 +255,7 @@ class ScheduleService:
             attempt += 1
             delay_ms: int | None = None
             try:
+                await self._maybe_refresh_session()
                 slots = await self.poll_once()
             except RateLimitError as exc:
                 delay_ms = parse_sleep_time(self.config.rate_limit_sleep_time)
@@ -352,3 +367,53 @@ class ScheduleService:
             return False
         elapsed = self._monotonic() - self._last_heartbeat_at
         return elapsed >= self.config.logging.heartbeat_interval_seconds
+
+    async def _resolve_schedule_user_key(self) -> str | None:
+        user_key = None
+        if hasattr(self.page_api, "get_global_value"):
+            user_key = await self.page_api.get_global_value("_user_key")
+        if hasattr(self.page_api, "get_cookie_value"):
+            user_key = user_key or await self.page_api.get_cookie_value(
+                "access_hash",
+                domain_contains="91160.com",
+            )
+        return user_key
+
+    async def _maybe_refresh_session(self) -> None:
+        if self.config is None:
+            return
+        interval_seconds = self.config.browser.session_refresh_interval_seconds
+        if interval_seconds <= 0:
+            return
+        now = self._monotonic()
+        if (
+            self._last_session_refresh_at is not None
+            and now - self._last_session_refresh_at < interval_seconds
+        ):
+            return
+        try:
+            await self._refresh_session(
+                aggressive=False,
+                reason="periodic_keepalive",
+                refreshed_at=now,
+            )
+        except TransientSessionRefreshError as exc:
+            logger.warning("Session keepalive failed but polling will continue: {}", exc)
+
+    async def _refresh_session(
+        self,
+        *,
+        aggressive: bool,
+        reason: str,
+        refreshed_at: float | None = None,
+    ) -> None:
+        if self.target is None or self._session_refresh is None:
+            return
+        await self._session_refresh(
+            self.target,
+            aggressive=aggressive,
+            reason=reason,
+        )
+        self._last_session_refresh_at = (
+            self._monotonic() if refreshed_at is None else refreshed_at
+        )

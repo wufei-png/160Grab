@@ -24,6 +24,9 @@ browser:
   launch_persistent_context: false
   profile_name: "profile_7"
   profiles_root_dir: "~/custom-profiles"
+  session_refresh_interval_seconds: 180
+  session_recovery_max_attempts: 5
+  session_recovery_cooldown_seconds: 12
 logging:
   jsonl_dir: "~/logs"
   heartbeat_interval_seconds: 120
@@ -50,6 +53,9 @@ notifications:
     assert config.browser.launch_persistent_context is False
     assert config.browser.profile_name == "profile_7"
     assert config.browser.profiles_root_dir == "~/custom-profiles"
+    assert config.browser.session_refresh_interval_seconds == 180
+    assert config.browser.session_recovery_max_attempts == 5
+    assert config.browser.session_recovery_cooldown_seconds == 12
     assert config.logging.jsonl_dir == "~/logs"
     assert config.logging.heartbeat_interval_seconds == 120
     assert config.notifications.desktop is False
@@ -78,6 +84,9 @@ auth:
     assert config.browser.launch_persistent_context is True
     assert config.browser.profile_name is None
     assert config.browser.profiles_root_dir == "~/.160grab/browser-profiles"
+    assert config.browser.session_refresh_interval_seconds == 240
+    assert config.browser.session_recovery_max_attempts == 3
+    assert config.browser.session_recovery_cooldown_seconds == 30
     assert config.logging.jsonl_dir == "~/.160grab/logs"
     assert config.logging.heartbeat_interval_seconds == 300
     assert config.notifications.desktop is True
@@ -107,6 +116,51 @@ def test_load_config_rejects_invalid_profile_name(tmp_path):
         """
 browser:
   profile_name: "bad name"
+auth:
+  strategy: "manual"
+""".strip()
+    )
+
+    with pytest.raises(ValidationError):
+        load_config(config_file)
+
+
+def test_load_config_rejects_negative_session_refresh_interval(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        """
+browser:
+  session_refresh_interval_seconds: -1
+auth:
+  strategy: "manual"
+""".strip()
+    )
+
+    with pytest.raises(ValidationError):
+        load_config(config_file)
+
+
+def test_load_config_rejects_negative_session_recovery_max_attempts(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        """
+browser:
+  session_recovery_max_attempts: -1
+auth:
+  strategy: "manual"
+""".strip()
+    )
+
+    with pytest.raises(ValidationError):
+        load_config(config_file)
+
+
+def test_load_config_rejects_negative_session_recovery_cooldown_seconds(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        """
+browser:
+  session_recovery_cooldown_seconds: -1
 auth:
   strategy: "manual"
 """.strip()

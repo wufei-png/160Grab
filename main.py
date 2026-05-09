@@ -311,6 +311,7 @@ def build_runner(config, client: PlaywrightClient, reporter=None) -> GrabRunner:
     session_service = SessionCaptureService(
         client.page,
         config,
+        page_api=page_api,
         debug_snapshot=capture_snapshot,
         debug_state_provider=client.collect_debug_state,
         on_page_change=sync_active_page,
@@ -322,6 +323,7 @@ def build_runner(config, client: PlaywrightClient, reporter=None) -> GrabRunner:
         config=config,
         sleep=asyncio.sleep,
         reporter=reporter,
+        session_refresh=session_service.refresh_session_for_polling,
     )
     booking_service = BookingService(page_strategy=page_strategy)
     return GrabRunner(

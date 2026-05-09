@@ -110,6 +110,9 @@ uv run python main.py config.yaml
 - `browser.launch_persistent_context`: 默认是 `true`，主链路优先复用持久化 profile；设为 `false` 时退回旧的临时浏览器上下文
 - `browser.profile_name`: 可选；为空时会自动检测唯一 profile，或在多 profile 情况下提示你选择
 - `browser.profiles_root_dir`: profile 根目录，默认是 `~/.160grab/browser-profiles`
+- `browser.session_refresh_interval_seconds`: 轮询期间后台保活登录态的间隔秒数；默认每 240 秒触发一次共享会话保活，设为 `0` 可禁用
+- `browser.session_recovery_max_attempts`: 登录态失效后允许进入人工恢复流程的最大次数；超过后程序直接失败退出
+- `browser.session_recovery_cooldown_seconds`: 连续第 2 次及以后进入恢复流程前的冷却秒数
 - `browser.stealth`: 默认是 `true`，启动后会应用 `playwright-stealth` 补丁；如遇兼容性问题可以手动关闭
 - `logging.jsonl_dir`: 结构化运行事件日志目录，默认是 `~/.160grab/logs`
 - `logging.heartbeat_interval_seconds`: 长时间刷号时输出轮询心跳摘要的间隔秒数
@@ -169,6 +172,13 @@ create-profile 流程会：
 - 打开预约页、点击提交前会插入 `page_action_sleep_time` 随机停顿
 - 同一号源重试失败后会等待 `booking_retry_sleep_time`
 - 如果接口或页面包含“您单位时间内访问次数过多”等提示，会触发 `rate_limit_sleep_time` 冷却退避
+
+当前版本的登录态保活策略：
+
+- 刷号轮询期间会按 `browser.session_refresh_interval_seconds` 周期，用同一个浏览器上下文后台访问 `member.html` 保活登录态，不打断当前主页面
+- 如果某次轮询前发现 `_user_key` / `access_hash` 缺失，程序会先自动补做一次更激进的后台刷新，再重试读取会话 key
+- 只有自动刷新后仍拿不到会话 key，才会回退到当前 Playwright 窗口里的人工重新登录流程，而不是直接因为异常退出
+- 连续恢复会受 `browser.session_recovery_max_attempts` 和 `browser.session_recovery_cooldown_seconds` 约束，避免在会话持续异常时无限循环
 
 当前只支持医生详情页通道；科室排班页通道仍是 TODO。
 

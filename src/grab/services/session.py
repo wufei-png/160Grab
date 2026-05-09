@@ -3,8 +3,12 @@ import math
 import re
 from urllib.parse import urlparse, urlunparse
 
+from loguru import logger
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from grab.browser.page_api import BrowserPageApi
+from grab.errors import TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, MemberProfile
 
 
@@ -22,6 +26,7 @@ class SessionCaptureService:
         config: GrabConfig,
         prompt_enter=None,
         prompt_text=None,
+        page_api=None,
         debug_snapshot=None,
         debug_state_provider=None,
         sleep=None,
@@ -32,6 +37,7 @@ class SessionCaptureService:
         self.config = config
         self.prompt_enter = prompt_enter or (lambda message: input(message))
         self.prompt_text = prompt_text or (lambda message: input(message))
+        self.page_api = page_api or BrowserPageApi(page)
         self.debug_snapshot = debug_snapshot
         self.debug_state_provider = debug_state_provider
         self.sleep = sleep or asyncio.sleep
@@ -40,6 +46,7 @@ class SessionCaptureService:
 
     def _set_page(self, page) -> None:
         self.page = page
+        self.page_api.page = page
         if self.on_page_change is not None:
             self.on_page_change(page)
 
@@ -635,6 +642,48 @@ class SessionCaptureService:
         finally:
             if owns_temp_page and hasattr(member_page, "close"):
                 await member_page.close()
+
+    async def refresh_session_for_polling(
+        self,
+        target: DoctorPageTarget,
+        *,
+        aggressive: bool = False,
+        reason: str = "periodic_keepalive",
+    ) -> None:
+        touch_urls = ["https://user.91160.com/member.html"]
+        normalized_target_url = _strip_url_query_and_fragment(target.source_url)
+        if aggressive and normalized_target_url not in touch_urls:
+            touch_urls.append(normalized_target_url)
+
+        final_urls: list[dict[str, str]] = []
+        for url in touch_urls:
+            try:
+                final_url = await self.page_api.touch_url(url)
+            except (PlaywrightTimeoutError, PlaywrightError) as exc:
+                raise TransientSessionRefreshError(
+                    f"Could not refresh authenticated session via {url}: {exc}"
+                ) from exc
+            final_urls.append({"requested_url": url, "final_url": final_url})
+
+        logger.info(
+            "Session keepalive completed: reason={}, aggressive={}, touches={}",
+            reason,
+            aggressive,
+            final_urls,
+        )
+        if self.reporter is not None:
+            await self.reporter.emit_event(
+                "session_keepalive_completed",
+                level="info",
+                message=(
+                    "Refreshed authenticated session state before continuing schedule polling."
+                ),
+                data={
+                    "reason": reason,
+                    "aggressive": aggressive,
+                    "touches": final_urls,
+                },
+            )
 
     def parse_member_profiles(self, html: str) -> list[MemberProfile]:
         rows = re.findall(

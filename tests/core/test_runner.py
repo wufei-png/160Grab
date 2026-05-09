@@ -4,6 +4,7 @@ import pytest
 
 from grab.core.runner import GrabRunner
 from grab.core.scheduler import Scheduler
+from grab.errors import SessionExpiredError
 from grab.models.schemas import BookingResult, DoctorPageTarget, GrabConfig, Slot
 
 
@@ -29,7 +30,12 @@ class FakeAuthService:
 
 
 class FakeSessionService:
-    def __init__(self, target: DoctorPageTarget | None = None, resolved_target=None):
+    def __init__(
+        self,
+        target: DoctorPageTarget | None = None,
+        resolved_target=None,
+        config: GrabConfig | None = None,
+    ):
         self.target = target or DoctorPageTarget(
             unit_id="21",
             dept_id="369",
@@ -37,6 +43,7 @@ class FakeSessionService:
             source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
         )
         self.resolved_target = resolved_target or self.target
+        self.config = config or GrabConfig()
         self.capture_calls = 0
         self.member_calls = 0
         self.resolution_calls = 0
@@ -66,6 +73,26 @@ class FakeScheduleService:
     async def poll(self):
         self.poll_calls += 1
         yield self.slots
+
+
+class RecoveringScheduleService(FakeScheduleService):
+    def __init__(self, slots: list[Slot]):
+        super().__init__(slots)
+        self._first_poll = True
+
+    async def poll(self):
+        self.poll_calls += 1
+        if self._first_poll:
+            self._first_poll = False
+            raise SessionExpiredError("Could not resolve _user_key/access_hash")
+        yield self.slots
+
+
+class AlwaysExpiredScheduleService(FakeScheduleService):
+    async def poll(self):
+        self.poll_calls += 1
+        raise SessionExpiredError("Could not resolve _user_key/access_hash")
+        yield []
 
 
 class FakeBookingService:
@@ -115,7 +142,7 @@ def runner(frozen_clock):
     booking_service = FakeBookingService(
         BookingResult(success=True, attempts=1, slot_id="sch-1001")
     )
-    session_service = FakeSessionService()
+    session_service = FakeSessionService(config=config)
     return GrabRunner(
         auth_service=FakeAuthService(),
         session_service=session_service,
@@ -176,6 +203,7 @@ async def test_runner_resolves_docid_only_target_before_polling(frozen_clock):
         session_service=FakeSessionService(
             target=unresolved_target,
             resolved_target=resolved_target,
+            config=config,
         ),
         scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
         schedule_service=FakeScheduleService(
@@ -208,7 +236,7 @@ async def test_runner_fails_when_docid_only_target_stays_unresolved(frozen_clock
     )
     runner = GrabRunner(
         auth_service=FakeAuthService(),
-        session_service=FakeSessionService(target=unresolved_target),
+        session_service=FakeSessionService(target=unresolved_target, config=config),
         scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
         schedule_service=FakeScheduleService([]),
         booking_service=FakeBookingService(
@@ -235,7 +263,7 @@ async def test_runner_fails_when_dep_id_stays_placeholder_zero(frozen_clock):
     )
     runner = GrabRunner(
         auth_service=FakeAuthService(),
-        session_service=FakeSessionService(target=unresolved_target),
+        session_service=FakeSessionService(target=unresolved_target, config=config),
         scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
         schedule_service=FakeScheduleService([]),
         booking_service=FakeBookingService(
@@ -263,7 +291,7 @@ async def test_runner_emits_run_failed_event_on_unresolved_target(frozen_clock):
     )
     runner = GrabRunner(
         auth_service=FakeAuthService(),
-        session_service=FakeSessionService(target=unresolved_target),
+        session_service=FakeSessionService(target=unresolved_target, config=config),
         scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
         schedule_service=FakeScheduleService([]),
         booking_service=FakeBookingService(
@@ -278,3 +306,78 @@ async def test_runner_emits_run_failed_event_on_unresolved_target(frozen_clock):
     assert reporter.events[-1]["event"] == "run_failed"
     assert reporter.events[-1]["notify"] is True
     assert reporter.events[-1]["data"]["phase"] == "resolve_target"
+
+
+@pytest.mark.asyncio
+async def test_runner_recovers_from_session_expiry_by_restarting_manual_login(
+    frozen_clock,
+):
+    config = GrabConfig(
+        enable_appoint=True,
+        appoint_time=frozen_clock.now() + timedelta(seconds=15),
+    )
+    auth_service = FakeAuthService()
+    session_service = FakeSessionService(config=config)
+    schedule_service = RecoveringScheduleService(
+        [Slot(schedule_id="sch-1001", doctor_id="14765", time_range="08:00-08:30")]
+    )
+    booking_service = FakeBookingService(
+        BookingResult(success=True, attempts=1, slot_id="sch-1001")
+    )
+    runner = GrabRunner(
+        auth_service=auth_service,
+        session_service=session_service,
+        scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
+        schedule_service=schedule_service,
+        booking_service=booking_service,
+    )
+
+    result = await runner.run()
+
+    assert result.success is True
+    assert auth_service.calls == 2
+    assert session_service.capture_calls == 2
+    assert session_service.member_calls == 2
+    assert schedule_service.poll_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_runner_stops_after_session_recovery_limit_and_applies_cooldown(
+    frozen_clock,
+):
+    cooldown_calls: list[int] = []
+
+    async def fake_sleep(seconds: int):
+        cooldown_calls.append(seconds)
+
+    config = GrabConfig(
+        enable_appoint=True,
+        appoint_time=frozen_clock.now() + timedelta(seconds=15),
+        browser={
+            "session_recovery_max_attempts": 2,
+            "session_recovery_cooldown_seconds": 7,
+        },
+    )
+    auth_service = FakeAuthService()
+    session_service = FakeSessionService(config=config)
+    runner = GrabRunner(
+        auth_service=auth_service,
+        session_service=session_service,
+        scheduler=Scheduler(config, now=frozen_clock.now, sleep=frozen_clock.sleep),
+        schedule_service=AlwaysExpiredScheduleService([]),
+        booking_service=FakeBookingService(
+            BookingResult(success=False, attempts=0, slot_id=None)
+        ),
+        sleep=fake_sleep,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Session recovery attempts exceeded the configured limit",
+    ):
+        await runner.run()
+
+    assert auth_service.calls == 3
+    assert session_service.capture_calls == 3
+    assert session_service.member_calls == 3
+    assert cooldown_calls == [7]

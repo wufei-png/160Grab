@@ -7,6 +7,12 @@ browser:
   launch_persistent_context: true
   profile_name:
   profiles_root_dir: "~/.160grab/browser-profiles"
+  # 轮询期间后台保活登录态的间隔(秒)，0 表示禁用
+  session_refresh_interval_seconds: 240
+  # 登录态恢复最多重试次数；超过后直接结束运行
+  session_recovery_max_attempts: 3
+  # 连续进入第 2 次及以后恢复前的冷却时间(秒)
+  session_recovery_cooldown_seconds: 30
   # 列表点进详情空白时可改为 false 试兼容性；默认 true 使用 playwright-stealth
   stealth: true
 logging:

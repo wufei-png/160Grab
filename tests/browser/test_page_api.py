@@ -9,6 +9,7 @@ class FakePage:
         evaluate_error: Exception | None = None,
         request_payload=None,
         globals_payload=None,
+        request_url: str | None = None,
     ):
         self.calls: list[tuple[str, dict]] = []
         self.evaluate_error = evaluate_error
@@ -28,6 +29,7 @@ class FakePage:
             },
         )()
         self.request_payload = request_payload or {"result_code": 1}
+        self.request_url = request_url
         self.globals_payload = globals_payload or {}
         self.cookie_values = [
             {
@@ -48,8 +50,11 @@ class FakePage:
     async def _request_get(self, url: str):
         self.request_calls.append(url)
         payload = self.request_payload
+        response_url = self.request_url or url
 
         class FakeResponse:
+            url = response_url
+
             async def json(self_inner):
                 return payload
 
@@ -111,3 +116,14 @@ async def test_page_api_reads_global_value_from_page_context():
     value = await api.get_global_value("_user_key")
 
     assert value == "page-user-key"
+
+
+@pytest.mark.asyncio
+async def test_page_api_can_touch_authenticated_url_via_shared_request_context():
+    page = FakePage(request_url="https://user.91160.com/member.html")
+    api = BrowserPageApi(page)
+
+    final_url = await api.touch_url("https://user.91160.com/member.html")
+
+    assert final_url == "https://user.91160.com/member.html"
+    assert page.request_calls == ["https://user.91160.com/member.html"]

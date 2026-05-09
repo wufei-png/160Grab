@@ -1,3 +1,6 @@
+from typing import Any
+
+
 class BrowserPageApi:
     def __init__(self, page, base_url: str = "https://www.91160.com"):
         self.page = page
@@ -80,6 +83,15 @@ class BrowserPageApi:
         name: str,
         domain_contains: str | None = None,
     ) -> str | None:
+        cookie = await self.get_cookie(name, domain_contains=domain_contains)
+        value = cookie.get("value") if cookie is not None else None
+        return value or None
+
+    async def get_cookie(
+        self,
+        name: str,
+        domain_contains: str | None = None,
+    ) -> dict[str, Any] | None:
         context = getattr(self.page, "context", None)
         if context is None or not hasattr(context, "cookies"):
             return None
@@ -91,10 +103,29 @@ class BrowserPageApi:
             domain = cookie.get("domain") or ""
             if domain_contains is not None and domain_contains not in domain:
                 continue
-            value = cookie.get("value")
-            if value:
-                return value
+            return cookie
         return None
+
+    async def touch_url(self, url: str) -> str:
+        context = getattr(self.page, "context", None)
+        request = getattr(context, "request", None)
+        if request is not None:
+            response = await request.get(url)
+            return getattr(response, "url", url)
+
+        probe_page = self.page
+        owns_temp_page = False
+        new_page = getattr(context, "new_page", None)
+        if callable(new_page):
+            probe_page = await new_page()
+            owns_temp_page = True
+
+        try:
+            await probe_page.goto(url, wait_until="domcontentloaded")
+            return probe_page.url
+        finally:
+            if owns_temp_page and hasattr(probe_page, "close"):
+                await probe_page.close()
 
     async def get_global_value(self, name: str):
         return await self.page.evaluate(

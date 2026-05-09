@@ -42,6 +42,9 @@ class BrowserConfig(BaseModel):
     launch_persistent_context: bool = True
     profile_name: str | None = None
     profiles_root_dir: str = "~/.160grab/browser-profiles"
+    session_refresh_interval_seconds: int = 240
+    session_recovery_max_attempts: int = 3
+    session_recovery_cooldown_seconds: int = 30
 
     @field_validator("profile_name", mode="before")
     @classmethod
@@ -62,6 +65,31 @@ class BrowserConfig(BaseModel):
         if not candidate:
             raise ValueError("browser.profiles_root_dir cannot be empty")
         return candidate
+
+    @field_validator("session_refresh_interval_seconds")
+    @classmethod
+    def validate_session_refresh_interval_seconds(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(
+                "browser.session_refresh_interval_seconds cannot be negative"
+            )
+        return value
+
+    @field_validator("session_recovery_max_attempts")
+    @classmethod
+    def validate_session_recovery_max_attempts(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("browser.session_recovery_max_attempts cannot be negative")
+        return value
+
+    @field_validator("session_recovery_cooldown_seconds")
+    @classmethod
+    def validate_session_recovery_cooldown_seconds(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(
+                "browser.session_recovery_cooldown_seconds cannot be negative"
+            )
+        return value
 
 
 class LoggingConfig(BaseModel):

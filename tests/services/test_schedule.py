@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from grab.errors import SessionExpiredError, TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
 from grab.services.schedule import ScheduleService
 
@@ -237,3 +238,168 @@ async def test_poll_backs_off_when_schedule_api_reports_rate_limit():
 
     assert slots == []
     assert sleep_calls == [12.0]
+
+
+class MissingKeyPageApi(FakePageApi):
+    def __init__(self):
+        super().__init__()
+        self.user_key: str | None = None
+
+    async def get_cookie_value(
+        self,
+        name: str,
+        domain_contains: str | None = None,
+    ) -> str | None:
+        self.cookie_calls.append((name, domain_contains))
+        return self.user_key
+
+    async def get_global_value(self, name: str):
+        self.global_calls.append(name)
+        return None
+
+
+@pytest.mark.asyncio
+async def test_fetch_doctor_schedule_recovers_user_key_after_aggressive_session_refresh():
+    refresh_calls: list[tuple[bool, str]] = []
+    page_api = MissingKeyPageApi()
+
+    async def fake_refresh(target, *, aggressive: bool, reason: str):
+        refresh_calls.append((aggressive, reason))
+        page_api.user_key = "recovered-user-key"
+
+    service = ScheduleService(
+        page_api=page_api,
+        config=GrabConfig(),
+        session_refresh=fake_refresh,
+    )
+    service.set_target(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        )
+    )
+
+    await service.fetch_doctor_schedule("2026-03-24")
+
+    assert refresh_calls == [(True, "missing_schedule_user_key")]
+    assert page_api.ajax_calls == [
+        (
+            "https://gate.91160.com/guahao/v1/pc/sch/doctor",
+            {
+                "user_key": "recovered-user-key",
+                "docid": "14765",
+                "doc_id": "14765",
+                "unit_id": "21",
+                "dep_id": "369",
+                "date": "2026-03-24",
+                "days": "6",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_doctor_schedule_raises_session_expired_after_failed_refresh():
+    refresh_calls: list[tuple[bool, str]] = []
+    page_api = MissingKeyPageApi()
+
+    async def fake_refresh(target, *, aggressive: bool, reason: str):
+        refresh_calls.append((aggressive, reason))
+
+    service = ScheduleService(
+        page_api=page_api,
+        config=GrabConfig(),
+        session_refresh=fake_refresh,
+    )
+    service.set_target(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        )
+    )
+
+    with pytest.raises(SessionExpiredError):
+        await service.fetch_doctor_schedule("2026-03-24")
+
+    assert refresh_calls == [(True, "missing_schedule_user_key")]
+
+
+@pytest.mark.asyncio
+async def test_fetch_doctor_schedule_treats_transient_refresh_failure_as_session_expired():
+    page_api = MissingKeyPageApi()
+
+    async def fake_refresh(target, *, aggressive: bool, reason: str):
+        raise TransientSessionRefreshError("member.html probe timed out")
+
+    service = ScheduleService(
+        page_api=page_api,
+        config=GrabConfig(),
+        session_refresh=fake_refresh,
+    )
+    service.set_target(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        )
+    )
+
+    with pytest.raises(SessionExpiredError):
+        await service.fetch_doctor_schedule("2026-03-24")
+
+
+@pytest.mark.asyncio
+async def test_poll_triggers_periodic_session_keepalive_before_first_attempt():
+    refresh_calls: list[tuple[bool, str]] = []
+
+    async def fake_refresh(target, *, aggressive: bool, reason: str):
+        refresh_calls.append((aggressive, reason))
+
+    service = ScheduleService(
+        page_api=FakePageApi(),
+        config=GrabConfig(),
+        session_refresh=fake_refresh,
+    )
+    service.set_target(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        )
+    )
+
+    poller = service.poll()
+    await anext(poller)
+    await poller.aclose()
+
+    assert refresh_calls == [(False, "periodic_keepalive")]
+
+
+@pytest.mark.asyncio
+async def test_poll_propagates_unexpected_periodic_keepalive_errors():
+    async def fake_refresh(target, *, aggressive: bool, reason: str):
+        raise ValueError("bug in keepalive wiring")
+
+    service = ScheduleService(
+        page_api=FakePageApi(),
+        config=GrabConfig(),
+        session_refresh=fake_refresh,
+    )
+    service.set_target(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        )
+    )
+
+    poller = service.poll()
+    with pytest.raises(ValueError, match="bug in keepalive wiring"):
+        await anext(poller)
