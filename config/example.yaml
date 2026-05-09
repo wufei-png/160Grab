@@ -7,6 +7,7 @@ browser:
   launch_persistent_context: true
   profile_name:
   profiles_root_dir: "~/.160grab/browser-profiles"
+  # 列表点进详情空白时可改为 false 试兼容性；默认 true 使用 playwright-stealth
   stealth: true
 logging:
   jsonl_dir: "~/.160grab/logs"
@@ -24,9 +25,13 @@ weeks: []
 days: []
 hours:
   - "8-9"
+# 刷号轮询间隔(ms)，范围或固定值；觉得慢可调低如 "1500-2500"
 sleep_time: "3000-5000"
+# 打开预约页、提交前随机停顿(ms)
 page_action_sleep_time: "400-900"
+# 同一号源重试间隔(ms)
 booking_retry_sleep_time: "2000-4000"
+# 命中「访问次数过多」等提示后的冷却(ms)
 rate_limit_sleep_time: "15000-25000"
 brush_start_date:
 enable_appoint: false
