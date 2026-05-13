@@ -28,6 +28,7 @@ class ScheduleService:
         self._monotonic = monotonic or time.monotonic
         self._last_heartbeat_at: float | None = None
         self._last_session_refresh_at: float | None = None
+        self._last_schedule_user_key: str | None = None
         self.target: DoctorPageTarget | None = None
         self._session_refresh = session_refresh
 
@@ -50,8 +51,9 @@ class ScheduleService:
                 "Schedule polling could not resolve _user_key/access_hash. "
                 "Attempting aggressive session refresh before failing."
             )
+            refreshed_user_key = None
             try:
-                await self._refresh_session(
+                refreshed_user_key = await self._refresh_session(
                     aggressive=True,
                     reason="missing_schedule_user_key",
                 )
@@ -61,11 +63,12 @@ class ScheduleService:
                     "_user_key/access_hash: {}",
                     exc,
                 )
-            user_key = await self._resolve_schedule_user_key()
+            user_key = refreshed_user_key or await self._resolve_schedule_user_key()
         if not user_key:
             raise SessionExpiredError(
                 "Could not resolve _user_key/access_hash for doctor schedule polling"
             )
+        self._remember_schedule_user_key(user_key)
         fetch_json = getattr(self.page_api, "get_json_via_page_ajax", self.page_api.get_json)
         payload = await asyncio.wait_for(
             fetch_json(
@@ -377,7 +380,10 @@ class ScheduleService:
                 "access_hash",
                 domain_contains="91160.com",
             )
-        return user_key
+        if user_key:
+            self._remember_schedule_user_key(user_key)
+            return user_key
+        return self._last_schedule_user_key
 
     async def _maybe_refresh_session(self) -> None:
         if self.config is None:
@@ -406,14 +412,22 @@ class ScheduleService:
         aggressive: bool,
         reason: str,
         refreshed_at: float | None = None,
-    ) -> None:
+    ) -> str | None:
         if self.target is None or self._session_refresh is None:
-            return
-        await self._session_refresh(
+            return None
+        refreshed_user_key = await self._session_refresh(
             self.target,
             aggressive=aggressive,
             reason=reason,
         )
+        if refreshed_user_key:
+            self._remember_schedule_user_key(refreshed_user_key)
         self._last_session_refresh_at = (
             self._monotonic() if refreshed_at is None else refreshed_at
         )
+        return refreshed_user_key
+
+    def _remember_schedule_user_key(self, user_key: str) -> None:
+        candidate = str(user_key).strip()
+        if candidate:
+            self._last_schedule_user_key = candidate

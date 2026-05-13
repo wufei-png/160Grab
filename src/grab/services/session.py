@@ -649,26 +649,39 @@ class SessionCaptureService:
         *,
         aggressive: bool = False,
         reason: str = "periodic_keepalive",
-    ) -> None:
-        touch_urls = ["https://user.91160.com/member.html"]
+    ) -> str | None:
+        touch_urls = [("https://user.91160.com/member.html", False)]
         normalized_target_url = _strip_url_query_and_fragment(target.source_url)
-        if aggressive and normalized_target_url not in touch_urls:
-            touch_urls.append(normalized_target_url)
+        if normalized_target_url and normalized_target_url != touch_urls[0][0]:
+            touch_urls.append((normalized_target_url, True))
 
         final_urls: list[dict[str, str]] = []
-        for url in touch_urls:
+        recovered_user_key: str | None = None
+        for url, capture_user_key in touch_urls:
             try:
-                final_url = await self.page_api.touch_url(url)
+                final_url, page_user_key = await self._touch_url_with_browser_page(
+                    url,
+                    capture_user_key=capture_user_key,
+                )
             except (PlaywrightTimeoutError, PlaywrightError) as exc:
                 raise TransientSessionRefreshError(
                     f"Could not refresh authenticated session via {url}: {exc}"
                 ) from exc
-            final_urls.append({"requested_url": url, "final_url": final_url})
+            if page_user_key and recovered_user_key is None:
+                recovered_user_key = page_user_key
+            final_urls.append(
+                {
+                    "requested_url": url,
+                    "final_url": final_url,
+                    "page_user_key_found": "true" if bool(page_user_key) else "false",
+                }
+            )
 
         logger.info(
-            "Session keepalive completed: reason={}, aggressive={}, touches={}",
+            "Session keepalive completed: reason={}, aggressive={}, recovered_user_key={}, touches={}",
             reason,
             aggressive,
+            bool(recovered_user_key),
             final_urls,
         )
         if self.reporter is not None:
@@ -681,9 +694,61 @@ class SessionCaptureService:
                 data={
                     "reason": reason,
                     "aggressive": aggressive,
+                    "recovered_user_key": bool(recovered_user_key),
                     "touches": final_urls,
                 },
             )
+        return recovered_user_key
+
+    async def _touch_url_with_browser_page(
+        self,
+        url: str,
+        *,
+        capture_user_key: bool = False,
+    ) -> tuple[str, str | None]:
+        context = getattr(self.page, "context", None)
+        probe_page = self.page
+        owns_temp_page = False
+        new_page = getattr(context, "new_page", None)
+        if callable(new_page):
+            probe_page = await new_page()
+            owns_temp_page = True
+
+        try:
+            await probe_page.goto(url, wait_until="domcontentloaded")
+            page_user_key = await self._extract_page_user_key(probe_page)
+            if not capture_user_key:
+                page_user_key = None
+            return probe_page.url, page_user_key
+        finally:
+            if owns_temp_page and hasattr(probe_page, "close"):
+                await probe_page.close()
+
+    async def _extract_page_user_key(self, page) -> str | None:
+        wait_for_function = getattr(page, "wait_for_function", None)
+        if callable(wait_for_function):
+            try:
+                await wait_for_function(
+                    "() => typeof globalThis._user_key !== 'undefined'",
+                    timeout=1500,
+                )
+            except Exception:
+                pass
+        try:
+            value = await page.evaluate(
+                """() => {
+                    if ('_user_key' in globalThis && globalThis._user_key) {
+                        return String(globalThis._user_key);
+                    }
+                    return null;
+                }"""
+            )
+        except Exception:
+            return None
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
 
     def parse_member_profiles(self, html: str) -> list[MemberProfile]:
         rows = re.findall(

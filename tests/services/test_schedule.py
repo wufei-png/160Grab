@@ -265,7 +265,7 @@ async def test_fetch_doctor_schedule_recovers_user_key_after_aggressive_session_
 
     async def fake_refresh(target, *, aggressive: bool, reason: str):
         refresh_calls.append((aggressive, reason))
-        page_api.user_key = "recovered-user-key"
+        return "recovered-user-key"
 
     service = ScheduleService(
         page_api=page_api,
@@ -326,6 +326,49 @@ async def test_fetch_doctor_schedule_raises_session_expired_after_failed_refresh
         await service.fetch_doctor_schedule("2026-03-24")
 
     assert refresh_calls == [(True, "missing_schedule_user_key")]
+
+
+@pytest.mark.asyncio
+async def test_fetch_doctor_schedule_uses_cached_user_key_when_live_sources_disappear():
+    refresh_calls: list[tuple[bool, str]] = []
+    page_api = MissingKeyPageApi()
+
+    async def fake_refresh(target, *, aggressive: bool, reason: str):
+        refresh_calls.append((aggressive, reason))
+        return None
+
+    service = ScheduleService(
+        page_api=page_api,
+        config=GrabConfig(),
+        session_refresh=fake_refresh,
+    )
+    service.set_target(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        )
+    )
+    service._last_schedule_user_key = "cached-user-key"
+
+    await service.fetch_doctor_schedule("2026-03-24")
+
+    assert refresh_calls == []
+    assert page_api.ajax_calls == [
+        (
+            "https://gate.91160.com/guahao/v1/pc/sch/doctor",
+            {
+                "user_key": "cached-user-key",
+                "docid": "14765",
+                "doc_id": "14765",
+                "unit_id": "21",
+                "dep_id": "369",
+                "date": "2026-03-24",
+                "days": "6",
+            },
+        )
+    ]
 
 
 @pytest.mark.asyncio

@@ -253,17 +253,35 @@ async def test_capture_target_from_current_page_waits_for_redirect_after_enter(
 async def test_refresh_session_for_polling_touches_member_and_target_urls(
     member_page_html,
 ):
-    request = FakeRequest()
-    context = SimpleNamespace(pages=[], request=request)
-    page = FakePage(
+    original_page = FakePage(
         url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
         member_html=member_page_html,
-        context=context,
     )
-    context.pages = [page]
-    service = SessionCaptureService(page=page, config=GrabConfig())
+    member_page = FakePage(
+        url="about:blank",
+        member_html=member_page_html,
+    )
+    doctor_page = FakePage(
+        url="about:blank",
+        member_html=member_page_html,
+        evaluate_result="temp-user-key",
+    )
+    spawned_pages = [member_page, doctor_page]
 
-    await service.refresh_session_for_polling(
+    async def new_page():
+        return spawned_pages.pop(0)
+
+    context = SimpleNamespace(
+        pages=[original_page],
+        new_page=new_page,
+    )
+    original_page.context = context
+    member_page.context = context
+    doctor_page.context = context
+
+    service = SessionCaptureService(page=original_page, config=GrabConfig())
+
+    user_key = await service.refresh_session_for_polling(
         DoctorPageTarget(
             unit_id="21",
             dept_id="369",
@@ -274,10 +292,15 @@ async def test_refresh_session_for_polling_touches_member_and_target_urls(
         reason="missing_schedule_user_key",
     )
 
-    assert request.calls == [
+    assert user_key == "temp-user-key"
+    assert member_page.visited_urls == [
         "https://user.91160.com/member.html",
+    ]
+    assert doctor_page.visited_urls == [
         "https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
     ]
+    assert member_page.closed is True
+    assert doctor_page.closed is True
 
 
 @pytest.mark.asyncio
