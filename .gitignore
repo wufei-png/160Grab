@@ -13,4 +13,5 @@ dist/
 .env.local
 .DS_Store
 /config.yaml
+packaging/_embedded_version.txt
 /artifacts/

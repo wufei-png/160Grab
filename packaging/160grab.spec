@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import subprocess
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
@@ -10,8 +12,18 @@ from PyInstaller.utils.hooks import (
 
 PROJECT_ROOT = Path.cwd()
 
+subprocess.run(
+    [
+        sys.executable,
+        str(PROJECT_ROOT / "packaging" / "write_embedded_version.py"),
+    ],
+    check=True,
+    cwd=str(PROJECT_ROOT),
+)
+
 datas = [
     (str(PROJECT_ROOT / "config" / "example.yaml"), "config"),
+    (str(PROJECT_ROOT / "packaging" / "_embedded_version.txt"), "."),
 ]
 datas += collect_data_files("playwright_stealth")
 datas += copy_metadata("playwright")

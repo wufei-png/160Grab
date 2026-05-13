@@ -26,6 +26,7 @@ from grab.utils.profile_manager import (
     create_profile,
     resolve_profile_for_run,
 )
+from grab.version_info import resolve_version_string
 
 APP_NAME = "160Grab"
 CONFIG_FILENAME = "config.yaml"
@@ -158,7 +159,7 @@ async def run_smoke_browser(*, debug_dir: Path | None) -> None:
 async def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     debug_dir = _optional_path_env("GRAB_DEBUG_DIR")
-    logger.info("{} - 健康160自动挂号", APP_NAME)
+    logger.info("{} - 健康160自动挂号 | 版本 {}", APP_NAME, resolve_version_string())
     if args.smoke_browser:
         await run_smoke_browser(debug_dir=debug_dir)
         raise SystemExit(0)
