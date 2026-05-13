@@ -1,4 +1,9 @@
+import asyncio
 from typing import Any
+from loguru import logger
+
+def _is_destroyed_context_error(exc: BaseException) -> bool:
+    return "Execution context was destroyed" in str(exc)
 
 
 class BrowserPageApi:
@@ -128,15 +133,41 @@ class BrowserPageApi:
                 await probe_page.close()
 
     async def get_global_value(self, name: str):
-        return await self.page.evaluate(
-            """({ name }) => {
+        """Read a JS global from the page.
+
+        Doctor pages may still be navigating or re-rendering shortly after a
+        paste/goto; evaluate in that window raises "Execution context was
+        destroyed". Wait for DOM readiness and retry a few times before surfacing
+        the error.
+        """
+        wait = getattr(self.page, "wait_for_load_state", None)
+        expression = """({ name }) => {
                 if (name in globalThis) {
                     return globalThis[name];
                 }
                 return null;
-            }""",
-            {"name": name},
-        )
+            }"""
+        arg = {"name": name}
+        last_error: BaseException | None = None
+        for attempt in range(3):
+            if callable(wait):
+                try:
+                    await wait("domcontentloaded", timeout=8_000)
+                except Exception as exc:
+                    logger.warning(
+                        "Page.wait_for_load_state failed: {}",
+                        exc,
+                    )
+            try:
+                return await self.page.evaluate(expression, arg)
+            except Exception as exc:
+                last_error = exc
+                if _is_destroyed_context_error(exc) and attempt < 2:
+                    await asyncio.sleep(0.15 * (attempt + 1))
+                    continue
+                raise
+        assert last_error is not None
+        raise last_error
 
     def _build_url(self, path: str, params: dict[str, str]) -> str:
         from urllib.parse import urlencode

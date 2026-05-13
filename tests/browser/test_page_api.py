@@ -118,6 +118,40 @@ async def test_page_api_reads_global_value_from_page_context():
     assert value == "page-user-key"
 
 
+class FakePageFlakyEvaluate(FakePage):
+    """Simulates evaluate racing with in-flight navigation."""
+
+    def __init__(self, globals_payload, fail_before_success: int = 2):
+        super().__init__(globals_payload=globals_payload)
+        self._fail_before_success = fail_before_success
+        self._evaluate_attempts = 0
+        self.wait_for_load_state_calls = 0
+
+    async def wait_for_load_state(self, _state: str, timeout: int = 0):
+        self.wait_for_load_state_calls += 1
+
+    async def evaluate(self, script: str, arg: dict):
+        self._evaluate_attempts += 1
+        if self._evaluate_attempts <= self._fail_before_success:
+            raise RuntimeError(
+                "Page.evaluate: Execution context was destroyed, most likely "
+                "because of a navigation"
+            )
+        return await super().evaluate(script, arg)
+
+
+@pytest.mark.asyncio
+async def test_page_api_get_global_value_retries_after_destroyed_context():
+    page = FakePageFlakyEvaluate({"_user_key": "page-user-key"}, fail_before_success=2)
+    api = BrowserPageApi(page)
+
+    value = await api.get_global_value("_user_key")
+
+    assert value == "page-user-key"
+    assert page._evaluate_attempts == 3
+    assert page.wait_for_load_state_calls == 3
+
+
 @pytest.mark.asyncio
 async def test_page_api_can_touch_authenticated_url_via_shared_request_context():
     page = FakePage(request_url="https://user.91160.com/member.html")

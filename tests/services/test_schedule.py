@@ -258,6 +258,37 @@ class MissingKeyPageApi(FakePageApi):
         return None
 
 
+class DestroyedContextPageApi(FakePageApi):
+    """get_global_value races with navigation; cookie still holds access_hash."""
+
+    async def get_global_value(self, name: str):
+        self.global_calls.append(name)
+        raise RuntimeError(
+            "Page.evaluate: Execution context was destroyed, most likely "
+            "because of a navigation"
+        )
+
+
+@pytest.mark.asyncio
+async def test_fetch_doctor_schedule_falls_back_to_cookie_when_evaluate_context_lost():
+    page_api = DestroyedContextPageApi()
+    service = ScheduleService(page_api=page_api, config=GrabConfig())
+    service.set_target(
+        DoctorPageTarget(
+            unit_id="21",
+            dept_id="369",
+            doctor_id="14765",
+            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
+        )
+    )
+
+    await service.fetch_doctor_schedule("2026-03-24")
+
+    assert page_api.global_calls == ["_user_key"]
+    assert page_api.cookie_calls == [("access_hash", "91160.com")]
+    assert page_api.ajax_calls[0][1]["user_key"] == "user-key-1"
+
+
 @pytest.mark.asyncio
 async def test_fetch_doctor_schedule_recovers_user_key_after_aggressive_session_refresh():
     refresh_calls: list[tuple[bool, str]] = []

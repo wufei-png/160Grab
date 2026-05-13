@@ -5,6 +5,7 @@ from typing import Any
 
 from loguru import logger
 
+from grab.browser.page_api import _is_destroyed_context_error
 from grab.errors import SessionExpiredError, TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
 from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
@@ -374,7 +375,16 @@ class ScheduleService:
     async def _resolve_schedule_user_key(self) -> str | None:
         user_key = None
         if hasattr(self.page_api, "get_global_value"):
-            user_key = await self.page_api.get_global_value("_user_key")
+            try:
+                user_key = await self.page_api.get_global_value("_user_key")
+            except Exception as exc:
+                if not _is_destroyed_context_error(exc):
+                    raise
+                logger.warning(
+                    "Could not read _user_key from page (navigation interrupted JS "
+                    "context); falling back to cookies / cached key: {}",
+                    exc,
+                )
         if hasattr(self.page_api, "get_cookie_value"):
             user_key = user_key or await self.page_api.get_cookie_value(
                 "access_hash",
