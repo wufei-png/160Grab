@@ -186,6 +186,36 @@ create-profile 流程会：
 
 当前只支持医生详情页通道；科室排班页通道仍是 TODO。
 
+## Tampermonkey 真实浏览器脚本
+
+仓库现在额外提供了一个面向真实浏览器页面的 Tampermonkey userscript：
+
+- 脚本文件：`userscripts/91160-doctor-page-poller.user.js`
+- 只支持两类页面：
+  - `https://www.91160.com/doctors/index/...` 医生详情页
+  - 由命中号源后跳转进入的 `https://www.91160.com/guahao/ystep1/...` 预约页
+- 不接 `config.yaml`；所有配置都在脚本顶部 `CONFIG` 常量里内联维护
+
+这个脚本的行为和当前 CLI 主链路保持一致，但宿主从 Playwright 切成了你自己的真实浏览器页面：
+
+1. 在 Tampermonkey 中导入 `userscripts/91160-doctor-page-poller.user.js`
+2. 先编辑脚本顶部的 `CONFIG`
+   - `CONFIG.member.memberId` 建议改成你自己的真实就诊人 `member_id`
+   - `CONFIG.filters.weeks / days / hours` 用法与 CLI 一致
+   - `CONFIG.target.*` 可留空，让脚本从当前医生页自动识别；也可以手动锁定目标医生
+3. 登录 91160，并打开目标医生详情页
+4. 如果当前是 `dep_id-0` 或 `docid-only` 页面，脚本会先自动跳到完整医生详情页
+5. 脚本会在页面内直接请求 `https://gate.91160.com/guahao/v1/pc/sch/doctor`
+6. 命中后自动跳到 `ystep1`，按当前仓库的预约页选择器完成就诊人、时间段、勾选和提交
+7. 右上角状态面板可以直接拖动标题栏移动；双击标题栏会重置回默认右上角位置
+
+几个限制要提前知道：
+
+- 必须运行在真实、已登录浏览器里；未登录或拿不到 `_user_key` 时会直接停机并提示你重新登录
+- 第一版仍然只支持医生详情页主链路，不支持科室排班页
+- 如果预约页暴露了多个就诊人，而你没有配置 `memberId` 或 `memberLabel`，脚本会停在页面上等待你补充配置，而不是盲选
+- 如果预约页时间段和 `CONFIG.filters.hours` 不匹配，脚本会把这个 `schedule_id` 标记为本次会话内跳过，避免在同一号源上死循环
+
 ## 浏览器调试
 
 如果登录后页面没有跳转到医生详情页，可以把页面证据落盘，方便直接看真实 DOM 和截图：

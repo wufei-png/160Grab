@@ -1,6 +1,8 @@
 import asyncio
 from typing import Any
+
 from loguru import logger
+
 
 def _is_destroyed_context_error(exc: BaseException) -> bool:
     return "Execution context was destroyed" in str(exc)
