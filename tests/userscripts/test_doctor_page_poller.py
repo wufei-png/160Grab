@@ -1,6 +1,7 @@
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -13,13 +14,16 @@ def _run_node_script(js_code: str) -> str:
     node_bin = shutil.which("node")
     if node_bin is None:
         pytest.skip("node is required to validate the userscript helpers")
-    completed = subprocess.run(
-        [node_bin, "-e", js_code],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        script_path = Path(tmp_dir) / "userscript-hook-test.js"
+        script_path.write_text(js_code, encoding="utf-8")
+        completed = subprocess.run(
+            [node_bin, str(script_path)],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
     return completed.stdout.strip()
 
 
