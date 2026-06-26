@@ -1,5 +1,6 @@
 import re
-from typing import Protocol
+from collections.abc import Awaitable, Callable
+from typing import Protocol, TypeVar
 
 from loguru import logger
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -7,6 +8,12 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from grab.models.schemas import BookingForm, BookingResult, DoctorPageTarget, GrabConfig
 from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
 from grab.utils.runtime import parse_sleep_time
+
+T = TypeVar("T")
+
+
+def _is_destroyed_context_error(exc: BaseException) -> bool:
+    return "Execution context was destroyed" in str(exc)
 
 
 class BookingStrategy(Protocol):
@@ -86,7 +93,9 @@ class PageBookingStrategy:
                 )
         if not schedule_id:
             invalid_reason = "missing_schedule_id"
-        elif self._requires_precise_appointment_selection() and appointment_value is None:
+        elif (
+            self._requires_precise_appointment_selection() and appointment_value is None
+        ):
             invalid_reason = (
                 "hour_filter_mismatch"
                 if appointment_options
@@ -109,8 +118,10 @@ class PageBookingStrategy:
         booking_page_html: str,
         options: list[tuple[str, str]] | None = None,
     ) -> tuple[str | None, str | None]:
-        options = options if options is not None else self._parse_appointment_options(
-            booking_page_html
+        options = (
+            options
+            if options is not None
+            else self._parse_appointment_options(booking_page_html)
         )
         if not options:
             return None, None
@@ -373,8 +384,60 @@ class PageBookingStrategy:
             }"""
         )
 
+    async def _trigger_submit_control_tolerating_navigation(self) -> dict:
+        try:
+            return await self._trigger_submit_control()
+        except Exception as exc:
+            if not _is_destroyed_context_error(exc):
+                raise
+            logger.info(
+                "Booking submit trigger raced with navigation; continuing with page state checks"
+            )
+            return {"method": "navigation", "target": None}
+
+    async def _wait_for_submit_navigation_settle(self, timeout: int = 5000) -> None:
+        wait_for_load_state = getattr(self.page, "wait_for_load_state", None)
+        if not callable(wait_for_load_state):
+            return
+        try:
+            await wait_for_load_state("domcontentloaded", timeout=timeout)
+        except PlaywrightTimeoutError:
+            logger.info(
+                "Booking submit navigation did not reach DOMContentLoaded within {} ms",
+                timeout,
+            )
+
+    async def _call_after_possible_submit_navigation(
+        self,
+        label: str,
+        call: Callable[[], Awaitable[T]],
+    ) -> T:
+        last_error: BaseException | None = None
+        for attempt in range(3):
+            try:
+                return await call()
+            except Exception as exc:
+                last_error = exc
+                if _is_destroyed_context_error(exc) and attempt < 2:
+                    logger.info(
+                        "{} raced with booking submit navigation; retrying after page settles",
+                        label,
+                    )
+                    await self._wait_for_submit_navigation_settle()
+                    continue
+                raise
+        assert last_error is not None
+        raise last_error
+
+    async def _evaluate_after_possible_submit_navigation(self, label: str, script: str):
+        return await self._call_after_possible_submit_navigation(
+            label,
+            lambda: self.page.evaluate(script),
+        )
+
     async def _collect_booking_page_diagnostics(self) -> dict:
-        return await self.page.evaluate(
+        return await self._evaluate_after_possible_submit_navigation(
+            "Collecting booking submit diagnostics",
             """() => {
                 const textOf = (node) => (node?.textContent || node?.value || '').trim();
                 const isVisible = (element) => {
@@ -427,8 +490,29 @@ class PageBookingStrategy:
                     hiddenFields,
                     visibleMessages,
                 };
-            }"""
+            }""",
         )
+
+    async def _collect_booking_page_diagnostics_or_fallback(self) -> dict:
+        try:
+            return await self._collect_booking_page_diagnostics()
+        except Exception as exc:
+            if not _is_destroyed_context_error(exc):
+                raise
+            logger.info(
+                "Booking submit diagnostics were unavailable because the page kept navigating: {}",
+                exc,
+            )
+            return {
+                "url": getattr(self.page, "url", ""),
+                "title": "",
+                "hasBookingForm": None,
+                "hasSubmitButton": None,
+                "selectedTimes": [],
+                "checkedMembers": [],
+                "hiddenFields": [],
+                "visibleMessages": [],
+            }
 
     def _is_booking_success(
         self,
@@ -457,51 +541,68 @@ class PageBookingStrategy:
         if hasattr(self.page, "expect_response"):
             try:
                 async with self.page.expect_response(
-                    lambda response: "ysubmit.html" in response.url
-                    and getattr(response.request, "method", "") == "POST",
+                    lambda response: (
+                        "ysubmit.html" in response.url
+                        and getattr(response.request, "method", "") == "POST"
+                    ),
                     timeout=8000,
                 ) as response_info:
-                    submit_result = await self._trigger_submit_control()
+                    submit_result = (
+                        await self._trigger_submit_control_tolerating_navigation()
+                    )
                 submit_response = await response_info.value
             except PlaywrightTimeoutError:
                 if submit_result is None:
-                    submit_result = await self._trigger_submit_control()
+                    submit_result = (
+                        await self._trigger_submit_control_tolerating_navigation()
+                    )
         else:
-            submit_result = await self._trigger_submit_control()
+            submit_result = await self._trigger_submit_control_tolerating_navigation()
 
         logger.info(
             "Booking submit trigger result: method={}, target={}",
             submit_result.get("method"),
             submit_result.get("target"),
         )
-        followup_action = await self.page.evaluate(
-            """() => {
-                const isVisible = (element) => {
-                    if (!element) return false;
-                    const style = window.getComputedStyle(element);
-                    return style.display !== 'none' && style.visibility !== 'hidden';
-                };
-                const click = (element) => {
-                    if (!element) return false;
-                    element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    return true;
-                };
+        await self._wait_for_submit_navigation_settle()
+        try:
+            followup_action = await self._evaluate_after_possible_submit_navigation(
+                "Checking booking submit follow-up controls",
+                """() => {
+                    const isVisible = (element) => {
+                        if (!element) return false;
+                        const style = window.getComputedStyle(element);
+                        return style.display !== 'none' && style.visibility !== 'hidden';
+                    };
+                    const click = (element) => {
+                        if (!element) return false;
+                        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                        return true;
+                    };
 
-                const sure = document.querySelector('#sure');
-                if (isVisible(sure)) {
-                    click(sure);
-                    return 'paymethod-sure';
-                }
+                    const sure = document.querySelector('#sure');
+                    if (isVisible(sure)) {
+                        click(sure);
+                        return 'paymethod-sure';
+                    }
 
-                const okBtn = document.querySelector('#ok_btn');
-                if (isVisible(okBtn)) {
-                    click(okBtn);
-                    return 'disease-ok';
-                }
+                    const okBtn = document.querySelector('#ok_btn');
+                    if (isVisible(okBtn)) {
+                        click(okBtn);
+                        return 'disease-ok';
+                    }
 
-                return null;
-            }"""
-        )
+                    return null;
+                }""",
+            )
+        except Exception as exc:
+            if not _is_destroyed_context_error(exc):
+                raise
+            logger.info(
+                "Skipping booking submit follow-up checks because the page kept navigating: {}",
+                exc,
+            )
+            followup_action = None
         if followup_action:
             logger.info("Booking submit follow-up action: {}", followup_action)
         if submit_result.get("method") == "not-found":
@@ -527,11 +628,21 @@ class PageBookingStrategy:
                 )
             except PlaywrightTimeoutError:
                 logger.info("Booking submit did not leave booking form within 5s")
-        html = await self.page.content()
+            except Exception as exc:
+                if not _is_destroyed_context_error(exc):
+                    raise
+                logger.info(
+                    "Booking submit completion wait raced with navigation; continuing"
+                )
+        await self._wait_for_submit_navigation_settle()
+        html = await self._call_after_possible_submit_navigation(
+            "Reading booking submit page",
+            self.page.content,
+        )
         raise_if_rate_limited(html, context="booking submit page")
         if self.reporter is not None:
             self.reporter.reset_rate_limit_streak()
-        diagnostics = await self._collect_booking_page_diagnostics()
+        diagnostics = await self._collect_booking_page_diagnostics_or_fallback()
         success = self._is_booking_success(before_url, diagnostics)
         if success:
             logger.info(

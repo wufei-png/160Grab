@@ -42,7 +42,9 @@ class FakeBookingPage:
     async def wait_for_load_state(self, _state: str, timeout: int = 0):
         return None
 
-    async def wait_for_function(self, script: str, arg=None, timeout: int = 0, **kwargs):
+    async def wait_for_function(
+        self, script: str, arg=None, timeout: int = 0, **kwargs
+    ):
         return None
 
     async def click(self, selector: str):
@@ -99,6 +101,13 @@ class FakeBookingPage:
                 return _get()
 
         return _ResponseContext()
+
+
+def destroyed_context_error() -> RuntimeError:
+    return RuntimeError(
+        "Page.evaluate: Execution context was destroyed, most likely "
+        "because of a navigation"
+    )
 
 
 @pytest.fixture
@@ -440,6 +449,52 @@ class FirstTrySuccessBookingPage(FakeBookingPage):
         return await super().evaluate(script, arg)
 
 
+class NavigationRaceAfterSubmitBookingPage(FirstTrySuccessBookingPage):
+    def __init__(self, booking_html: str, success_html: str):
+        super().__init__(booking_html, success_html)
+        self.followup_failures = 1
+        self.wait_for_load_state_calls = 0
+
+    async def wait_for_load_state(self, _state: str, timeout: int = 0):
+        self.wait_for_load_state_calls += 1
+
+    async def evaluate(self, script: str, arg: dict | None = None):
+        if (
+            arg is None
+            and ("paymethod-sure" in script or "const sure =" in script)
+            and self.followup_failures > 0
+        ):
+            self.followup_failures -= 1
+            raise destroyed_context_error()
+        return await super().evaluate(script, arg)
+
+
+class DiagnosticsUnavailableAfterSubmitNavigationPage(FirstTrySuccessBookingPage):
+    def __init__(self, booking_html: str, success_html: str):
+        super().__init__(booking_html, success_html)
+        self.url = (
+            "https://www.91160.com/guahao/ystep1/uid-u1/depid-d1/schid-sch-1001.html"
+        )
+        self.diagnostics_calls = 0
+
+    async def goto(self, url: str):
+        await super().goto(url)
+        self.url = url
+
+    async def evaluate(self, script: str, arg: dict | None = None):
+        if arg is None and "candidateSelectors" in script:
+            self.submit_attempts += 1
+            self.current_html = self.success_html
+            self.url = "https://www.91160.com/guahao/ysubmit.html"
+            return {"method": "selector", "target": "#suborder #submitbtn"}
+        if arg is None and (
+            "selectedTimes" in script or "hiddenFieldSelectors" in script
+        ):
+            self.diagnostics_calls += 1
+            raise destroyed_context_error()
+        return await super().evaluate(script, arg)
+
+
 @pytest.mark.asyncio
 async def test_submit_booking_via_page_emits_success_event_and_notification(
     booking_page_html,
@@ -461,6 +516,52 @@ async def test_submit_booking_via_page_emits_success_event_and_notification(
     assert success is True
     assert reporter.events[-1]["event"] == "booking_succeeded"
     assert reporter.events[-1]["notify"] is True
+
+
+@pytest.mark.asyncio
+async def test_submit_booking_via_page_retries_when_followup_races_with_navigation(
+    booking_page_html,
+    booking_submit_success_html,
+):
+    reporter = FakeReporter()
+    page = NavigationRaceAfterSubmitBookingPage(
+        booking_page_html,
+        booking_submit_success_html,
+    )
+    strategy = PageBookingStrategy(page=page, reporter=reporter)
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    form = await strategy.open_booking_form("sch-1001")
+    success = await strategy.submit_booking_via_page(form)
+
+    assert success is True
+    assert page.followup_failures == 0
+    assert page.wait_for_load_state_calls >= 1
+    assert reporter.events[-1]["event"] == "booking_succeeded"
+
+
+@pytest.mark.asyncio
+async def test_submit_booking_via_page_falls_back_to_url_when_diagnostics_keep_navigating(
+    booking_page_html,
+    booking_submit_success_html,
+):
+    reporter = FakeReporter()
+    page = DiagnosticsUnavailableAfterSubmitNavigationPage(
+        booking_page_html,
+        booking_submit_success_html,
+    )
+    strategy = PageBookingStrategy(page=page, reporter=reporter)
+    strategy.prepare_target(unit_id="u1", dept_id="d1", member_id="member-1")
+
+    form = await strategy.open_booking_form("sch-1001")
+    success = await strategy.submit_booking_via_page(form)
+
+    assert success is True
+    assert page.diagnostics_calls == 3
+    assert reporter.events[-1]["event"] == "booking_succeeded"
+    assert reporter.events[-1]["data"]["url"] == (
+        "https://www.91160.com/guahao/ysubmit.html"
+    )
 
 
 @pytest.mark.asyncio
