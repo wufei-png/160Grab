@@ -23,6 +23,7 @@ def _run_node_script(js_code: str) -> str:
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
     return completed.stdout.strip()
 
