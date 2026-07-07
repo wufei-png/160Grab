@@ -149,6 +149,7 @@ def test_normalize_settings_keeps_python_config_semantics_for_business_fields():
   runtime: { autoStart: true, startAt: "2026-06-28T08:00" },
   target: { unitId: "21", depId: "4385", doctorId: "200002522" },
   member: { memberId: "147750901" },
+  address: { province: "广东", city: "深圳", area: "南山", detail: "深南花园" },
   filters: {
     startDate: "2026-06-29",
     weeks: [1, "3", 9],
@@ -171,6 +172,12 @@ def test_normalize_settings_keeps_python_config_semantics_for_business_fields():
     assert result["filters"]["weeks"] == [1, 3]
     assert result["filters"]["days"] == ["am", "pm"]
     assert result["pacing"]["pollMs"] == [3000, 5000]
+    assert result["address"] == {
+        "province": "广东",
+        "city": "深圳",
+        "area": "南山",
+        "detail": "深南花园",
+    }
     assert result["booking"]["autoSubmit"] is True
     assert result["booking"]["maxSubmitAttemptsPerAppointment"] == 4
     assert result["session"]["keepAliveIntervalSeconds"] == 180
@@ -575,6 +582,169 @@ sandbox.document.querySelectorAll = (selector) =>
 
     assert result["ok"] is False
     assert "Multiple member candidates" in result["reason"]
+
+
+def test_fill_address_selection_cascades_configured_region():
+    result = _run_hook(
+        """(() => {
+  const addressSelection = hooks.fillAddressSelection(
+    { province: "广东", city: "深圳", area: "南山", detail: "深南花园" },
+    { radio: null }
+  );
+  return {
+    addressSelection,
+    provinceValue: province.value,
+    cityValue: city.value,
+    areaValue: area.value,
+    detailValue: detail.value,
+    provinceEvents: province.events,
+    cityEvents: city.events,
+  };
+})()""",
+        extra_js="""
+sandbox.Event = class Event {
+  constructor(type) {
+    this.type = type;
+  }
+};
+const option = (value, text) => ({ value, text, textContent: text, selected: false });
+const makeSelect = (id, options) => ({
+  id,
+  options,
+  value: options[0].value,
+  selectedIndex: 0,
+  events: [],
+  dispatchEvent(event) {
+    this.events.push(event.type);
+    if (event.type !== "change") return;
+    if (id === "useraddress_province" && this.value === "2") {
+      city.options = [option("0", "选择市"), option("5", "深圳")];
+      city.value = "0";
+      city.selectedIndex = 0;
+    }
+    if (id === "useraddress_city" && this.value === "5") {
+      area.options = [option("0", "选择区"), option("8", "南山区")];
+      area.value = "0";
+      area.selectedIndex = 0;
+    }
+  },
+});
+const province = makeSelect("useraddress_province", [
+  option("0", "请选择"),
+  option("2", "广东"),
+]);
+const city = makeSelect("useraddress_city", [option("0", "请选择")]);
+const area = makeSelect("useraddress_area", [option("0", "请选择")]);
+const detail = { value: "", events: [], dispatchEvent(event) { this.events.push(event.type); } };
+const elements = {
+  "#useraddress_province": province,
+  "#useraddress_city": city,
+  "#useraddress_area": area,
+  "#useraddress_detail": detail,
+};
+sandbox.document.querySelector = (selector) => elements[selector] ?? null;
+""",
+    )
+
+    assert result["addressSelection"]["ok"] is True
+    assert result["provinceValue"] == "2"
+    assert result["cityValue"] == "5"
+    assert result["areaValue"] == "8"
+    assert result["detailValue"] == "深南花园"
+    assert result["provinceEvents"] == ["input", "change"]
+    assert result["cityEvents"] == ["input", "change"]
+
+
+def test_fill_address_selection_uses_member_region_ids_before_config():
+    result = _run_hook(
+        """(() => {
+  const radio = {
+    getAttribute(name) {
+      return {
+        province_id: "2",
+        city_id: "5",
+        area_id: "8",
+        address: "member detail",
+      }[name] ?? "";
+    },
+  };
+  const addressSelection = hooks.fillAddressSelection(
+    { province: "湖南", city: "长沙", area: "岳麓" },
+    { radio }
+  );
+  return {
+    addressSelection,
+    values: [province.value, city.value, area.value],
+    detailValue: detail.value,
+  };
+})()""",
+        extra_js="""
+sandbox.Event = class Event {
+  constructor(type) {
+    this.type = type;
+  }
+};
+const option = (value, text) => ({ value, text, textContent: text, selected: false });
+const makeSelect = (id, options) => ({
+  id,
+  options,
+  value: options[0].value,
+  selectedIndex: 0,
+  dispatchEvent(event) {
+    if (event.type !== "change") return;
+    if (id === "useraddress_province" && this.value === "2") {
+      city.options = [option("0", "选择市"), option("5", "深圳")];
+      city.value = "0";
+      city.selectedIndex = 0;
+    }
+    if (id === "useraddress_city" && this.value === "5") {
+      area.options = [option("0", "选择区"), option("8", "南山区")];
+      area.value = "0";
+      area.selectedIndex = 0;
+    }
+  },
+});
+const province = makeSelect("useraddress_province", [
+  option("0", "请选择"),
+  option("2", "广东"),
+  option("3260", "湖南"),
+]);
+const city = makeSelect("useraddress_city", [option("0", "请选择")]);
+const area = makeSelect("useraddress_area", [option("0", "请选择")]);
+const detail = { value: "", dispatchEvent() {} };
+const elements = {
+  "#useraddress_province": province,
+  "#useraddress_city": city,
+  "#useraddress_area": area,
+  "#useraddress_detail": detail,
+};
+sandbox.document.querySelector = (selector) => elements[selector] ?? null;
+""",
+    )
+
+    assert result["addressSelection"]["ok"] is True
+    assert result["values"] == ["2", "5", "8"]
+    assert result["detailValue"] == "member detail"
+
+
+def test_fill_address_selection_fails_when_required_region_is_missing():
+    result = _run_hook(
+        "hooks.fillAddressSelection({ province: null, city: null, area: null }, { radio: null })",
+        extra_js="""
+const option = (value, text) => ({ value, text, textContent: text, selected: false });
+const province = {
+  options: [option("0", "请选择"), option("2", "广东")],
+  value: "0",
+  selectedIndex: 0,
+  dispatchEvent() {},
+};
+sandbox.document.querySelector = (selector) =>
+  selector === "#useraddress_province" ? province : null;
+""",
+    )
+
+    assert result["ok"] is False
+    assert "Missing address province" in result["reason"]
 
 
 def test_inspect_booking_page_treats_navigation_away_as_success():

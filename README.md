@@ -202,6 +202,7 @@ create-profile 流程会：
 2. 登录 91160，并打开目标医生详情页
 3. 在右上角面板点 `Settings`
    - `memberId` / `memberLabel` 可留空；如果预约页只有一个明确就诊人候选，脚本会自动选中
+   - `Province` / `City` / `Area` 用于预约页“所在城市”三级选择；默认是 `广东 / 深圳 / 南山区`，如果就诊人资料自带 `province_id / city_id / area_id` 会优先使用资料里的地址 id
    - 目标医生由当前医生详情页 URL 和页面 DOM 自动识别，常规 UI 不再要求填写 `unit_id` / `dep_id` / `doctor_id`
    - `weeks / days / hours / Appointment From / Start At` 对齐 CLI 的过滤语义；`Appointment From` 是号源查询起点，`Start At` 是脚本开始轮询时间；`hours` UI 固定半小时粒度
    - `autoSubmit` 默认关闭；首次 smoke 建议保持关闭，确认后再显式开启
@@ -225,6 +226,7 @@ create-profile 流程会：
 - 必须运行在真实、已登录浏览器里；脚本不接管账号密码、验证码或 OCR
 - 第一版仍然只支持医生详情页主链路，不支持科室排班页
 - 如果预约页暴露了多个就诊人，而你没有配置 `memberId` 或 `memberLabel`，脚本会停在页面上等待你补充配置，而不是盲选
+- 如果医院要求填写地址信息，脚本会在提交前选择 `Province` / `City` / `Area` 并填充 `addressId`；找不到对应选项时会停在预约页，不会继续自动提交
 - 如果预约页时间段和 `hours` 不匹配，脚本不会把整个 `schedule_id` 长期跳过，而是回医生页继续轮询；提交失败计数按 `schedule_id + detlid` 记录
 - 轮询期间如果 `_user_key` 消失或接口返回 `10021`，脚本会按配置刷新医生页并自动重试；超过恢复次数后才停机提示人工重新登录
 - `autoSubmit=true` 且提交失败时默认停在预约页保留错误现场；如需失败后自动回医生页，可在 `Settings` 开启对应选项

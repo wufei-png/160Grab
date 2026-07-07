@@ -49,6 +49,12 @@
       memberId: null,
       memberLabel: null,
     },
+    address: {
+      province: "广东",
+      city: "深圳",
+      area: "南山区",
+      detail: null,
+    },
     filters: {
       startDate: null,
       weeks: [],
@@ -215,6 +221,12 @@
       member: {
         memberId: normalizeOptionalValue(merged.member.memberId),
         memberLabel: normalizeOptionalValue(merged.member.memberLabel),
+      },
+      address: {
+        province: normalizeOptionalValue(merged.address.province),
+        city: normalizeOptionalValue(merged.address.city),
+        area: normalizeOptionalValue(merged.address.area),
+        detail: normalizeOptionalValue(merged.address.detail),
       },
       filters: {
         startDate: normalizeDateValue(merged.filters.startDate),
@@ -1157,6 +1169,207 @@
     return true;
   }
 
+  function isPlaceholderSelectValue(value) {
+    const text = compactText(value);
+    return !text || text === "0";
+  }
+
+  function optionText(option) {
+    return compactText(option?.textContent || option?.text || option?.label);
+  }
+
+  function canonicalPlaceText(value) {
+    return compactText(value)
+      .replace(/\s+/g, "")
+      .replace(/[省市区县]$/, "");
+  }
+
+  function findSelectOption(select, spec) {
+    const expected = compactText(spec);
+    if (!select || !expected) {
+      return null;
+    }
+    const options = Array.from(select.options ?? []).filter(
+      (option) => !isPlaceholderSelectValue(option.value),
+    );
+    const expectedCanonical = canonicalPlaceText(expected);
+    return (
+      options.find((option) => compactText(option.value) === expected) ??
+      options.find((option) => optionText(option) === expected) ??
+      options.find((option) => canonicalPlaceText(optionText(option)) === expectedCanonical) ??
+      options.find((option) => {
+        const text = optionText(option);
+        return text.includes(expected) || expected.includes(text);
+      }) ??
+      null
+    );
+  }
+
+  function setSelectOption(select, option) {
+    if (!select || !option) {
+      return false;
+    }
+    if (compactText(select.value) === compactText(option.value)) {
+      return false;
+    }
+    Array.from(select.options ?? []).forEach((candidate) => {
+      candidate.selected = candidate === option;
+    });
+    select.value = option.value;
+    select.dispatchEvent(new Event("input", { bubbles: true }));
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  function selectAddressOption(select, spec, fieldName) {
+    if (!select) {
+      return { ok: true, skipped: true, field: fieldName, reason: "missing_select" };
+    }
+    if (!isPlaceholderSelectValue(select.value)) {
+      if (!spec) {
+        return {
+          ok: true,
+          field: fieldName,
+          value: compactText(select.value),
+          text: optionText(select.options?.[select.selectedIndex]),
+          alreadySelected: true,
+        };
+      }
+      const currentOption = Array.from(select.options ?? []).find(
+        (option) => compactText(option.value) === compactText(select.value),
+      );
+      const desiredOption = findSelectOption(select, spec);
+      if (!desiredOption) {
+        return {
+          ok: false,
+          field: fieldName,
+          reason: `Could not find address ${fieldName} option ${JSON.stringify(spec)}.`,
+          availableOptions: Array.from(select.options ?? [])
+            .map((candidate) => optionText(candidate))
+            .filter(Boolean)
+            .slice(0, 20),
+        };
+      }
+      if (currentOption === desiredOption) {
+        return {
+          ok: true,
+          field: fieldName,
+          value: compactText(select.value),
+          text: optionText(currentOption),
+          alreadySelected: true,
+        };
+      }
+      setSelectOption(select, desiredOption);
+      return {
+        ok: true,
+        field: fieldName,
+        value: compactText(desiredOption.value),
+        text: optionText(desiredOption),
+        alreadySelected: false,
+      };
+    }
+    if (!spec) {
+      return {
+        ok: false,
+        field: fieldName,
+        reason: `Missing address ${fieldName}; set it in Settings.`,
+      };
+    }
+    const option = findSelectOption(select, spec);
+    if (!option) {
+      return {
+        ok: false,
+        field: fieldName,
+        reason: `Could not find address ${fieldName} option ${JSON.stringify(spec)}.`,
+        availableOptions: Array.from(select.options ?? [])
+          .map((candidate) => optionText(candidate))
+          .filter(Boolean)
+          .slice(0, 20),
+      };
+    }
+    setSelectOption(select, option);
+    return {
+      ok: true,
+      field: fieldName,
+      value: compactText(option.value),
+      text: optionText(option),
+      alreadySelected: false,
+    };
+  }
+
+  function readMemberAddress(memberSelection) {
+    const radio = memberSelection?.radio;
+    if (!radio?.getAttribute) {
+      return {};
+    }
+    return {
+      province: normalizeOptionalValue(radio.getAttribute("province_id")),
+      city: normalizeOptionalValue(radio.getAttribute("city_id")),
+      area: normalizeOptionalValue(radio.getAttribute("area_id")),
+      detail: normalizeOptionalValue(radio.getAttribute("address")),
+    };
+  }
+
+  function fillAddressSelection(addressConfig, memberSelection) {
+    const provinceSelect = document.querySelector("#useraddress_province");
+    const citySelect = document.querySelector("#useraddress_city");
+    const areaSelect =
+      document.querySelector("#useraddress_area") ??
+      document.querySelector('select[name="addressId"]');
+    if (!provinceSelect && !citySelect && !areaSelect) {
+      return { ok: true, required: false };
+    }
+
+    const memberAddress = readMemberAddress(memberSelection);
+    const desired = {
+      province: memberAddress.province || addressConfig?.province,
+      city: memberAddress.city || addressConfig?.city,
+      area: memberAddress.area || addressConfig?.area,
+      detail: memberAddress.detail || addressConfig?.detail,
+    };
+    const detailInput =
+      document.querySelector("#useraddress_detail") ??
+      document.querySelector('input[name="address"]');
+    let detailFilled = false;
+    if (detailInput && desired.detail && !compactText(detailInput.value)) {
+      detailInput.value = desired.detail;
+      detailInput.dispatchEvent(new Event("input", { bubbles: true }));
+      detailInput.dispatchEvent(new Event("change", { bubbles: true }));
+      detailFilled = true;
+    }
+
+    const province = selectAddressOption(provinceSelect, desired.province, "province");
+    if (!province.ok) {
+      return { ok: false, required: true, reason: province.reason, province };
+    }
+    const city = selectAddressOption(citySelect, desired.city, "city");
+    if (!city.ok) {
+      return { ok: false, required: true, reason: city.reason, province, city };
+    }
+    const area = selectAddressOption(areaSelect, desired.area, "area");
+    if (!area.ok) {
+      return { ok: false, required: true, reason: area.reason, province, city, area };
+    }
+    if (areaSelect && isPlaceholderSelectValue(areaSelect.value)) {
+      return {
+        ok: false,
+        required: true,
+        reason: "Address area is still not selected.",
+        province,
+        city,
+        area,
+      };
+    }
+    return {
+      ok: true,
+      required: true,
+      province,
+      city,
+      area,
+      detailFilled,
+    };
+  }
+
   function memberRadioLabelText(radio) {
     const container = radio.closest("tr, li, label, .patient_item, .member_item, .person_item");
     return compactText(container?.textContent || radio.parentElement?.textContent);
@@ -1288,7 +1501,7 @@
     return { ok: false, reason: "No member selection was found on this booking page." };
   }
 
-  function fillBookingForm(formState, memberSelection) {
+  function fillBookingForm(formState, memberSelection, addressConfig) {
     if (formState.appointmentValue) {
       const appointmentElement = formState.appointmentOptions.find(
         (option) => option.value === formState.appointmentValue,
@@ -1313,6 +1526,7 @@
     if (memberSelection.radio) {
       clickElement(memberSelection.radio);
     }
+    const addressSelection = fillAddressSelection(addressConfig, memberSelection);
     for (const selector of [
       'input[name="disease_input"]',
       "#disease_input",
@@ -1331,6 +1545,7 @@
         input.setAttribute("checked", "checked");
       }
     }
+    return { addressSelection };
   }
 
   function isVisible(element) {
@@ -1705,7 +1920,11 @@
       return;
     }
 
-    fillBookingForm(formState, memberSelection);
+    const fillResult = fillBookingForm(formState, memberSelection, settings.address);
+    if (!fillResult.addressSelection.ok) {
+      stopRun(`Address selection failed: ${fillResult.addressSelection.reason}`);
+      return;
+    }
     if (!settings.booking.autoSubmit) {
       patchState((next) => ({ ...next, running: false, pendingBooking: null }));
       setSummary(
@@ -1716,6 +1935,7 @@
           appointmentValue: formState.appointmentValue,
           appointmentLabel: formState.appointmentLabel,
           memberId: memberSelection.memberId,
+          address: fillResult.addressSelection,
         },
       );
       renderPanel();
@@ -1990,6 +2210,12 @@
         <label>Member ID <input data-setting="member.memberId" type="password" value="${htmlEscape(settings.member.memberId ?? "")}"></label>
         <label><input data-setting="member.show" type="checkbox" style="width:auto"> Show member ID</label>
         <label>Member Label <input data-setting="member.memberLabel" value="${htmlEscape(settings.member.memberLabel ?? "")}"></label>
+        <div class="grab160-row">
+          <label>Province <input data-setting="address.province" value="${htmlEscape(settings.address.province ?? "")}"></label>
+          <label>City <input data-setting="address.city" value="${htmlEscape(settings.address.city ?? "")}"></label>
+          <label>Area <input data-setting="address.area" value="${htmlEscape(settings.address.area ?? "")}"></label>
+        </div>
+        <label>Address Detail <input data-setting="address.detail" value="${htmlEscape(settings.address.detail ?? "")}"></label>
         <label>Start At <input data-setting="runtime.startAt" type="datetime-local" value="${htmlEscape(settings.runtime.startAt ?? "")}"></label>
         <label>Appointment From <input data-setting="filters.startDate" type="date" value="${htmlEscape(settings.filters.startDate ?? "")}"></label>
         <div class="grab160-row">${[1, 2, 3, 4, 5, 6, 7]
@@ -2088,6 +2314,10 @@
     for (const path of [
       "member.memberId",
       "member.memberLabel",
+      "address.province",
+      "address.city",
+      "address.area",
+      "address.detail",
       "filters.startDate",
       "runtime.startAt",
       "booking.autoSubmit",
@@ -2227,6 +2457,9 @@
     chooseAppointmentOption,
     appointmentKey,
     parseBookingFormState,
+    findSelectOption,
+    fillAddressSelection,
+    fillBookingForm,
     resolveMemberSelection,
     memberRadioDebugSummary,
     inspectBookingPage,
