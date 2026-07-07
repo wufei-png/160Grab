@@ -625,9 +625,67 @@ sandbox.document.querySelector = (selector) => elements[selector] ?? null;
 
     assert result["fillResult"]["addressSelection"]["ok"] is True
     assert result["fillResult"]["clinicIdSelection"]["required"] is False
+    assert result["fillResult"]["scheduleDateSelection"]["required"] is False
     assert result["memberValue"] == "147750901"
     assert result["diseaseInputValue"] == "门诊就诊，具体病情现场面诊沟通"
     assert result["diseaseContentValue"] == "门诊就诊，具体病情现场面诊沟通"
+
+
+def test_fill_booking_form_sets_schedule_date_from_serialized_schedule_data():
+    result = _run_hook(
+        """(() => {
+  const fillResult = hooks.fillBookingForm(
+    { scheduleId: "sch-live-1", appointmentValue: null, appointmentOptions: [] },
+    { memberId: "147750901", radio: null },
+    {},
+    { diseaseDescription: "门诊就诊，具体病情现场面诊沟通" }
+  );
+  return {
+    fillResult,
+    schDateValue: schDate.value,
+    schDateEvents: schDate.events,
+  };
+})()""",
+        extra_js="""
+sandbox.Event = class Event {
+  constructor(type) {
+    this.type = type;
+  }
+};
+const schDate = {
+  value: "",
+  events: [],
+  dispatchEvent(event) {
+    this.events.push(event.type);
+  },
+};
+const schData = {
+  value: 'a:1:{s:10:"sch-live-1";a:1:{s:3:"sch";a:1:{s:7:"to_date";s:10:"2026-07-10";}}}',
+};
+const memberInput = { value: "" };
+const diseaseInput = { value: "" };
+const diseaseContent = { value: "" };
+const elements = {
+  "#sch_date": schDate,
+  'input[name="sch_date"]': schDate,
+  'input[name="sch_data"]': schData,
+  'input[name="member_id"]': memberInput,
+  'input[name="disease_input"]': diseaseInput,
+  'textarea[name="disease_content"]': diseaseContent,
+};
+sandbox.document.querySelector = (selector) => elements[selector] ?? null;
+""",
+    )
+
+    assert result["fillResult"]["scheduleDateSelection"] == {
+        "ok": True,
+        "required": True,
+        "filled": True,
+        "source": "schedule",
+        "value": "2026-07-10",
+    }
+    assert result["schDateValue"] == "2026-07-10"
+    assert result["schDateEvents"] == ["input", "change"]
 
 
 def test_fill_address_selection_cascades_configured_region():

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.5
+// @version      0.2.6
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -1163,6 +1163,49 @@
     };
   }
 
+  function readScheduleDateFromSerializedData(scheduleId) {
+    const serialized = compactText(document.querySelector('input[name="sch_data"]')?.value);
+    if (!serialized) {
+      return null;
+    }
+    const scheduleNeedle = compactText(scheduleId);
+    const searchStart = scheduleNeedle ? serialized.indexOf(scheduleNeedle) : 0;
+    const scoped =
+      searchStart >= 0 ? serialized.slice(searchStart, searchStart + 1200) : serialized;
+    return scoped.match(/s:7:"to_date";s:10:"(\d{4}-\d{2}-\d{2})"/)?.[1] ?? null;
+  }
+
+  function readScheduleDateFromPage() {
+    const text = compactText(
+      document.querySelector("#jzdate")?.parentElement?.textContent ||
+        document.querySelector("#suborder")?.textContent ||
+        "",
+    );
+    const match = text.match(/(20\d{2})年(\d{2})月(\d{2})日/);
+    return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+  }
+
+  function fillScheduleDate(formState) {
+    const input =
+      document.querySelector("#sch_date") ?? document.querySelector('input[name="sch_date"]');
+    if (!input) {
+      return { ok: true, required: false };
+    }
+    const existing = compactText(input.value);
+    if (existing) {
+      return { ok: true, required: true, filled: false, source: "existing", value: existing };
+    }
+    const date =
+      readScheduleDateFromSerializedData(formState?.scheduleId) ?? readScheduleDateFromPage();
+    if (!date) {
+      return { ok: false, required: true, reason: "Could not infer schedule date." };
+    }
+    input.value = date;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, required: true, filled: true, source: "schedule", value: date };
+  }
+
   function clickElement(element) {
     if (!element) {
       return false;
@@ -1602,6 +1645,7 @@
     }
     const clinicIdSelection = fillClinicId(memberSelection);
     const addressSelection = fillAddressSelection(addressConfig, memberSelection);
+    const scheduleDateSelection = fillScheduleDate(formState);
     const diseaseDescription =
       normalizeOptionalValue(bookingConfig?.diseaseDescription) ?? DEFAULT_DISEASE_DESCRIPTION;
     for (const selector of [
@@ -1622,7 +1666,7 @@
         input.setAttribute("checked", "checked");
       }
     }
-    return { addressSelection, clinicIdSelection };
+    return { addressSelection, clinicIdSelection, scheduleDateSelection };
   }
 
   function isCheckIdInfoUrl(url) {
@@ -1758,6 +1802,7 @@
       memberId: memberSelection.memberId,
       address: fillResult.addressSelection,
       clinicId: fillResult.clinicIdSelection,
+      scheduleDate: fillResult.scheduleDateSelection,
       checkIdInfoPatch: fillResult.checkIdInfoPatch,
       attemptCount,
       startedAt: new Date().toISOString(),
@@ -2109,6 +2154,10 @@
       stopRun(`Address selection failed: ${fillResult.addressSelection.reason}`);
       return;
     }
+    if (!fillResult.scheduleDateSelection.ok) {
+      stopRun(`Schedule date fill failed: ${fillResult.scheduleDateSelection.reason}`);
+      return;
+    }
     const checkIdInfoPatch = installCheckIdInfoBlankResponsePatch();
     if (checkIdInfoPatch.installed) {
       appendLog("debug", "Installed checkIdInfo blank-response JSON patch.");
@@ -2130,6 +2179,7 @@
           memberId: memberSelection.memberId,
           address: fillResult.addressSelection,
           clinicId: fillResult.clinicIdSelection,
+          scheduleDate: fillResult.scheduleDateSelection,
           checkIdInfoPatch,
         },
       );
@@ -2670,6 +2720,8 @@
     findSelectOption,
     fillAddressSelection,
     fillClinicId,
+    readScheduleDateFromSerializedData,
+    fillScheduleDate,
     fillBookingForm,
     installCheckIdInfoBlankResponsePatch,
     normalizeCheckIdInfoJsonResponse,
