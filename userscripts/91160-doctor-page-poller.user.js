@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.2
+// @version      0.2.3
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -1372,6 +1372,64 @@
     };
   }
 
+  function readMemberClinicId(memberSelection) {
+    const radio = memberSelection?.radio;
+    if (!radio?.getAttribute) {
+      return { value: null, source: null };
+    }
+    for (const source of ["real_card", "true_value", "card", "social_card"]) {
+      const value = normalizeOptionalValue(radio.getAttribute(source));
+      if (value) {
+        return { value, source: `member-radio:${source}` };
+      }
+    }
+    return { value: null, source: null };
+  }
+
+  function fillClinicId(memberSelection) {
+    const input =
+      document.querySelector("#hismemid") ??
+      document.querySelector('input[name="hisMemId"]') ??
+      document.querySelector('input[name="hismemid"]') ??
+      document.querySelector('select[name="hismemid"]');
+    if (!input) {
+      return { ok: true, required: false };
+    }
+
+    const existing = compactText(input.value);
+    if (existing) {
+      return {
+        ok: true,
+        required: true,
+        filled: false,
+        source: "existing",
+        valueLength: existing.length,
+      };
+    }
+
+    const candidate = readMemberClinicId(memberSelection);
+    if (!candidate.value) {
+      return {
+        ok: true,
+        required: true,
+        filled: false,
+        reason: "No member clinic card/id value was available.",
+      };
+    }
+
+    input.value = candidate.value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    return {
+      ok: true,
+      required: true,
+      filled: true,
+      source: candidate.source,
+      valueLength: candidate.value.length,
+    };
+  }
+
   function memberRadioLabelText(radio) {
     const container = radio.closest("tr, li, label, .patient_item, .member_item, .person_item");
     return compactText(container?.textContent || radio.parentElement?.textContent);
@@ -1528,6 +1586,7 @@
     if (memberSelection.radio) {
       clickElement(memberSelection.radio);
     }
+    const clinicIdSelection = fillClinicId(memberSelection);
     const addressSelection = fillAddressSelection(addressConfig, memberSelection);
     for (const selector of [
       'input[name="disease_input"]',
@@ -1547,7 +1606,7 @@
         input.setAttribute("checked", "checked");
       }
     }
-    return { addressSelection };
+    return { addressSelection, clinicIdSelection };
   }
 
   function isCheckIdInfoUrl(url) {
@@ -1682,6 +1741,7 @@
       appointmentLabel: formState.appointmentLabel,
       memberId: memberSelection.memberId,
       address: fillResult.addressSelection,
+      clinicId: fillResult.clinicIdSelection,
       checkIdInfoPatch: fillResult.checkIdInfoPatch,
       attemptCount,
       startedAt: new Date().toISOString(),
@@ -2048,6 +2108,7 @@
           appointmentLabel: formState.appointmentLabel,
           memberId: memberSelection.memberId,
           address: fillResult.addressSelection,
+          clinicId: fillResult.clinicIdSelection,
           checkIdInfoPatch,
         },
       );
@@ -2585,6 +2646,7 @@
     parseBookingFormState,
     findSelectOption,
     fillAddressSelection,
+    fillClinicId,
     fillBookingForm,
     installCheckIdInfoBlankResponsePatch,
     normalizeCheckIdInfoJsonResponse,

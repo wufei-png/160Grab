@@ -752,6 +752,87 @@ sandbox.document.querySelector = (selector) =>
     assert "Missing address province" in result["reason"]
 
 
+def test_fill_clinic_id_uses_member_real_card_without_returning_value():
+    result = _run_hook(
+        """(() => {
+  const clinicId = hooks.fillClinicId({ radio });
+  return {
+    clinicId,
+    inputValueLength: input.value.length,
+    inputWasFilled: input.value === "11010519491231002X",
+    events: input.events,
+  };
+})()""",
+        extra_js="""
+sandbox.Event = class Event {
+  constructor(type) {
+    this.type = type;
+  }
+};
+const input = {
+  value: "",
+  events: [],
+  dispatchEvent(event) {
+    this.events.push(event.type);
+  },
+};
+const radio = {
+  getAttribute(name) {
+    return name === "real_card" ? "11010519491231002X" : "";
+  },
+};
+sandbox.document.querySelector = (selector) =>
+  selector === "#hismemid" ? input : null;
+""",
+    )
+
+    assert result["clinicId"] == {
+        "ok": True,
+        "required": True,
+        "filled": True,
+        "source": "member-radio:real_card",
+        "valueLength": 18,
+    }
+    assert result["inputValueLength"] == 18
+    assert result["inputWasFilled"] is True
+    assert result["events"] == ["input", "change", "blur"]
+
+
+def test_fill_clinic_id_keeps_existing_value():
+    result = _run_hook(
+        """(() => {
+  const clinicId = hooks.fillClinicId({ radio });
+  return { clinicId, inputValue: input.value, events: input.events };
+})()""",
+        extra_js="""
+const input = {
+  value: "existing-card",
+  events: [],
+  dispatchEvent(event) {
+    this.events.push(event.type);
+  },
+};
+const radio = {
+  getAttribute(name) {
+    return name === "real_card" ? "11010519491231002X" : "";
+  },
+};
+sandbox.document.querySelector = (selector) =>
+  selector === "#hismemid" ? input : null;
+""",
+    )
+
+    assert result["clinicId"] == {
+        "ok": True,
+        "required": True,
+        "filled": False,
+        "source": "existing",
+        "valueLength": 13,
+    }
+    assert result["inputValue"] == "existing-card"
+    assert result["events"] == []
+
+
 def test_checkidinfo_blank_response_patch_only_normalizes_target_json():
     result = _run_hook(
         """(() => {
