@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.3
+// @version      0.2.4
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -1398,6 +1398,9 @@
 
     const existing = compactText(input.value);
     if (existing) {
+      if (input.getAttribute && !compactText(input.getAttribute("true_value"))) {
+        input.setAttribute?.("true_value", existing);
+      }
       return {
         ok: true,
         required: true,
@@ -1418,6 +1421,7 @@
     }
 
     input.value = candidate.value;
+    input.setAttribute?.("true_value", candidate.value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
     input.dispatchEvent(new Event("blur", { bubbles: true }));

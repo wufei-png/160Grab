@@ -756,10 +756,13 @@ def test_fill_clinic_id_uses_member_real_card_without_returning_value():
     result = _run_hook(
         """(() => {
   const clinicId = hooks.fillClinicId({ radio });
+  const submitValue = input.attrs.true_value || "";
   return {
     clinicId,
     inputValueLength: input.value.length,
     inputWasFilled: input.value === "11010519491231002X",
+    submitValueLength: submitValue.length,
+    submitValueMatchesInput: submitValue === input.value,
     events: input.events,
   };
 })()""",
@@ -771,7 +774,11 @@ sandbox.Event = class Event {
 };
 const input = {
   value: "",
+  attrs: {},
   events: [],
+  setAttribute(name, value) {
+    this.attrs[name] = value;
+  },
   dispatchEvent(event) {
     this.events.push(event.type);
   },
@@ -795,6 +802,8 @@ sandbox.document.querySelector = (selector) =>
     }
     assert result["inputValueLength"] == 18
     assert result["inputWasFilled"] is True
+    assert result["submitValueLength"] == 18
+    assert result["submitValueMatchesInput"] is True
     assert result["events"] == ["input", "change", "blur"]
 
 
@@ -802,12 +811,19 @@ def test_fill_clinic_id_keeps_existing_value():
     result = _run_hook(
         """(() => {
   const clinicId = hooks.fillClinicId({ radio });
-  return { clinicId, inputValue: input.value, events: input.events };
+  return { clinicId, inputValue: input.value, trueValue: input.attrs.true_value, events: input.events };
 })()""",
         extra_js="""
 const input = {
   value: "existing-card",
+  attrs: {},
   events: [],
+  getAttribute(name) {
+    return this.attrs[name] || "";
+  },
+  setAttribute(name, value) {
+    this.attrs[name] = value;
+  },
   dispatchEvent(event) {
     this.events.push(event.type);
   },
@@ -830,6 +846,7 @@ sandbox.document.querySelector = (selector) =>
         "valueLength": 13,
     }
     assert result["inputValue"] == "existing-card"
+    assert result["trueValue"] == "existing-card"
     assert result["events"] == []
 
 
