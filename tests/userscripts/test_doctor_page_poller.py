@@ -109,6 +109,9 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
+    assert "// @version      0.2.7" in content
+    assert 'const SCRIPT_VERSION = "0.2.7";' in content
+    assert "160Grab v${SCRIPT_VERSION}" in content
 
 
 def test_panel_markup_uses_prefixed_classes_and_non_submit_buttons():

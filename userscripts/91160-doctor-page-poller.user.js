@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.6
+// @version      0.2.7
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,6 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
+  const SCRIPT_VERSION = "0.2.7";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -2340,7 +2341,7 @@
     panel = document.createElement("div");
     panel.id = PANEL_ID;
     panel.innerHTML = `
-      <div class="grab160-title">160Grab</div>
+      <div class="grab160-title">160Grab v${SCRIPT_VERSION}</div>
       <div class="grab160-body"></div>
     `;
     Object.assign(panel.style, {
