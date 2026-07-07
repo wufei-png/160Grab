@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.1
+// @version      0.2.2
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -1550,6 +1550,63 @@
     return { addressSelection };
   }
 
+  function isCheckIdInfoUrl(url) {
+    return /checkidinfo|checkIdInfo/.test(String(url || ""));
+  }
+
+  function normalizeCheckIdInfoJsonResponse(data, dataType) {
+    if (
+      typeof data === "string" &&
+      data.trim() === "" &&
+      compactText(dataType).toLowerCase().includes("json")
+    ) {
+      return "{}";
+    }
+    return data;
+  }
+
+  function installCheckIdInfoBlankResponsePatch() {
+    const pageWindow = globalThis.unsafeWindow || globalThis;
+    const jquery = pageWindow.jQuery || pageWindow.$;
+    if (!jquery || typeof jquery.ajax !== "function") {
+      return { installed: false, reason: "page-jquery-unavailable" };
+    }
+    if (jquery.__grab160CheckIdInfoBlankResponsePatch) {
+      return { installed: false, alreadyInstalled: true };
+    }
+
+    const originalAjax = jquery.ajax;
+    const patchedAjax = function grab160PatchedAjax(...args) {
+      const options = args[0] && typeof args[0] === "object" ? args[0] : args[1];
+      const url = typeof args[0] === "string" ? args[0] : options?.url;
+      if (!options || typeof options !== "object" || !isCheckIdInfoUrl(url)) {
+        return originalAjax.apply(this, args);
+      }
+
+      const nextOptions = { ...options };
+      const originalDataFilter = nextOptions.dataFilter;
+      nextOptions.dataFilter = function grab160CheckIdInfoDataFilter(data, dataType) {
+        const filtered =
+          typeof originalDataFilter === "function"
+            ? originalDataFilter.call(this, data, dataType)
+            : data;
+        return normalizeCheckIdInfoJsonResponse(
+          filtered,
+          nextOptions.dataType || dataType,
+        );
+      };
+
+      if (typeof args[0] === "string") {
+        return originalAjax.call(this, args[0], nextOptions);
+      }
+      return originalAjax.call(this, nextOptions);
+    };
+    patchedAjax.__grab160OriginalAjax = originalAjax;
+    jquery.ajax = patchedAjax;
+    jquery.__grab160CheckIdInfoBlankResponsePatch = true;
+    return { installed: true };
+  }
+
   function isVisible(element) {
     if (!element) {
       return false;
@@ -1625,6 +1682,7 @@
       appointmentLabel: formState.appointmentLabel,
       memberId: memberSelection.memberId,
       address: fillResult.addressSelection,
+      checkIdInfoPatch: fillResult.checkIdInfoPatch,
       attemptCount,
       startedAt: new Date().toISOString(),
     };
@@ -1970,6 +2028,10 @@
       stopRun(`Address selection failed: ${fillResult.addressSelection.reason}`);
       return;
     }
+    const checkIdInfoPatch = installCheckIdInfoBlankResponsePatch();
+    if (checkIdInfoPatch.installed) {
+      appendLog("debug", "Installed checkIdInfo blank-response JSON patch.");
+    }
     if (!settings.booking.autoSubmit) {
       patchState((next) => ({
         ...next,
@@ -1986,6 +2048,7 @@
           appointmentLabel: formState.appointmentLabel,
           memberId: memberSelection.memberId,
           address: fillResult.addressSelection,
+          checkIdInfoPatch,
         },
       );
       renderPanel();
@@ -2003,7 +2066,12 @@
       formState.scheduleId,
       formState.appointmentValue,
     );
-    markSubmitInProgress(formState, memberSelection, fillResult, attemptCount);
+    markSubmitInProgress(
+      formState,
+      memberSelection,
+      { ...fillResult, checkIdInfoPatch },
+      attemptCount,
+    );
     const submitResult = triggerSubmitControl(submitControl);
     setSummary("info", "Submitted booking form.", { submitResult, attemptCount });
     const followupAction = await clickFollowupControl();
@@ -2518,6 +2586,8 @@
     findSelectOption,
     fillAddressSelection,
     fillBookingForm,
+    installCheckIdInfoBlankResponsePatch,
+    normalizeCheckIdInfoJsonResponse,
     findSubmitControl,
     triggerSubmitControl,
     markSubmitInProgress,

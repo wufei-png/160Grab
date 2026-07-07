@@ -752,6 +752,81 @@ sandbox.document.querySelector = (selector) =>
     assert "Missing address province" in result["reason"]
 
 
+def test_checkidinfo_blank_response_patch_only_normalizes_target_json():
+    result = _run_hook(
+        """(() => {
+  const firstInstall = hooks.installCheckIdInfoBlankResponsePatch();
+  const objectFormBlank = sandbox.unsafeWindow.jQuery.ajax({
+    url: "/guahao/checkidinfo.html",
+    dataType: "json",
+  });
+  const stringFormBlank = sandbox.unsafeWindow.jQuery.ajax(
+    "/guahao/checkIdInfo.html",
+    { dataType: "json" }
+  );
+  const objectFormNonBlank = sandbox.unsafeWindow.jQuery.ajax({
+    url: "/guahao/checkidinfo.html",
+    dataType: "json",
+    simulatedResponse: "{\\\"code\\\":0}",
+  });
+  const otherRequest = sandbox.unsafeWindow.jQuery.ajax({
+    url: "/guahao/other.html",
+    dataType: "json",
+  });
+  const secondInstall = hooks.installCheckIdInfoBlankResponsePatch();
+  return {
+    firstInstall,
+    objectFormBlank,
+    stringFormBlank,
+    objectFormNonBlank,
+    otherRequest,
+    secondInstall,
+    calls,
+  };
+})()""",
+        extra_js="""
+const calls = [];
+const originalAjax = function ajax(...args) {
+  const options = typeof args[0] === "string" ? args[1] : args[0];
+  const url = typeof args[0] === "string" ? args[0] : options.url;
+  const raw = options.simulatedResponse ?? " \\n ";
+  const filtered = typeof options.dataFilter === "function"
+    ? options.dataFilter(raw, options.dataType)
+    : raw;
+  calls.push({ url, filtered });
+  return filtered;
+};
+sandbox.unsafeWindow = { jQuery: { ajax: originalAjax } };
+""",
+    )
+
+    assert result["firstInstall"] == {"installed": True}
+    assert result["objectFormBlank"] == "{}"
+    assert result["stringFormBlank"] == "{}"
+    assert result["objectFormNonBlank"] == '{"code":0}'
+    assert result["otherRequest"] == " \n "
+    assert result["secondInstall"] == {"installed": False, "alreadyInstalled": True}
+    assert result["calls"] == [
+        {"url": "/guahao/checkidinfo.html", "filtered": "{}"},
+        {"url": "/guahao/checkIdInfo.html", "filtered": "{}"},
+        {"url": "/guahao/checkidinfo.html", "filtered": '{"code":0}'},
+        {"url": "/guahao/other.html", "filtered": " \n "},
+    ]
+
+
+def test_normalize_checkidinfo_response_keeps_non_blank_and_non_json_values():
+    result = _run_hook(
+        """[
+  hooks.normalizeCheckIdInfoJsonResponse(" \\n ", "json"),
+  hooks.normalizeCheckIdInfoJsonResponse("0", "json"),
+  hooks.normalizeCheckIdInfoJsonResponse("", "text"),
+  hooks.normalizeCheckIdInfoJsonResponse({ code: 1 }, "json")
+]""",
+    )
+
+    assert result == ["{}", "0", "", {"code": 1}]
+
+
 def test_find_submit_control_does_not_click_before_trigger():
     result = _run_hook(
         """(() => {
