@@ -194,27 +194,40 @@ create-profile 流程会：
 - 只支持两类页面：
   - `https://www.91160.com/doctors/index/...` 医生详情页
   - 由命中号源后跳转进入的 `https://www.91160.com/guahao/ystep1/...` 预约页
-- 不接 `config.yaml`；所有配置都在脚本顶部 `CONFIG` 常量里内联维护
+- 不接 `config.yaml`；默认配置写在脚本内，日常配置通过页面右上角面板的 `Settings` 保存到 Tampermonkey storage
 
 这个脚本的行为和当前 CLI 主链路保持一致，但宿主从 Playwright 切成了你自己的真实浏览器页面：
 
 1. 在 Tampermonkey 中导入 `userscripts/91160-doctor-page-poller.user.js`
-2. 先编辑脚本顶部的 `CONFIG`
-   - `CONFIG.member.memberId` 建议改成你自己的真实就诊人 `member_id`
-   - `CONFIG.filters.weeks / days / hours` 用法与 CLI 一致
-   - `CONFIG.target.*` 可留空，让脚本从当前医生页自动识别；也可以手动锁定目标医生
-3. 登录 91160，并打开目标医生详情页
-4. 如果当前是 `dep_id-0` 或 `docid-only` 页面，脚本会先自动跳到完整医生详情页
-5. 脚本会在页面内直接请求 `https://gate.91160.com/guahao/v1/pc/sch/doctor`
-6. 命中后自动跳到 `ystep1`，按当前仓库的预约页选择器完成就诊人、时间段、勾选和提交
-7. 右上角状态面板可以直接拖动标题栏移动；双击标题栏会重置回默认右上角位置
+2. 登录 91160，并打开目标医生详情页
+3. 在右上角面板点 `Settings`
+   - `memberId` / `memberLabel` 可留空；如果预约页只有一个明确就诊人候选，脚本会自动选中
+   - 目标医生由当前医生详情页 URL 和页面 DOM 自动识别，常规 UI 不再要求填写 `unit_id` / `dep_id` / `doctor_id`
+   - `weeks / days / hours / Appointment From / Start At` 对齐 CLI 的过滤语义；`Appointment From` 是号源查询起点，`Start At` 是脚本开始轮询时间；`hours` UI 固定半小时粒度
+   - `autoSubmit` 默认关闭；首次 smoke 建议保持关闭，确认后再显式开启
+4. 回到主面板点 `Start`
+5. 如果当前是 `dep_id-0` 或 `docid-only` 页面，脚本会先跳到完整医生详情页
+6. 脚本会在页面内请求 `https://gate.91160.com/guahao/v1/pc/sch/doctor`
+7. 命中后在当前标签页跳到 `ystep1`，自动选择就诊人、时间段、勾选规则
+8. `autoSubmit=false` 时停在提交前等待手动确认；`autoSubmit=true` 时会点击提交，成功后停止运行
+
+右上角面板提供：
+
+- `Start` / `Stop`
+- `Settings`
+- `Logs`
+- `Reset State`
+
+`Settings` 会保存配置，但 `Reset State` 只清运行状态、pending booking、提交计数和日志，不会清配置。日志级别默认为 `info`，可在 `Settings` 中改为 `debug` / `warn` / `error`。
 
 几个限制要提前知道：
 
-- 必须运行在真实、已登录浏览器里；未登录或拿不到 `_user_key` 时会直接停机并提示你重新登录
+- 必须运行在真实、已登录浏览器里；脚本不接管账号密码、验证码或 OCR
 - 第一版仍然只支持医生详情页主链路，不支持科室排班页
 - 如果预约页暴露了多个就诊人，而你没有配置 `memberId` 或 `memberLabel`，脚本会停在页面上等待你补充配置，而不是盲选
-- 如果预约页时间段和 `CONFIG.filters.hours` 不匹配，脚本会把这个 `schedule_id` 标记为本次会话内跳过，避免在同一号源上死循环
+- 如果预约页时间段和 `hours` 不匹配，脚本不会把整个 `schedule_id` 长期跳过，而是回医生页继续轮询；提交失败计数按 `schedule_id + detlid` 记录
+- 轮询期间如果 `_user_key` 消失或接口返回 `10021`，脚本会按配置刷新医生页并自动重试；超过恢复次数后才停机提示人工重新登录
+- `autoSubmit=true` 且提交失败时默认停在预约页保留错误现场；如需失败后自动回医生页，可在 `Settings` 开启对应选项
 
 ## 浏览器调试
 

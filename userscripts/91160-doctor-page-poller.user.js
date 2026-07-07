@@ -1,91 +1,554 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.1.0
-// @description  Poll a real 91160 doctor detail page, jump into ystep1, and auto-submit the booking form.
+// @version      0.2.0
+// @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
 // @match        https://www.91160.com/guahao/ystep1/*
-// @grant        none
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        unsafeWindow
 // @run-at       document-idle
 // ==/UserScript==
 
 (function () {
   "use strict";
 
-  const CONFIG = {
-    target: { unitId: null, depId: null, doctorId: null },
-    member: { memberId: "...", memberLabel: null },
-    filters: { weeks: [], days: [], hours: [] },
-    pacing: {
-      pollMs: [1200, 2200],
-      pageActionMs: [600, 1200],
-      bookingRetryMs: [2000, 4000],
-      rateLimitCooldownMs: [10000, 20000],
-    },
-    booking: { autoSubmit: true, maxAttemptsPerSlot: 3 },
-  };
-
-  const STORAGE_KEY = "grab160.doctorPagePoller.v1";
-  const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v1";
+  const SETTINGS_KEY = "grab160.doctorPagePoller.settings.v2";
+  const STATE_KEY = "grab160.doctorPagePoller.state.v2";
+  const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const PANEL_DEFAULT_MARGIN = 16;
-  const PANEL_VIEWPORT_MARGIN = 8;
+  const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
     "访问次数过多",
     "访问过于频繁",
     "操作过于频繁",
   ];
-  const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
+  const LOG_LEVELS = ["debug", "info", "warn", "error"];
   const DISABLE_AUTO_START = Boolean(
     globalThis.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__,
   );
+  let lastResolvedUserKey = null;
+  let lastResolvedUserKeySource = null;
+  let activeControllerId = null;
+
+  const CONFIG_DEFAULTS = {
+    runtime: {
+      autoStart: false,
+      startAt: null,
+    },
+    target: {
+      unitId: null,
+      depId: null,
+      doctorId: null,
+    },
+    member: {
+      memberId: null,
+      memberLabel: null,
+    },
+    filters: {
+      startDate: null,
+      weeks: [],
+      days: [],
+      hours: [],
+    },
+    pacing: {
+      pollMs: [3000, 5000],
+      pageActionMs: [400, 900],
+      bookingRetryMs: [2000, 4000],
+      rateLimitCooldownMs: [15000, 25000],
+    },
+    booking: {
+      autoSubmit: false,
+      maxSubmitAttemptsPerAppointment: 3,
+      autoReturnAfterSubmitFailure: false,
+    },
+    session: {
+      recoveryEnabled: true,
+      keepAliveIntervalSeconds: 240,
+      recoveryMaxAttempts: 3,
+      recoveryCooldownMs: [3000, 8000],
+    },
+    logging: {
+      level: "info",
+      maxEntries: 100,
+    },
+  };
 
   function compactText(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim();
   }
 
-  function normalizeOptionalValue(value) {
-    const text = compactText(value).toLowerCase();
-    return PLACEHOLDER_VALUES.has(text) ? null : compactText(value);
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
   }
 
-  function normalizeDoctorTargetConfig(target) {
-    const normalized = {
-      unitId: normalizeOptionalValue(target?.unitId),
-      depId: normalizeOptionalValue(target?.depId),
-      doctorId: normalizeOptionalValue(target?.doctorId),
-    };
-    if (!normalized.unitId && !normalized.depId && !normalized.doctorId) {
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  }
+
+  function mergeConfig(base, override) {
+    const output = clone(base);
+    if (!isPlainObject(override)) {
+      return output;
+    }
+    for (const [key, value] of Object.entries(override)) {
+      if (isPlainObject(value) && isPlainObject(output[key])) {
+        output[key] = mergeConfig(output[key], value);
+      } else if (value !== undefined) {
+        output[key] = value;
+      }
+    }
+    return output;
+  }
+
+  function normalizeOptionalValue(value) {
+    const text = compactText(value);
+    return PLACEHOLDER_VALUES.has(text.toLowerCase()) ? null : text;
+  }
+
+  function normalizeBoolean(value, fallback = false) {
+    return typeof value === "boolean" ? value : fallback;
+  }
+
+  function normalizeInteger(value, fallback, { min = null, max = null } = {}) {
+    const parsed = Number.parseInt(String(value), 10);
+    if (!Number.isInteger(parsed)) {
+      return fallback;
+    }
+    if (min !== null && parsed < min) {
+      return fallback;
+    }
+    if (max !== null && parsed > max) {
+      return fallback;
+    }
+    return parsed;
+  }
+
+  function normalizeRange(value, fallback, { min = 0 } = {}) {
+    const source = Array.isArray(value) && value.length === 2 ? value : fallback;
+    const first = Math.max(min, Number(source[0]));
+    const second = Math.max(min, Number(source[1]));
+    if (!Number.isFinite(first) || !Number.isFinite(second)) {
+      return clone(fallback);
+    }
+    return first <= second ? [Math.round(first), Math.round(second)] : [Math.round(second), Math.round(first)];
+  }
+
+  function normalizeDateValue(value) {
+    const text = compactText(value);
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+  }
+
+  function normalizeStartAtValue(value) {
+    const text = compactText(value);
+    if (!text) {
       return null;
     }
+    const timestamp = Date.parse(text);
+    if (Number.isNaN(timestamp)) {
+      return null;
+    }
+    return text;
+  }
+
+  function normalizeHourEndpoint(value) {
+    const text = compactText(value);
+    const integerMatch = text.match(/^(\d{1,2})$/);
+    if (integerMatch) {
+      return `${String(Number(integerMatch[1])).padStart(2, "0")}:00`;
+    }
+    const halfHourMatch = text.match(/^(\d{1,2})\.(0|5)$/);
+    if (halfHourMatch) {
+      return `${String(Number(halfHourMatch[1])).padStart(2, "0")}:${
+        halfHourMatch[2] === "5" ? "30" : "00"
+      }`;
+    }
+    const preciseMatch = text.match(/^(\d{1,2}):(\d{2})$/);
+    if (preciseMatch) {
+      const hour = Number(preciseMatch[1]);
+      const minute = Number(preciseMatch[2]);
+      if (hour < 0 || hour > 23 || ![0, 30].includes(minute)) {
+        throw new Error("Hour endpoints must use 00 or 30 minute precision.");
+      }
+      return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    }
+    throw new Error("Invalid hour format.");
+  }
+
+  function normalizeHourValue(value) {
+    const text = compactText(value);
+    const parts = text.split("-");
+    if (parts.length !== 2) {
+      throw new Error("Invalid hour format. Use HH:MM-HH:MM, H-H, H.5-H.");
+    }
+    const start = normalizeHourEndpoint(parts[0]);
+    const end = normalizeHourEndpoint(parts[1]);
+    if (parseTimeToMinutes(start) >= parseTimeToMinutes(end)) {
+      throw new Error("Hour range start must be earlier than end.");
+    }
+    return `${start}-${end}`;
+  }
+
+  function normalizeHours(values) {
+    if (!Array.isArray(values)) {
+      return [];
+    }
+    return values.map((value) => normalizeHourValue(value));
+  }
+
+  function normalizeSettings(rawSettings) {
+    const merged = mergeConfig(CONFIG_DEFAULTS, rawSettings);
+    return {
+      runtime: {
+        autoStart: normalizeBoolean(merged.runtime.autoStart, false),
+        startAt: normalizeStartAtValue(merged.runtime.startAt),
+      },
+      target: {
+        unitId: normalizeOptionalValue(merged.target.unitId),
+        depId: normalizeOptionalValue(merged.target.depId),
+        doctorId: normalizeOptionalValue(merged.target.doctorId),
+      },
+      member: {
+        memberId: normalizeOptionalValue(merged.member.memberId),
+        memberLabel: normalizeOptionalValue(merged.member.memberLabel),
+      },
+      filters: {
+        startDate: normalizeDateValue(merged.filters.startDate),
+        weeks: Array.isArray(merged.filters.weeks)
+          ? merged.filters.weeks
+              .map((value) => Number.parseInt(String(value), 10))
+              .filter((value) => Number.isInteger(value) && value >= 1 && value <= 7)
+          : [],
+        days: Array.isArray(merged.filters.days)
+          ? merged.filters.days
+              .map((value) => compactText(value).toLowerCase())
+              .filter((value) => ["am", "pm", "em"].includes(value))
+          : [],
+        hours: normalizeHours(merged.filters.hours),
+      },
+      pacing: {
+        pollMs: normalizeRange(merged.pacing.pollMs, CONFIG_DEFAULTS.pacing.pollMs, {
+          min: CONFIG_DEFAULTS.pacing.pollMs[0],
+        }),
+        pageActionMs: normalizeRange(
+          merged.pacing.pageActionMs,
+          CONFIG_DEFAULTS.pacing.pageActionMs,
+        ),
+        bookingRetryMs: normalizeRange(
+          merged.pacing.bookingRetryMs,
+          CONFIG_DEFAULTS.pacing.bookingRetryMs,
+          { min: 1000 },
+        ),
+        rateLimitCooldownMs: normalizeRange(
+          merged.pacing.rateLimitCooldownMs,
+          CONFIG_DEFAULTS.pacing.rateLimitCooldownMs,
+          { min: CONFIG_DEFAULTS.pacing.rateLimitCooldownMs[0] },
+        ),
+      },
+      booking: {
+        autoSubmit: normalizeBoolean(merged.booking.autoSubmit, false),
+        maxSubmitAttemptsPerAppointment: normalizeInteger(
+          merged.booking.maxSubmitAttemptsPerAppointment,
+          CONFIG_DEFAULTS.booking.maxSubmitAttemptsPerAppointment,
+          { min: 1, max: 20 },
+        ),
+        autoReturnAfterSubmitFailure: normalizeBoolean(
+          merged.booking.autoReturnAfterSubmitFailure,
+          false,
+        ),
+      },
+      session: {
+        recoveryEnabled: normalizeBoolean(merged.session.recoveryEnabled, true),
+        keepAliveIntervalSeconds: normalizeInteger(
+          merged.session.keepAliveIntervalSeconds,
+          CONFIG_DEFAULTS.session.keepAliveIntervalSeconds,
+          { min: 0 },
+        ),
+        recoveryMaxAttempts: normalizeInteger(
+          merged.session.recoveryMaxAttempts,
+          CONFIG_DEFAULTS.session.recoveryMaxAttempts,
+          { min: 0, max: 20 },
+        ),
+        recoveryCooldownMs: normalizeRange(
+          merged.session.recoveryCooldownMs,
+          CONFIG_DEFAULTS.session.recoveryCooldownMs,
+        ),
+      },
+      logging: {
+        level: LOG_LEVELS.includes(merged.logging.level)
+          ? merged.logging.level
+          : CONFIG_DEFAULTS.logging.level,
+        maxEntries: normalizeInteger(merged.logging.maxEntries, 100, {
+          min: 10,
+          max: 500,
+        }),
+      },
+    };
+  }
+
+  function readStoredValue(key, fallback) {
+    try {
+      if (typeof GM_getValue === "function") {
+        return GM_getValue(key, fallback);
+      }
+    } catch (_error) {
+      // Fall back to browser storage below.
+    }
+    try {
+      const raw = globalThis.localStorage?.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (_error) {
+      return fallback;
+    }
+  }
+
+  function writeStoredValue(key, value) {
+    try {
+      if (typeof GM_setValue === "function") {
+        GM_setValue(key, value);
+        return;
+      }
+    } catch (_error) {
+      // Fall back to browser storage below.
+    }
+    globalThis.localStorage?.setItem(key, JSON.stringify(value));
+  }
+
+  function deleteStoredValue(key) {
+    try {
+      if (typeof GM_deleteValue === "function") {
+        GM_deleteValue(key);
+        return;
+      }
+    } catch (_error) {
+      // Fall back to browser storage below.
+    }
+    globalThis.localStorage?.removeItem(key);
+  }
+
+  function readSettings() {
+    try {
+      return normalizeSettings(readStoredValue(SETTINGS_KEY, null));
+    } catch (error) {
+      appendLog("error", "Failed to load stored settings; using defaults.", error.message);
+      return normalizeSettings(null);
+    }
+  }
+
+  function writeSettings(settings) {
+    const normalized = normalizeSettings(settings);
+    writeStoredValue(SETTINGS_KEY, normalized);
     return normalized;
   }
 
-  function normalizeMemberConfig(member) {
+  function resetSettings() {
+    deleteStoredValue(SETTINGS_KEY);
+    return readSettings();
+  }
+
+  function defaultState() {
     return {
-      memberId: normalizeOptionalValue(member?.memberId),
-      memberLabel: normalizeOptionalValue(member?.memberLabel),
+      version: 2,
+      running: false,
+      controllerId: null,
+      activeView: "main",
+      pollAttempt: 0,
+      lastTarget: null,
+      pendingBooking: null,
+      submitAttempts: {},
+      sessionRecoveryAttempts: 0,
+      lastKeepAliveAt: 0,
+      summary: null,
+      logs: [],
     };
   }
 
-  function normalizeFilters(filters) {
-    return {
-      weeks: Array.isArray(filters?.weeks)
-        ? filters.weeks
-            .map((value) => Number.parseInt(String(value), 10))
-            .filter((value) => Number.isInteger(value) && value >= 1 && value <= 7)
-        : [],
-      days: Array.isArray(filters?.days)
-        ? filters.days
-            .map((value) => compactText(value).toLowerCase())
-            .filter(Boolean)
-        : [],
-      hours: Array.isArray(filters?.hours)
-        ? filters.hours.map((value) => normalizeHourValue(value))
-        : [],
+  function readState() {
+    try {
+      const raw = globalThis.sessionStorage?.getItem(STATE_KEY);
+      return raw ? { ...defaultState(), ...JSON.parse(raw) } : defaultState();
+    } catch (_error) {
+      return defaultState();
+    }
+  }
+
+  function writeState(state) {
+    const next = {
+      ...defaultState(),
+      ...state,
+      submitAttempts: { ...(state.submitAttempts ?? {}) },
+      logs: Array.isArray(state.logs) ? state.logs : [],
     };
+    globalThis.sessionStorage?.setItem(STATE_KEY, JSON.stringify(next));
+    return next;
+  }
+
+  function patchState(mutator) {
+    return writeState(mutator(readState()));
+  }
+
+  function resetRuntimeState() {
+    const state = readState();
+    writeState({
+      ...defaultState(),
+      activeView: state.activeView,
+    });
+    renderPanel();
+  }
+
+  function setActiveView(view) {
+    patchState((state) => ({ ...state, activeView: view }));
+    renderPanel();
+  }
+
+  function makeControllerId(kind) {
+    return `${kind}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  function isControllerActive(controllerId) {
+    const state = readState();
+    return Boolean(controllerId && state.running && state.controllerId === controllerId);
+  }
+
+  function claimPageController(kind) {
+    const state = readState();
+    if (!state.running) {
+      return null;
+    }
+    if (activeControllerId && state.controllerId === activeControllerId) {
+      appendLog("debug", "Controller is already active; not starting another loop.", {
+        controllerId: activeControllerId,
+      });
+      return null;
+    }
+    const controllerId = makeControllerId(kind);
+    activeControllerId = controllerId;
+    patchState((next) => ({ ...next, controllerId }));
+    return controllerId;
+  }
+
+  function prepareManualControllerStart(kind) {
+    const controllerId = makeControllerId(kind);
+    activeControllerId = controllerId;
+    patchState((next) => ({
+      ...next,
+      running: true,
+      controllerId,
+      pollAttempt: 0,
+      sessionRecoveryAttempts: 0,
+      pendingBooking: null,
+    }));
+    return controllerId;
+  }
+
+  function logRank(level) {
+    return LOG_LEVELS.indexOf(level);
+  }
+
+  function shouldLog(level, settings = readSettings()) {
+    return logRank(level) >= logRank(settings.logging.level);
+  }
+
+  function appendLog(level, message, detail = "") {
+    const settings = readSettings();
+    const entry = {
+      ts: new Date().toISOString(),
+      level,
+      message: compactText(message),
+      detail: typeof detail === "string" ? detail : JSON.stringify(detail),
+    };
+    if (shouldLog(level, settings)) {
+      const method = level === "error" ? "error" : level === "warn" ? "warn" : "log";
+      console[method](`[160Grab ${level}] ${entry.message}`, entry.detail);
+    }
+    patchState((state) => ({
+      ...state,
+      logs: [...(state.logs ?? []), entry].slice(-settings.logging.maxEntries),
+      summary: entry,
+    }));
+    return entry;
+  }
+
+  function statusClassName(summary) {
+    return summary?.level === "error"
+      ? "grab160-status-error"
+      : summary?.level === "warn"
+        ? "grab160-status-warn"
+        : "grab160-status-success";
+  }
+
+  function panelDoctorText(state = readState()) {
+    const target = state.lastTarget ?? parseDoctorPageUrl(location.href) ?? {};
+    if (isResolvedTarget(target)) {
+      return "resolved";
+    }
+    if (isCompleteTarget(target) || target.doctorId) {
+      return "detected";
+    }
+    return "unresolved";
+  }
+
+  function updatePanelStatus() {
+    const panel = document.getElementById(PANEL_ID);
+    const body = panel?.querySelector(".grab160-body");
+    if (!body) {
+      return false;
+    }
+    const state = readState();
+    const settings = readSettings();
+    const summary = state.summary;
+    const message = body.querySelector("[data-panel-summary-message]");
+    if (message) {
+      message.classList.remove(
+        "grab160-status-error",
+        "grab160-status-warn",
+        "grab160-status-success",
+      );
+      message.classList.add(statusClassName(summary));
+      message.textContent = summary?.message ?? "Ready";
+    }
+    const detail = body.querySelector("[data-panel-summary-detail]");
+    if (detail) {
+      detail.textContent = summary?.detail ?? "";
+    }
+    const running = body.querySelector("[data-panel-running]");
+    if (running) {
+      running.textContent = `running=${state.running ? "yes" : "no"} · autoSubmit=${
+        settings.booking.autoSubmit ? "ON" : "off"
+      } · attempts=${state.pollAttempt}`;
+    }
+    const target = body.querySelector("[data-panel-target]");
+    if (target) {
+      target.textContent = `doctor=${panelDoctorText(state)}`;
+    }
+    const startButton = body.querySelector('[data-action="start"]');
+    if (startButton) {
+      startButton.textContent = state.running ? "Restart" : "Start";
+    }
+    return true;
+  }
+
+  function refreshPanel({ force = false } = {}) {
+    const state = readState();
+    const panel = document.getElementById(PANEL_ID);
+    if (
+      !force &&
+      state.activeView === "settings" &&
+      panel?.querySelector("[data-settings-view]")
+    ) {
+      updatePanelStatus();
+      return;
+    }
+    renderPanel();
+  }
+
+  function setSummary(level, message, detail = "", options = {}) {
+    appendLog(level, message, detail);
+    refreshPanel(options);
   }
 
   function parseDoctorPageUrl(rawUrl) {
@@ -149,37 +612,35 @@
     return `https://www.91160.com/guahao/ystep1/uid-${target.unitId}/depid-${target.depId}/schid-${scheduleId}.html`;
   }
 
-  function areTargetsCompatible(expected, actual) {
-    if (!expected || !actual) {
-      return true;
-    }
-    if (expected.unitId && actual.unitId && expected.unitId !== actual.unitId) {
-      return false;
-    }
-    if (expected.depId && actual.depId && expected.depId !== actual.depId) {
-      return false;
-    }
-    if (expected.doctorId && actual.doctorId && expected.doctorId !== actual.doctorId) {
-      return false;
-    }
-    return true;
-  }
-
-  function mergeTargets(preferred, discovered) {
-    const merged = {
-      unitId: preferred?.unitId ?? discovered?.unitId ?? null,
-      depId: preferred?.depId ?? discovered?.depId ?? null,
-      doctorId: preferred?.doctorId ?? discovered?.doctorId ?? null,
-    };
-    return merged;
-  }
-
   function isCompleteTarget(target) {
     return Boolean(target?.unitId && target?.depId && target?.doctorId);
   }
 
   function isResolvedTarget(target) {
     return isCompleteTarget(target) && compactText(target.depId) !== "0";
+  }
+
+  function areTargetsCompatible(expected, actual) {
+    if (!expected || !actual) {
+      return true;
+    }
+    for (const key of ["unitId", "depId", "doctorId"]) {
+      if (expected[key] && actual[key] && expected[key] !== actual[key]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function normalizeTargetConfig(target) {
+    const normalized = {
+      unitId: normalizeOptionalValue(target?.unitId),
+      depId: normalizeOptionalValue(target?.depId),
+      doctorId: normalizeOptionalValue(target?.doctorId),
+    };
+    return normalized.unitId || normalized.depId || normalized.doctorId
+      ? normalized
+      : null;
   }
 
   function targetFromAttrs(attrs) {
@@ -214,9 +675,6 @@
       Array.from(doc.querySelectorAll(selector))
         .map((element) => compactText(element.getAttribute("href")))
         .filter(Boolean);
-    const scheduleRowIds = Array.from(doc.querySelectorAll("li.liClassData[id]"))
-      .map((element) => compactText(element.id))
-      .filter(Boolean);
     const addMarkAttrs = addMark
       ? Array.from(addMark.attributes).reduce((accumulator, attribute) => {
           accumulator[attribute.name] = attribute.value;
@@ -228,30 +686,29 @@
       addMarkAttrs,
       doctorLinks: collectHrefs('a[href*="/doctors/index/unit_id-"][href*="/docid-"]'),
       bookingLinks: collectHrefs('a[href*="/guahao/ystep1/uid-"]'),
-      scheduleRowIds,
+      scheduleRowIds: Array.from(doc.querySelectorAll("li.liClassData[id]"))
+        .map((element) => compactText(element.id))
+        .filter(Boolean),
     };
   }
 
   function resolveTargetFromSnapshot(snapshot, configuredTarget) {
-    const normalizedConfig = normalizeDoctorTargetConfig(configuredTarget);
+    const normalizedConfig = normalizeTargetConfig(configuredTarget);
     const candidates = [];
     const urlTarget = parseDoctorPageUrl(snapshot?.href ?? "");
+    const attrTarget = targetFromAttrs(snapshot?.addMarkAttrs);
     if (urlTarget) {
       candidates.push({ source: "url", target: urlTarget });
     }
-
-    const attrTarget = targetFromAttrs(snapshot?.addMarkAttrs);
     if (attrTarget) {
       candidates.push({ source: "addMark", target: attrTarget });
     }
-
     for (const href of snapshot?.doctorLinks ?? []) {
       const target = parseDoctorPageUrl(href);
       if (target) {
         candidates.push({ source: "doctor-link", target });
       }
     }
-
     for (const href of snapshot?.bookingLinks ?? []) {
       const bookingTarget = parseBookingUrl(href);
       if (bookingTarget) {
@@ -269,7 +726,6 @@
         });
       }
     }
-
     const unitIdFallback =
       attrTarget?.unitId ?? normalizedConfig?.unitId ?? urlTarget?.unitId ?? null;
     for (const rowId of snapshot?.scheduleRowIds ?? []) {
@@ -279,482 +735,25 @@
       }
     }
 
-    const compatibleCandidates = candidates.filter((candidate) =>
+    const compatible = candidates.filter((candidate) =>
       areTargetsCompatible(normalizedConfig, candidate.target),
     );
     const winner =
-      compatibleCandidates.find((candidate) => isResolvedTarget(candidate.target)) ??
-      compatibleCandidates.find((candidate) => isCompleteTarget(candidate.target));
-    const mergedTarget = mergeTargets(
-      normalizedConfig,
-      winner?.target ?? compatibleCandidates[0]?.target,
-    );
-
-    if (!mergedTarget.doctorId) {
-      return {
-        ok: false,
-        reason: "Could not resolve doctor_id from the current doctor page.",
-      };
-    }
-    if (!mergedTarget.unitId || !mergedTarget.depId) {
-      return {
-        ok: false,
-        reason: "Could not resolve full unit_id/dep_id from the current doctor page.",
-      };
-    }
-    return {
-      ok: true,
-      target: {
-        unitId: mergedTarget.unitId,
-        depId: mergedTarget.depId,
-        doctorId: mergedTarget.doctorId,
-      },
-      source: winner?.source ?? compatibleCandidates[0]?.source ?? "config",
+      compatible.find((candidate) => isResolvedTarget(candidate.target)) ??
+      compatible.find((candidate) => isCompleteTarget(candidate.target)) ??
+      compatible[0];
+    const merged = {
+      unitId: normalizedConfig?.unitId ?? winner?.target?.unitId ?? null,
+      depId: normalizedConfig?.depId ?? winner?.target?.depId ?? null,
+      doctorId: normalizedConfig?.doctorId ?? winner?.target?.doctorId ?? null,
     };
-  }
-
-  function parseSleepConfig(value) {
-    if (Array.isArray(value) && value.length === 2) {
-      const min = Number(value[0]);
-      const max = Number(value[1]);
-      if (Number.isFinite(min) && Number.isFinite(max)) {
-        return min <= max ? [min, max] : [max, min];
-      }
+    if (!merged.doctorId) {
+      return { ok: false, reason: "Could not resolve doctor_id from page." };
     }
-    const single = Number(value);
-    return Number.isFinite(single) ? [single, single] : [0, 0];
-  }
-
-  function pickDelayMs(value) {
-    const [min, max] = parseSleepConfig(value);
-    if (max <= min) {
-      return Math.max(0, Math.round(min));
+    if (!merged.unitId || !merged.depId || merged.depId === "0") {
+      return { ok: false, reason: "Could not resolve full unit_id/dep_id from page." };
     }
-    const random = Math.random() * (max - min);
-    return Math.max(0, Math.round(min + random));
-  }
-
-  function sleepMs(delayMs) {
-    return new Promise((resolve) => {
-      setTimeout(resolve, Math.max(0, delayMs));
-    });
-  }
-
-  function normalizePanelPosition(position) {
-    const left = Number(position?.left);
-    const top = Number(position?.top);
-    if (!Number.isFinite(left) || !Number.isFinite(top)) {
-      return null;
-    }
-    return { left: Math.round(left), top: Math.round(top) };
-  }
-
-  function clampPanelPosition(position, viewport, panelSize) {
-    const normalized = normalizePanelPosition(position);
-    const viewportWidth = Number(viewport?.width);
-    const viewportHeight = Number(viewport?.height);
-    const panelWidth = Number(panelSize?.width);
-    const panelHeight = Number(panelSize?.height);
-    if (
-      !normalized ||
-      !Number.isFinite(viewportWidth) ||
-      !Number.isFinite(viewportHeight) ||
-      !Number.isFinite(panelWidth) ||
-      !Number.isFinite(panelHeight)
-    ) {
-      return normalized;
-    }
-    const maxLeft = Math.max(
-      PANEL_VIEWPORT_MARGIN,
-      viewportWidth - panelWidth - PANEL_VIEWPORT_MARGIN,
-    );
-    const maxTop = Math.max(
-      PANEL_VIEWPORT_MARGIN,
-      viewportHeight - panelHeight - PANEL_VIEWPORT_MARGIN,
-    );
-    return {
-      left: Math.min(maxLeft, Math.max(PANEL_VIEWPORT_MARGIN, normalized.left)),
-      top: Math.min(maxTop, Math.max(PANEL_VIEWPORT_MARGIN, normalized.top)),
-    };
-  }
-
-  function getPanelPositionStorage() {
-    return globalThis.localStorage ?? null;
-  }
-
-  function readPanelPosition() {
-    const storage = getPanelPositionStorage();
-    if (!storage?.getItem) {
-      return null;
-    }
-    try {
-      return normalizePanelPosition(JSON.parse(storage.getItem(PANEL_POSITION_KEY)));
-    } catch (_error) {
-      return null;
-    }
-  }
-
-  function writePanelPosition(position) {
-    const storage = getPanelPositionStorage();
-    const normalized = normalizePanelPosition(position);
-    if (!storage?.setItem || !normalized) {
-      return;
-    }
-    storage.setItem(PANEL_POSITION_KEY, JSON.stringify(normalized));
-  }
-
-  function clearPanelPosition() {
-    const storage = getPanelPositionStorage();
-    storage?.removeItem?.(PANEL_POSITION_KEY);
-  }
-
-  function applyDefaultPanelPosition(panel) {
-    panel.style.top = `${PANEL_DEFAULT_MARGIN}px`;
-    panel.style.right = `${PANEL_DEFAULT_MARGIN}px`;
-    panel.style.left = "auto";
-    panel.style.bottom = "auto";
-  }
-
-  function getPanelRect(panel) {
-    if (typeof panel.getBoundingClientRect === "function") {
-      return panel.getBoundingClientRect();
-    }
-    return {
-      left: Number.parseFloat(panel.style.left || "0") || 0,
-      top: Number.parseFloat(panel.style.top || "0") || 0,
-      width: Number.parseFloat(panel.style.width || "320") || 320,
-      height: Number.parseFloat(panel.style.height || "120") || 120,
-    };
-  }
-
-  function applyPanelPosition(panel, position) {
-    const clamped = clampPanelPosition(
-      position,
-      { width: globalThis.innerWidth, height: globalThis.innerHeight },
-      {
-        width: panel.offsetWidth || getPanelRect(panel).width,
-        height: panel.offsetHeight || getPanelRect(panel).height,
-      },
-    );
-    if (!clamped) {
-      applyDefaultPanelPosition(panel);
-      return null;
-    }
-    panel.style.top = `${clamped.top}px`;
-    panel.style.left = `${clamped.left}px`;
-    panel.style.right = "auto";
-    panel.style.bottom = "auto";
-    return clamped;
-  }
-
-  function restorePanelPosition(panel) {
-    const savedPosition = readPanelPosition();
-    if (!savedPosition) {
-      applyDefaultPanelPosition(panel);
-      return null;
-    }
-    return applyPanelPosition(panel, savedPosition);
-  }
-
-  function installPanelDragging(panel, title) {
-    if (!panel || !title || title.dataset.dragInstalled === "1") {
-      return;
-    }
-    title.dataset.dragInstalled = "1";
-    title.style.cursor = "move";
-    title.style.userSelect = "none";
-    title.title = "Drag to move. Double-click to reset position.";
-
-    let dragState = null;
-    const finishDrag = () => {
-      if (!dragState) {
-        return;
-      }
-      const finalPosition = applyPanelPosition(panel, {
-        left: getPanelRect(panel).left,
-        top: getPanelRect(panel).top,
-      });
-      if (finalPosition) {
-        writePanelPosition(finalPosition);
-      }
-      dragState = null;
-    };
-
-    title.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) {
-        return;
-      }
-      const rect = getPanelRect(panel);
-      dragState = {
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        left: rect.left,
-        top: rect.top,
-      };
-      panel.style.left = `${rect.left}px`;
-      panel.style.top = `${rect.top}px`;
-      panel.style.right = "auto";
-      panel.style.bottom = "auto";
-      title.setPointerCapture?.(event.pointerId);
-      event.preventDefault();
-    });
-
-    title.addEventListener("pointermove", (event) => {
-      if (!dragState || event.pointerId !== dragState.pointerId) {
-        return;
-      }
-      applyPanelPosition(panel, {
-        left: dragState.left + (event.clientX - dragState.startX),
-        top: dragState.top + (event.clientY - dragState.startY),
-      });
-      event.preventDefault();
-    });
-
-    title.addEventListener("pointerup", (event) => {
-      if (!dragState || event.pointerId !== dragState.pointerId) {
-        return;
-      }
-      finishDrag();
-    });
-    title.addEventListener("pointercancel", finishDrag);
-    title.addEventListener("lostpointercapture", finishDrag);
-    title.addEventListener("dblclick", () => {
-      clearPanelPosition();
-      applyDefaultPanelPosition(panel);
-    });
-
-    globalThis.addEventListener?.("resize", () => {
-      const currentPosition =
-        normalizePanelPosition({
-          left: getPanelRect(panel).left,
-          top: getPanelRect(panel).top,
-        }) ?? readPanelPosition();
-      const applied = applyPanelPosition(panel, currentPosition);
-      if (applied) {
-        writePanelPosition(applied);
-      }
-    });
-  }
-
-  function createPanel() {
-    let panel = document.getElementById(PANEL_ID);
-    if (panel) {
-      return panel;
-    }
-    panel = document.createElement("div");
-    panel.id = PANEL_ID;
-    panel.innerHTML = `
-      <div class="grab160-title">160Grab Doctor Poller</div>
-      <div class="grab160-status">Starting...</div>
-      <div class="grab160-detail"></div>
-    `;
-    Object.assign(panel.style, {
-      position: "fixed",
-      zIndex: "999999",
-      width: "320px",
-      padding: "12px 14px",
-      borderRadius: "10px",
-      boxShadow: "0 8px 28px rgba(0, 0, 0, 0.18)",
-      background: "rgba(17, 24, 39, 0.92)",
-      color: "#f3f4f6",
-      fontSize: "13px",
-      lineHeight: "1.5",
-      fontFamily:
-        "\"SFMono-Regular\", \"Menlo\", \"Monaco\", \"Cascadia Mono\", monospace",
-    });
-    const title = panel.querySelector(".grab160-title");
-    const detail = panel.querySelector(".grab160-detail");
-    if (title) {
-      title.style.fontWeight = "700";
-      title.style.marginBottom = "6px";
-      title.style.paddingRight = "20px";
-    }
-    if (detail) {
-      detail.style.opacity = "0.88";
-      detail.style.marginTop = "6px";
-      detail.style.whiteSpace = "pre-wrap";
-    }
-    document.documentElement.appendChild(panel);
-    restorePanelPosition(panel);
-    installPanelDragging(panel, title);
-    return panel;
-  }
-
-  function setStatus(level, message, detail) {
-    const panel = createPanel();
-    const statusNode = panel.querySelector(".grab160-status");
-    const detailNode = panel.querySelector(".grab160-detail");
-    const colorMap = {
-      info: "#93c5fd",
-      success: "#86efac",
-      warn: "#fcd34d",
-      error: "#fca5a5",
-    };
-    if (statusNode) {
-      statusNode.textContent = `[${level.toUpperCase()}] ${message}`;
-      statusNode.style.color = colorMap[level] ?? "#f3f4f6";
-    }
-    if (detailNode) {
-      const raw = String(detail ?? "");
-      detailNode.textContent = raw.includes("\n") ? raw.trimEnd() : compactText(detail);
-    }
-    const logger = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-    logger(`[160Grab Poller] ${message}`, detail ?? "");
-  }
-
-  function defaultState() {
-    return {
-      version: 1,
-      lastTarget: null,
-      pendingBooking: null,
-      slotAttempts: {},
-    };
-  }
-
-  function readState() {
-    try {
-      const raw = sessionStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        return defaultState();
-      }
-      const parsed = JSON.parse(raw);
-      return {
-        ...defaultState(),
-        ...parsed,
-        slotAttempts: { ...defaultState().slotAttempts, ...(parsed.slotAttempts ?? {}) },
-      };
-    } catch (_error) {
-      return defaultState();
-    }
-  }
-
-  function writeState(state) {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }
-
-  function patchState(mutator) {
-    const current = readState();
-    const next = mutator({ ...current, slotAttempts: { ...current.slotAttempts } });
-    writeState(next);
-    return next;
-  }
-
-  function rememberTarget(target) {
-    patchState((state) => ({ ...state, lastTarget: target }));
-  }
-
-  function schedulePendingBooking(target, scheduleId, attempt = 0) {
-    patchState((state) => ({
-      ...state,
-      lastTarget: target,
-      pendingBooking: {
-        unitId: target.unitId,
-        depId: target.depId,
-        doctorId: target.doctorId,
-        scheduleId,
-        attempt,
-      },
-    }));
-  }
-
-  function clearPendingBooking() {
-    patchState((state) => ({ ...state, pendingBooking: null }));
-  }
-
-  function recordSlotAttempts(scheduleId, attempts) {
-    patchState((state) => ({
-      ...state,
-      slotAttempts: {
-        ...state.slotAttempts,
-        [scheduleId]: Math.max(Number(state.slotAttempts[scheduleId] ?? 0), attempts),
-      },
-    }));
-  }
-
-  function getSlotAttempts(scheduleId) {
-    return Number(readState().slotAttempts[scheduleId] ?? 0);
-  }
-
-  function iterTexts(payload, output) {
-    if (typeof payload === "string") {
-      output.push(payload);
-      return output;
-    }
-    if (Array.isArray(payload)) {
-      for (const item of payload) {
-        iterTexts(item, output);
-      }
-      return output;
-    }
-    if (payload && typeof payload === "object") {
-      for (const value of Object.values(payload)) {
-        iterTexts(value, output);
-      }
-    }
-    return output;
-  }
-
-  function extractRateLimitMessage(payload) {
-    const texts = iterTexts(payload, []);
-    for (const text of texts) {
-      const compact = compactText(text);
-      for (const pattern of RATE_LIMIT_PATTERNS) {
-        if (compact.includes(pattern)) {
-          return compact;
-        }
-      }
-    }
-    return null;
-  }
-
-  function normalizeHourEndpoint(value) {
-    const text = compactText(value);
-    const integerMatch = text.match(/^(\d{1,2})$/);
-    if (integerMatch) {
-      return `${String(Number(integerMatch[1])).padStart(2, "0")}:00`;
-    }
-    const halfHourMatch = text.match(/^(\d{1,2})\.(0|5)$/);
-    if (halfHourMatch) {
-      return `${String(Number(halfHourMatch[1])).padStart(2, "0")}:${
-        halfHourMatch[2] === "5" ? "30" : "00"
-      }`;
-    }
-    const preciseMatch = text.match(/^(\d{1,2}):(\d{2})$/);
-    if (preciseMatch) {
-      const hour = Number(preciseMatch[1]);
-      const minute = Number(preciseMatch[2]);
-      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-        throw new Error("Invalid hour format");
-      }
-      return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-    }
-    throw new Error("Invalid hour format");
-  }
-
-  function normalizeHourValue(value) {
-    const text = compactText(value);
-    const parts = text.split("-");
-    if (parts.length !== 2) {
-      throw new Error(
-        "Invalid hour format. Use HH:MM-HH:MM, H-H, H.5-H, or mixed variants like 9:30-10.",
-      );
-    }
-    return `${normalizeHourEndpoint(parts[0])}-${normalizeHourEndpoint(parts[1])}`;
-  }
-
-  function parseTimeRange(value) {
-    const text = compactText(value);
-    if (!text.includes("-")) {
-      return null;
-    }
-    const [startText, endText] = text.split("-", 2);
-    const start = parseTimeToMinutes(startText);
-    const end = parseTimeToMinutes(endText);
-    if (start === null || end === null || start >= end) {
-      return null;
-    }
-    return [start, end];
+    return { ok: true, target: merged, source: winner?.source ?? "config" };
   }
 
   function parseTimeToMinutes(value) {
@@ -770,15 +769,23 @@
     return hour * 60 + minute;
   }
 
+  function parseTimeRange(value) {
+    const text = compactText(value);
+    if (!text.includes("-")) {
+      return null;
+    }
+    const [startText, endText] = text.split("-", 2);
+    const start = parseTimeToMinutes(startText);
+    const end = parseTimeToMinutes(endText);
+    return start !== null && end !== null && start < end ? [start, end] : null;
+  }
+
   function rangesOverlap(slotStart, slotEnd, filterRange) {
     return slotStart < filterRange[1] && slotEnd > filterRange[0];
   }
 
   function slotMatchesHours(slot, hours) {
-    if (!hours.length) {
-      return true;
-    }
-    if (!compactText(slot.timeRange)) {
+    if (!hours.length || !compactText(slot.timeRange)) {
       return true;
     }
     const slotRange = parseTimeRange(slot.timeRange);
@@ -793,21 +800,11 @@
 
   function mapPaibanStatus(yState) {
     const value = Number(yState);
-    if (value === 1) {
-      return "available";
-    }
-    if (value === 0) {
-      return "full";
-    }
-    if (value === -1) {
-      return "expired";
-    }
-    if (value === -2) {
-      return "stopped";
-    }
-    if (value === -3) {
-      return "not_open";
-    }
+    if (value === 1) return "available";
+    if (value === 0) return "full";
+    if (value === -1) return "expired";
+    if (value === -2) return "stopped";
+    if (value === -3) return "not_open";
     return "unavailable";
   }
 
@@ -815,8 +812,10 @@
     if (!node || typeof node !== "object") {
       return output;
     }
-    if (Object.prototype.hasOwnProperty.call(node, "schedule_id") &&
-        Object.prototype.hasOwnProperty.call(node, "y_state")) {
+    if (
+      Object.prototype.hasOwnProperty.call(node, "schedule_id") &&
+      Object.prototype.hasOwnProperty.call(node, "y_state")
+    ) {
       output.push([path, node]);
       return output;
     }
@@ -848,20 +847,21 @@
     if (!payload?.sch || !target) {
       return [];
     }
-    const weekdayMap = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7 };
+    const weekdayMap = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7 };
     const labels = payload.dates ?? {};
     return walkScheduleTree(payload.sch).map(([path, item]) => {
-      const dateKey = [...path].reverse().find((part) => /^\d{4}-\d{2}-\d{2}$/.test(part)) || compactText(item.to_date);
+      const dateKey =
+        [...path].reverse().find((part) => /^\d{4}-\d{2}-\d{2}$/.test(part)) ||
+        compactText(item.to_date);
       const halfKey =
         [...path].reverse().find((part) => /_(am|pm|em)$/i.test(part)) || "";
-      const dayPeriod =
-        compactText(item.day_period).toLowerCase() ||
-        compactText(halfKey.split("_").pop()).toLowerCase();
       return {
         scheduleId: compactText(item.schedule_id),
         doctorId: compactText(item.doctor_id) || target.doctorId,
         weekday: weekdayMap[compactText(labels[dateKey])] ?? 0,
-        dayPeriod,
+        dayPeriod:
+          compactText(item.day_period).toLowerCase() ||
+          compactText(halfKey.split("_").pop()).toLowerCase(),
         hospital: compactText(item.unit_name),
         department: compactText(item.schext_clinic_label || item.dep_name),
         doctor: compactText(item.doctor_name),
@@ -883,78 +883,175 @@
       if (filters.weeks.length && !filters.weeks.includes(Number(slot.weekday))) {
         return false;
       }
-      if (filters.days.length && !filters.days.includes(compactText(slot.dayPeriod).toLowerCase())) {
+      if (filters.days.length && !filters.days.includes(compactText(slot.dayPeriod))) {
         return false;
       }
-      if (!slotMatchesHours(slot, filters.hours)) {
-        return false;
-      }
-      return true;
+      return slotMatchesHours(slot, filters.hours);
     });
   }
 
   function isBookableSlot(slot) {
     const status = compactText(slot.status).toLowerCase();
-    if (!status || status === "available") {
-      return true;
+    return !status || ["available", "can_booking", "open", "normal"].includes(status);
+  }
+
+  function pickNextSlot(slots) {
+    return slots.find(isBookableSlot) ?? null;
+  }
+
+  function iterTexts(payload, output = []) {
+    if (typeof payload === "string") {
+      output.push(payload);
+    } else if (Array.isArray(payload)) {
+      payload.forEach((item) => iterTexts(item, output));
+    } else if (payload && typeof payload === "object") {
+      Object.values(payload).forEach((value) => iterTexts(value, output));
     }
-    return ["can_booking", "open", "normal"].includes(status);
+    return output;
   }
 
-  function pickNextSlot(slots, slotAttempts, maxAttemptsPerSlot) {
-    const availableSlots = slots.filter(isBookableSlot);
-    return (
-      availableSlots.find(
-        (slot) => Number(slotAttempts[slot.scheduleId] ?? 0) < maxAttemptsPerSlot,
-      ) ?? null
-    );
-  }
-
-  function findCurrentUserKey() {
-    const userKey = compactText(globalThis._user_key);
-    return userKey || null;
-  }
-
-  async function fetchJsonInsidePage(url, params) {
-    if (globalThis.jQuery?.ajax) {
-      return await new Promise((resolve, reject) => {
-        globalThis.jQuery.ajax({
-          url,
-          type: "GET",
-          data: params,
-          dataType: "json",
-          timeout: 15000,
-          success: resolve,
-          error: (xhr, textStatus, errorThrown) => {
-            const body = compactText(xhr?.responseText).slice(0, 200);
-            reject(
-              new Error(
-                `ajax error status=${xhr?.status ?? ""} textStatus=${textStatus ?? ""} error=${errorThrown ?? ""} body=${body}`,
-              ),
-            );
-          },
-        });
-      });
+  function extractRateLimitMessage(payload) {
+    for (const text of iterTexts(payload)) {
+      const compact = compactText(text);
+      if (RATE_LIMIT_PATTERNS.some((pattern) => compact.includes(pattern))) {
+        return compact;
+      }
     }
+    return null;
+  }
+
+  function readCookieValue(name, cookieText = document.cookie) {
+    const prefix = `${name}=`;
+    for (const part of String(cookieText ?? "").split(";")) {
+      const trimmed = part.trim();
+      if (trimmed.startsWith(prefix)) {
+        return trimmed.slice(prefix.length);
+      }
+    }
+    return null;
+  }
+
+  function rememberUserKey(userKey, source) {
+    const candidate = compactText(userKey);
+    if (!candidate) {
+      return null;
+    }
+    lastResolvedUserKey = candidate;
+    lastResolvedUserKeySource = source;
+    return candidate;
+  }
+
+  function resolveCurrentUserKey({ allowCached = true } = {}) {
+    const candidates = [
+      { source: "page-global", value: globalThis._user_key },
+      { source: "unsafe-window", value: globalThis.unsafeWindow?._user_key },
+      { source: "access_hash-cookie", value: readCookieValue("access_hash") },
+    ];
+    for (const candidate of candidates) {
+      const value = compactText(candidate.value);
+      if (value) {
+        rememberUserKey(value, candidate.source);
+        return { userKey: value, source: candidate.source };
+      }
+    }
+    if (allowCached) {
+      const cached = compactText(lastResolvedUserKey);
+      if (cached) {
+        return { userKey: cached, source: lastResolvedUserKeySource || "cached" };
+      }
+    }
+    return { userKey: null, source: null };
+  }
+
+  function findCurrentUserKey(options) {
+    return resolveCurrentUserKey(options).userKey;
+  }
+
+  function pickDelayMs(range) {
+    const [min, max] = normalizeRange(range, [0, 0]);
+    if (max <= min) {
+      return min;
+    }
+    return Math.round(min + Math.random() * (max - min));
+  }
+
+  function sleepMs(delayMs) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
+  }
+
+  function buildUrlWithParams(url, params) {
     const requestUrl = new URL(url, location.origin);
     for (const [key, value] of Object.entries(params ?? {})) {
       requestUrl.searchParams.set(key, value);
     }
-    const response = await fetch(requestUrl.toString(), { credentials: "include" });
-    const text = await response.text();
+    return requestUrl.toString();
+  }
+
+  function parseJsonResponse(text, status, source) {
     try {
       return JSON.parse(text);
-    } catch (error) {
+    } catch (_error) {
       throw new Error(
-        `fetch returned non-JSON status=${response.status} body=${compactText(text).slice(0, 200)}`,
+        `${source} returned non-JSON status=${status} body=${compactText(text).slice(0, 200)}`,
       );
     }
   }
 
-  async function fetchDoctorSchedule(target) {
+  async function fetchJsonInsidePage(url, params) {
+    const pageWindow = globalThis.unsafeWindow || globalThis;
+    let lastError = null;
+    if (pageWindow.jQuery?.ajax) {
+      try {
+        return await new Promise((resolve, reject) => {
+          pageWindow.jQuery.ajax({
+            url,
+            type: "GET",
+            data: params,
+            dataType: "json",
+            timeout: 15000,
+            success: resolve,
+            error: (xhr, textStatus, errorThrown) => {
+              const body = compactText(xhr?.responseText).slice(0, 200);
+              reject(
+                new Error(
+                  `ajax error status=${xhr?.status ?? ""} textStatus=${textStatus ?? ""} error=${errorThrown ?? ""} body=${body}`,
+                ),
+              );
+            },
+          });
+        });
+      } catch (error) {
+        lastError = error;
+        appendLog("debug", "Page jQuery schedule request failed; trying fetch.", error.message);
+      }
+    }
+    const requestUrl = buildUrlWithParams(url, params);
+    const fetchImpl = pageWindow.fetch || globalThis.fetch;
+    if (typeof fetchImpl === "function") {
+      try {
+        const response = await fetchImpl.call(pageWindow, requestUrl, {
+          credentials: "omit",
+        });
+        const text = await response.text();
+        return parseJsonResponse(text, response.status, "fetch");
+      } catch (error) {
+        lastError = error;
+        appendLog("debug", "Page fetch schedule request failed.", error.message);
+      }
+    }
+    throw new Error(
+      `Page schedule request failed: ${lastError?.message || "no supported page transport"}`,
+    );
+  }
+
+  async function fetchDoctorSchedule(target, settings) {
     const userKey = findCurrentUserKey();
     if (!userKey) {
-      return { result_code: 0, error_code: "10021", error_msg: "请登录后查看医生号源" };
+      return {
+        result_code: 0,
+        error_code: "10021",
+        error_msg: "请登录后查看医生号源",
+      };
     }
     return await fetchJsonInsidePage(
       "https://gate.91160.com/guahao/v1/pc/sch/doctor",
@@ -964,20 +1061,40 @@
         doc_id: target.doctorId,
         unit_id: target.unitId,
         dep_id: target.depId,
-        date: new Date().toISOString().slice(0, 10),
+        date: settings.filters.startDate || new Date().toISOString().slice(0, 10),
         days: "6",
       },
     );
   }
 
-  function createVisibleMessagesSnapshot() {
-    return Array.from(
-      document.querySelectorAll(
-        ".wrong,.warning,.import,.fine,.tips,.msg,.message,.error,.err,.layui-layer-content,.select-member-close,.select-vertifycode-close,.tip,.order-tit",
-      ),
-    )
-      .map((element) => compactText(element.textContent))
-      .filter(Boolean);
+  function appointmentKey(scheduleId, appointmentValue) {
+    return `${compactText(scheduleId)}::${compactText(appointmentValue) || "<none>"}`;
+  }
+
+  function getSubmitAttempts(scheduleId, appointmentValue) {
+    return Number(readState().submitAttempts[appointmentKey(scheduleId, appointmentValue)] ?? 0);
+  }
+
+  function recordSubmitAttempt(scheduleId, appointmentValue) {
+    const key = appointmentKey(scheduleId, appointmentValue);
+    return patchState((state) => ({
+      ...state,
+      submitAttempts: {
+        ...(state.submitAttempts ?? {}),
+        [key]: Number(state.submitAttempts?.[key] ?? 0) + 1,
+      },
+    })).submitAttempts[key];
+  }
+
+  function parseAppointmentOptions() {
+    const container = document.querySelector("#delts") ?? document;
+    return Array.from(container.querySelectorAll("li[val]"))
+      .map((element) => ({
+        value: compactText(element.getAttribute("val")),
+        label: compactText(element.textContent),
+        element,
+      }))
+      .filter((option) => option.value && option.label);
   }
 
   function chooseAppointmentOption(options, filters) {
@@ -1001,17 +1118,6 @@
         });
       }) ?? null
     );
-  }
-
-  function parseAppointmentOptions() {
-    const container = document.querySelector("#delts") ?? document;
-    return Array.from(container.querySelectorAll("li[val]"))
-      .map((element) => ({
-        value: compactText(element.getAttribute("val")),
-        label: compactText(element.textContent),
-        element,
-      }))
-      .filter((option) => option.value && option.label);
   }
 
   function parseBookingFormState(filters, fallbackScheduleId) {
@@ -1053,10 +1159,7 @@
 
   function memberRadioLabelText(radio) {
     const container = radio.closest("tr, li, label, .patient_item, .member_item, .person_item");
-    if (container) {
-      return compactText(container.textContent);
-    }
-    return compactText(radio.parentElement?.textContent);
+    return compactText(container?.textContent || radio.parentElement?.textContent);
   }
 
   function isLikelyMemberRadio(radio) {
@@ -1070,85 +1173,63 @@
     ) {
       return true;
     }
-    const memberRow = radio.closest(
-      'tr[id^="mem"], [data-member-id], [data-mid], .member_item, .patient_item, .person_item',
+    return Boolean(
+      radio.closest(
+        'tr[id^="mem"], [data-member-id], [data-mid], .member_item, .patient_item, .person_item',
+      ),
     );
-    if (memberRow) {
-      return true;
-    }
-    return false;
   }
 
   function collectRadioGroups() {
     const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
-    const memberRadios = radios.filter((radio) => isLikelyMemberRadio(radio));
-    const ignoredRadios = radios.filter((radio) => !isLikelyMemberRadio(radio));
-    return { radios, memberRadios, ignoredRadios };
-  }
-
-  function findMemberRadios() {
-    return collectRadioGroups().memberRadios;
+    return {
+      radios,
+      memberRadios: radios.filter(isLikelyMemberRadio),
+      ignoredRadios: radios.filter((radio) => !isLikelyMemberRadio(radio)),
+    };
   }
 
   function memberRadioDebugRows(radios) {
-    return radios.map((radio, index) => {
-      const form = radio.form;
-      const formHint = form
-        ? compactText([form.id, form.getAttribute("name"), form.className].filter(Boolean).join(" "))
-        : "";
-      return {
-        index,
-        value: compactText(radio.value),
-        name: radio.getAttribute("name") ?? "",
-        id: radio.getAttribute("id") ?? "",
-        checked: Boolean(radio.checked),
-        disabled: Boolean(radio.disabled),
-        form: formHint,
-        label: memberRadioLabelText(radio),
-      };
-    });
+    return radios.map((radio, index) => ({
+      index,
+      value: compactText(radio.value),
+      name: radio.getAttribute("name") ?? "",
+      id: radio.getAttribute("id") ?? "",
+      checked: Boolean(radio.checked),
+      disabled: Boolean(radio.disabled),
+      label: memberRadioLabelText(radio),
+    }));
   }
 
   function memberRadioDebugSummary(memberRadios, ignoredRadios = []) {
-    const totalCount = memberRadios.length + ignoredRadios.length;
-    if (!totalCount) {
-      return "No <input type=\"radio\"> elements were found on the page.";
-    }
-    const memberRows = memberRadioDebugRows(memberRadios);
-    const ignoredRows = memberRadioDebugRows(ignoredRadios);
     const lines = [
-      `Found ${memberRadios.length} candidate member radio(s) out of ${totalCount} total <input type="radio"> element(s).`,
-      ...(memberRows.length
-        ? memberRows.map(
-            (row) =>
-              `member#${row.index}\tvalue=${JSON.stringify(row.value)}\tname=${JSON.stringify(row.name)}\tid=${JSON.stringify(row.id)}\tchecked=${row.checked}\tdisabled=${row.disabled}\tform=${JSON.stringify(row.form)}\tlabel=${JSON.stringify(row.label)}`,
-          )
-        : ["No candidate member radio matched the current filters."]),
+      `Found ${memberRadios.length} candidate member radio(s) out of ${
+        memberRadios.length + ignoredRadios.length
+      } total <input type="radio"> element(s).`,
+      ...memberRadioDebugRows(memberRadios).map(
+        (row) =>
+          `member#${row.index}\tvalue=${JSON.stringify(row.value)}\tname=${JSON.stringify(row.name)}\tlabel=${JSON.stringify(row.label)}`,
+      ),
     ];
-    if (ignoredRows.length) {
+    if (ignoredRadios.length) {
       lines.push(
         "",
-        `Ignored ${ignoredRadios.length} non-member radio(s). These do not count as member choices:`,
-        ...ignoredRows.map(
-        (row) =>
-            `ignored#${row.index}\tvalue=${JSON.stringify(row.value)}\tname=${JSON.stringify(row.name)}\tid=${JSON.stringify(row.id)}\tchecked=${row.checked}\tdisabled=${row.disabled}\tform=${JSON.stringify(row.form)}\tlabel=${JSON.stringify(row.label)}`,
+        `Ignored ${ignoredRadios.length} non-member radio(s).`,
+        ...memberRadioDebugRows(ignoredRadios).map(
+          (row) =>
+            `ignored#${row.index}\tvalue=${JSON.stringify(row.value)}\tname=${JSON.stringify(row.name)}\tlabel=${JSON.stringify(row.label)}`,
         ),
       );
     }
-    lines.push(
-      "",
-      "Set CONFIG.member.memberId to a matching \"value\", or CONFIG.member.memberLabel to a substring of a \"label\".",
-    );
     return lines.join("\n");
   }
 
   function resolveMemberSelection(memberConfig) {
     const { memberRadios, ignoredRadios } = collectRadioGroups();
-    const debugRadios = () => memberRadioDebugRows(memberRadios);
     const hiddenMemberId =
       compactText(document.querySelector('input[name="member_id"]')?.value) ||
       compactText(document.querySelector('input[name="mid"]')?.value) ||
-      compactText(document.querySelector('#member_id')?.value);
+      compactText(document.querySelector("#member_id")?.value);
     if (memberConfig.memberId) {
       const radio = memberRadios.find(
         (candidate) =>
@@ -1156,17 +1237,16 @@
           compactText(candidate.getAttribute("data-member-id")) === memberConfig.memberId ||
           compactText(candidate.getAttribute("data-mid")) === memberConfig.memberId,
       );
-      if (!radio && hiddenMemberId && hiddenMemberId === memberConfig.memberId) {
+      if (!radio && hiddenMemberId === memberConfig.memberId) {
         return { ok: true, memberId: memberConfig.memberId, radio: null };
       }
-      if (!radio && (memberRadios.length > 0 || ignoredRadios.length > 0)) {
+      if (!radio && (memberRadios.length || ignoredRadios.length)) {
         return {
           ok: false,
           reason: [
-            `Configured member_id ${memberConfig.memberId} was not found on the booking page.`,
+            `Configured memberId ${memberConfig.memberId} was not found.`,
             memberRadioDebugSummary(memberRadios, ignoredRadios),
           ].join("\n\n"),
-          debugRadios: debugRadios(),
         };
       }
       return { ok: true, memberId: memberConfig.memberId, radio: radio ?? null };
@@ -1179,10 +1259,9 @@
         return {
           ok: false,
           reason: [
-            `Configured memberLabel ${memberConfig.memberLabel} was not found on the booking page.`,
+            `Configured memberLabel ${memberConfig.memberLabel} was not found.`,
             memberRadioDebugSummary(memberRadios, ignoredRadios),
           ].join("\n\n"),
-          debugRadios: debugRadios(),
         };
       }
       return { ok: true, memberId: compactText(radio.value), radio };
@@ -1198,19 +1277,15 @@
       return {
         ok: false,
         reason: [
-          "Booking page exposes multiple candidate member choices. Fill CONFIG.member.memberId or CONFIG.member.memberLabel first.",
+          "Multiple member candidates were found. Set memberId or memberLabel first.",
           memberRadioDebugSummary(memberRadios, ignoredRadios),
         ].join("\n\n"),
-        debugRadios: debugRadios(),
       };
     }
     if (hiddenMemberId) {
       return { ok: true, memberId: hiddenMemberId, radio: null };
     }
-    return {
-      ok: false,
-      reason: "Booking page does not expose a selectable member and no member_id is configured.",
-    };
+    return { ok: false, reason: "No member selection was found on this booking page." };
   }
 
   function fillBookingForm(formState, memberSelection) {
@@ -1218,12 +1293,9 @@
       const appointmentElement = formState.appointmentOptions.find(
         (option) => option.value === formState.appointmentValue,
       )?.element;
-      if (appointmentElement) {
-        clickElement(appointmentElement);
-      }
+      clickElement(appointmentElement);
     }
-
-    const hiddenSelectors = [
+    for (const selector of [
       'input[name="member_id"]',
       "#member_id",
       'input[name="memberId"]',
@@ -1232,33 +1304,27 @@
       "#mid",
       'input[name="his_mem_id"]',
       "#his_mem_id",
-    ];
-    for (const selector of hiddenSelectors) {
+    ]) {
       const input = document.querySelector(selector);
       if (input) {
         input.value = memberSelection.memberId;
       }
     }
-
     if (memberSelection.radio) {
       clickElement(memberSelection.radio);
     }
-
-    const diseaseSelectors = [
+    for (const selector of [
       'input[name="disease_input"]',
       "#disease_input",
       'textarea[name="disease_content"]',
       "#disease_content",
-    ];
-    for (const selector of diseaseSelectors) {
+    ]) {
       const input = document.querySelector(selector);
       if (input && !compactText(input.value)) {
         input.value = "11111111111111";
       }
     }
-
-    const acceptSelectors = ['input[name="accept"][value="1"]', "#check_yuyue_rule"];
-    for (const selector of acceptSelectors) {
+    for (const selector of ['input[name="accept"][value="1"]', "#check_yuyue_rule"]) {
       const input = document.querySelector(selector);
       if (input) {
         input.checked = true;
@@ -1276,7 +1342,7 @@
   }
 
   function triggerSubmitControl() {
-    const candidateSelectors = [
+    for (const selector of [
       "#suborder #submitbtn",
       "#submitbtn",
       "#submit_booking",
@@ -1290,8 +1356,7 @@
       "button.btn_submit",
       "button.sub-btn",
       "input.sub-btn",
-    ];
-    for (const selector of candidateSelectors) {
+    ]) {
       const element = document.querySelector(selector);
       if (isVisible(element)) {
         clickElement(element);
@@ -1340,220 +1405,267 @@
     return null;
   }
 
+  function visibleMessagesSnapshot() {
+    return Array.from(
+      document.querySelectorAll(
+        ".wrong,.warning,.import,.fine,.tips,.msg,.message,.error,.err,.layui-layer-content,.select-member-close,.select-vertifycode-close,.tip,.order-tit",
+      ),
+    )
+      .map((element) => compactText(element.textContent))
+      .filter(Boolean);
+  }
+
   function inspectBookingPage(beforeUrl) {
     const currentUrl = location.href;
-    const hasBookingForm = Boolean(document.querySelector("#suborder"));
+    const hasBookingForm = Boolean(document.querySelector("#suborder, form"));
     const hasSubmitButton = Boolean(
       document.querySelector(
-        "#suborder #submitbtn, #suborder input[type='submit'], #suborder button[type='submit']",
+        "#suborder #submitbtn, #suborder input[type='submit'], #suborder button[type='submit'], #submit_booking",
       ),
     );
-    const visibleMessages = createVisibleMessagesSnapshot();
-    const rateLimitMessage = extractRateLimitMessage(visibleMessages);
-    const leftBookingPage =
-      currentUrl !== beforeUrl && !currentUrl.includes("/guahao/ystep1/");
-    const success = leftBookingPage || (!hasBookingForm && !hasSubmitButton);
+    const visibleMessages = visibleMessagesSnapshot();
     return {
-      success,
+      success:
+        currentUrl !== beforeUrl && !currentUrl.includes("/guahao/ystep1/") ||
+        (!hasBookingForm && !hasSubmitButton),
       currentUrl,
       hasBookingForm,
       hasSubmitButton,
       visibleMessages,
-      rateLimitMessage,
+      rateLimitMessage: extractRateLimitMessage(visibleMessages),
     };
   }
 
-  function bookingFailureMessage(formState) {
-    if (formState.invalidReason === "no_appointment_options") {
-      return `Booking form for schedule ${formState.scheduleId} exposes no appointment time options.`;
-    }
-    if (formState.invalidReason === "hour_filter_mismatch") {
-      return `Booking form for schedule ${formState.scheduleId} has appointment times, but none match CONFIG.filters.hours.`;
-    }
-    if (formState.invalidReason === "missing_schedule_id") {
-      return "Booking form does not expose schedule_id.";
-    }
-    return `Booking form is invalid for schedule ${formState.scheduleId || "<missing>"}.`;
+  function isLoginExpiredPage() {
+    const text = compactText(document.body?.innerText ?? "");
+    return (
+      location.href.includes("/login.html") ||
+      text.includes("请登录") ||
+      text.includes("登录后查看")
+    );
   }
 
   function navigateToDoctorPage(target) {
     if (!isCompleteTarget(target)) {
-      setStatus(
-        "error",
-        "Cannot return to the doctor page automatically.",
-        "doctorId/unitId/depId is incomplete.",
-      );
+      setSummary("error", "Cannot return to doctor page; target is incomplete.", target);
+      patchState((state) => ({ ...state, running: false }));
       return;
     }
     location.replace(buildDoctorUrl(target));
   }
 
-  async function handleBookingFailure(target, formState, attempt, maxAttempts, reason, delayConfig) {
-    const nextAttempt = attempt + 1;
-    if (formState?.scheduleId) {
-      recordSlotAttempts(formState.scheduleId, nextAttempt);
-    }
-    if (nextAttempt >= maxAttempts || formState?.invalidReason === "hour_filter_mismatch" || formState?.invalidReason === "no_appointment_options") {
-      clearPendingBooking();
-      setStatus(
-        "warn",
-        `Booking failed for schedule ${formState?.scheduleId || "<missing>"}. Returning to the doctor page.`,
-        reason,
-      );
-      await sleepMs(pickDelayMs(CONFIG.pacing.bookingRetryMs));
-      navigateToDoctorPage(target);
+  function startRun() {
+    const controllerId = prepareManualControllerStart("doctor");
+    if (!controllerId) {
       return;
     }
-    schedulePendingBooking(target, formState.scheduleId, nextAttempt);
-    const delayMs = pickDelayMs(delayConfig);
-    setStatus(
-      "warn",
-      `Booking attempt ${nextAttempt} failed. Retrying in ${delayMs} ms.`,
-      reason,
-    );
-    await sleepMs(delayMs);
-    location.replace(buildBookingUrl(target, formState.scheduleId));
+    setSummary("info", "Started.", "");
+    bootstrapController(controllerId);
   }
 
-  async function runDoctorPageController() {
-    const configuredTarget = normalizeDoctorTargetConfig(CONFIG.target);
-    const filters = normalizeFilters(CONFIG.filters);
-    const snapshot = snapshotCurrentDoctorPage();
-    const resolved = resolveTargetFromSnapshot(snapshot, configuredTarget);
+  function stopRun(reason = "Stopped.") {
+    activeControllerId = null;
+    patchState((state) => ({
+      ...state,
+      running: false,
+      controllerId: null,
+      pendingBooking: null,
+    }));
+    setSummary("info", reason, "");
+  }
+
+  function isStartAtReady(settings) {
+    if (!settings.runtime.startAt) {
+      return true;
+    }
+    return Date.now() >= Date.parse(settings.runtime.startAt);
+  }
+
+  async function waitUntilStartAt(settings, controllerId) {
+    while (isControllerActive(controllerId) && !isStartAtReady(settings)) {
+      const remaining = Math.max(0, Date.parse(settings.runtime.startAt) - Date.now());
+      setSummary("info", "Waiting for configured start time.", `${Math.ceil(remaining / 1000)}s`);
+      await sleepMs(Math.min(5000, remaining || 1000));
+    }
+  }
+
+  async function recoverSession(target, reason, settings) {
+    if (!settings.session.recoveryEnabled) {
+      stopRun(`Session recovery disabled: ${reason}`);
+      return false;
+    }
+    const state = readState();
+    if (state.sessionRecoveryAttempts >= settings.session.recoveryMaxAttempts) {
+      stopRun(`Login expired, manual login required: ${reason}`);
+      return false;
+    }
+    const delayMs = pickDelayMs(settings.session.recoveryCooldownMs);
+    patchState((next) => ({
+      ...next,
+      running: true,
+      pendingBooking: null,
+      sessionRecoveryAttempts: next.sessionRecoveryAttempts + 1,
+    }));
+    setSummary(
+      "warn",
+      "Session looks expired. Refreshing doctor page before retrying.",
+      `${reason}; attempt ${state.sessionRecoveryAttempts + 1}; delay ${delayMs} ms`,
+    );
+    await sleepMs(delayMs);
+    navigateToDoctorPage(target);
+    return true;
+  }
+
+  async function runDoctorPageController(controllerId) {
+    const settings = readSettings();
+    const state = readState();
+    if (!isControllerActive(controllerId)) {
+      if (!state.running) {
+        setSummary("info", "Ready. Press Start to poll this doctor page.", "");
+      }
+      return;
+    }
+    if (!state.running) {
+      setSummary("info", "Ready. Press Start to poll this doctor page.", "");
+      return;
+    }
+
+    const resolved = resolveTargetFromSnapshot(
+      snapshotCurrentDoctorPage(),
+      settings.target,
+    );
     if (!resolved.ok) {
-      setStatus("error", "Userscript could not resolve the current doctor page target.", resolved.reason);
+      stopRun(`Doctor target resolution failed: ${resolved.reason}`);
       return;
     }
     const target = resolved.target;
-    if (configuredTarget && !areTargetsCompatible(configuredTarget, target)) {
-      setStatus(
-        "error",
-        "Current doctor page does not match CONFIG.target.",
-        JSON.stringify({ configuredTarget, target }),
-      );
-      return;
-    }
-    rememberTarget(target);
+    patchState((next) => ({ ...next, lastTarget: target }));
 
     const canonicalUrl = buildDoctorUrl(target);
     if (canonicalUrl !== `${location.origin}${location.pathname}`) {
-      setStatus(
-        "info",
-        "Redirecting to the canonical doctor page before polling.",
-        canonicalUrl,
-      );
+      setSummary("info", "Redirecting to canonical doctor page.", canonicalUrl);
       location.replace(canonicalUrl);
       return;
     }
 
-    if (!findCurrentUserKey()) {
-      setStatus(
-        "warn",
-        "Current page cannot read _user_key. Re-login and refresh this doctor page first.",
-        buildDoctorUrl(target),
-      );
-      return;
-    }
+    await waitUntilStartAt(settings, controllerId);
 
-    let attempt = 0;
-    while (true) {
-      attempt += 1;
+    while (isControllerActive(controllerId)) {
       if (!findCurrentUserKey()) {
-        setStatus(
-          "warn",
-          "Current page lost _user_key during polling. Re-login and refresh this doctor page first.",
-          "",
-        );
+        await recoverSession(target, "missing _user_key/access_hash", readSettings());
         return;
       }
 
+      const activeSettings = readSettings();
       let payload;
       try {
-        payload = await fetchDoctorSchedule(target);
+        payload = await fetchDoctorSchedule(target, activeSettings);
       } catch (error) {
-        setStatus("warn", `Doctor page polling request failed on attempt ${attempt}.`, error.message);
-        await sleepMs(pickDelayMs(CONFIG.pacing.pollMs));
+        if (!isControllerActive(controllerId)) {
+          return;
+        }
+        setSummary("warn", "Schedule polling request failed.", error.message);
+        await sleepMs(pickDelayMs(activeSettings.pacing.pollMs));
         continue;
       }
-
-      if (String(payload?.error_code ?? "") === "10021" || compactText(payload?.error_msg).includes("请登录后查看医生号源")) {
-        setStatus(
-          "warn",
-          "Current session is not allowed to query schedules. Re-login and refresh this doctor page first.",
-          compactText(payload?.error_msg),
-        );
+      if (!isControllerActive(controllerId)) {
         return;
       }
+
+      if (
+        String(payload?.error_code ?? "") === "10021" ||
+        compactText(payload?.error_msg).includes("请登录后查看医生号源")
+      ) {
+        await recoverSession(target, compactText(payload?.error_msg), activeSettings);
+        return;
+      }
+
+      patchState((next) => ({
+        ...next,
+        pollAttempt: next.pollAttempt + 1,
+        sessionRecoveryAttempts: 0,
+        lastKeepAliveAt: Date.now(),
+      }));
 
       const rateLimitMessage = extractRateLimitMessage(payload);
       if (rateLimitMessage) {
-        const cooldownMs = pickDelayMs(CONFIG.pacing.rateLimitCooldownMs);
-        setStatus(
-          "warn",
-          `Doctor page polling hit rate limiting. Cooling down for ${cooldownMs} ms.`,
-          rateLimitMessage,
-        );
+        const cooldownMs = pickDelayMs(activeSettings.pacing.rateLimitCooldownMs);
+        setSummary("warn", "Schedule polling hit rate limiting.", `${cooldownMs} ms`);
         await sleepMs(cooldownMs);
         continue;
       }
 
-      const slots = filterSlots(parseDoctorSchedulePayload(payload, target), target, filters);
-      const nextSlot = pickNextSlot(slots, readState().slotAttempts, CONFIG.booking.maxAttemptsPerSlot);
+      const slots = filterSlots(
+        parseDoctorSchedulePayload(payload, target),
+        target,
+        activeSettings.filters,
+      );
+      const nextSlot = pickNextSlot(slots);
       if (nextSlot) {
-        schedulePendingBooking(target, nextSlot.scheduleId, 0);
-        setStatus(
-          "success",
-          `Matched slot ${nextSlot.scheduleId}. Jumping to booking page.`,
-          compactText(
-            `${nextSlot.date} ${nextSlot.dayPeriod} ${nextSlot.timeRange}`.trim(),
-          ),
+        patchState((next) => ({
+          ...next,
+          pendingBooking: {
+            unitId: target.unitId,
+            depId: target.depId,
+            doctorId: target.doctorId,
+            scheduleId: nextSlot.scheduleId,
+          },
+        }));
+        setSummary(
+          "info",
+          `Matched slot ${nextSlot.scheduleId}; opening booking page.`,
+          compactText(`${nextSlot.date} ${nextSlot.dayPeriod} ${nextSlot.timeRange}`),
         );
-        await sleepMs(pickDelayMs(CONFIG.pacing.pageActionMs));
+        await sleepMs(pickDelayMs(activeSettings.pacing.pageActionMs));
         location.replace(buildBookingUrl(target, nextSlot.scheduleId));
         return;
       }
 
-      setStatus(
-        "info",
-        `Doctor page polling attempt ${attempt} found ${slots.length} matching slot(s), but none are ready to book yet.`,
-        JSON.stringify({
-          target,
-          weeks: filters.weeks,
-          days: filters.days,
-          hours: filters.hours,
-        }),
-      );
-      await sleepMs(pickDelayMs(CONFIG.pacing.pollMs));
+      setSummary("debug", "No bookable matching slot yet.", {
+        target,
+        filters: activeSettings.filters,
+      });
+      refreshPanel();
+      await sleepMs(pickDelayMs(activeSettings.pacing.pollMs));
     }
   }
 
-  async function runBookingPageController() {
+  async function returnToDoctorAfterCurrentAttempt(target, message, delayConfig) {
+    const delayMs = pickDelayMs(delayConfig);
+    setSummary("warn", message, `Returning to doctor page in ${delayMs} ms.`);
+    await sleepMs(delayMs);
+    navigateToDoctorPage(target);
+  }
+
+  async function runBookingPageController(controllerId) {
+    const settings = readSettings();
     const bookingTarget = parseBookingUrl(location.href);
+    const state = readState();
     if (!bookingTarget) {
-      setStatus("error", "Current booking page URL is unsupported.", location.href);
+      stopRun("Unsupported booking page URL.");
       return;
     }
-    const state = readState();
-    const memberConfig = normalizeMemberConfig(CONFIG.member);
-    const filters = normalizeFilters(CONFIG.filters);
-    const doctorTarget = {
+    const target = {
       unitId: bookingTarget.unitId,
       depId: bookingTarget.depId,
       doctorId:
         normalizeOptionalValue(state.pendingBooking?.doctorId) ??
         normalizeOptionalValue(state.lastTarget?.doctorId) ??
-        normalizeOptionalValue(CONFIG.target?.doctorId),
+        normalizeOptionalValue(settings.target.doctorId),
     };
-
-    const existingPending = state.pendingBooking;
-    const attempt = Number(existingPending?.attempt ?? 0);
-    if (
-      !existingPending ||
-      existingPending.scheduleId !== bookingTarget.scheduleId ||
-      existingPending.unitId !== bookingTarget.unitId ||
-      existingPending.depId !== bookingTarget.depId
-    ) {
-      schedulePendingBooking(doctorTarget, bookingTarget.scheduleId, 0);
+    if (!isControllerActive(controllerId)) {
+      if (!state.running) {
+        setSummary("info", "Booking page loaded while runner is stopped.", "");
+      }
+      return;
+    }
+    if (!state.running) {
+      setSummary("info", "Booking page loaded while runner is stopped.", "");
+      return;
+    }
+    if (isLoginExpiredPage()) {
+      await recoverSession(target, "booking page requires login", settings);
+      return;
     }
 
     const rateLimitOnLoad = extractRateLimitMessage([
@@ -1561,80 +1673,74 @@
       document.documentElement?.outerHTML ?? "",
     ]);
     if (rateLimitOnLoad) {
-      await handleBookingFailure(
-        doctorTarget,
-        { scheduleId: bookingTarget.scheduleId, invalidReason: null },
-        attempt,
-        CONFIG.booking.maxAttemptsPerSlot,
-        rateLimitOnLoad,
-        CONFIG.pacing.rateLimitCooldownMs,
+      await returnToDoctorAfterCurrentAttempt(
+        target,
+        `Booking page hit rate limiting: ${rateLimitOnLoad}`,
+        settings.pacing.rateLimitCooldownMs,
       );
       return;
     }
 
-    const memberSelection = resolveMemberSelection(memberConfig);
+    const memberSelection = resolveMemberSelection(settings.member);
     if (!memberSelection.ok) {
-      if (memberSelection.debugRadios?.length) {
-        console.warn("[160Grab Poller] Booking page radios (member resolution)", memberSelection.debugRadios);
-        console.table(memberSelection.debugRadios);
-      }
-      setStatus("warn", "Booking page is waiting for a clearer member selection.", memberSelection.reason);
+      stopRun(`Member selection failed: ${memberSelection.reason}`);
       return;
     }
 
-    const formState = parseBookingFormState(filters, bookingTarget.scheduleId);
+    const formState = parseBookingFormState(settings.filters, bookingTarget.scheduleId);
     if (!formState.isValid) {
-      await handleBookingFailure(
-        doctorTarget,
-        formState,
-        attempt,
-        CONFIG.booking.maxAttemptsPerSlot,
-        bookingFailureMessage(formState),
-        CONFIG.pacing.bookingRetryMs,
+      await returnToDoctorAfterCurrentAttempt(
+        target,
+        `Booking form invalid: ${formState.invalidReason}`,
+        settings.pacing.bookingRetryMs,
       );
       return;
     }
 
-    if (!CONFIG.booking.autoSubmit) {
-      fillBookingForm(formState, memberSelection);
-      setStatus(
+    const attempts = getSubmitAttempts(formState.scheduleId, formState.appointmentValue);
+    if (attempts >= settings.booking.maxSubmitAttemptsPerAppointment) {
+      stopRun(
+        `Submit attempts exhausted for ${formState.scheduleId}/${formState.appointmentValue}.`,
+      );
+      return;
+    }
+
+    fillBookingForm(formState, memberSelection);
+    if (!settings.booking.autoSubmit) {
+      patchState((next) => ({ ...next, running: false, pendingBooking: null }));
+      setSummary(
         "info",
-        "Booking form is prepared. autoSubmit is disabled, waiting for manual confirmation.",
-        JSON.stringify({
+        "Booking form prepared; waiting for manual submit.",
+        {
           scheduleId: formState.scheduleId,
+          appointmentValue: formState.appointmentValue,
           appointmentLabel: formState.appointmentLabel,
           memberId: memberSelection.memberId,
-        }),
+        },
       );
+      renderPanel();
       return;
     }
 
-    await sleepMs(pickDelayMs(CONFIG.pacing.pageActionMs));
-    fillBookingForm(formState, memberSelection);
-
+    await sleepMs(pickDelayMs(settings.pacing.pageActionMs));
     const beforeUrl = location.href;
-    await sleepMs(pickDelayMs(CONFIG.pacing.pageActionMs));
     const submitResult = triggerSubmitControl();
     if (submitResult.method === "not-found") {
-      await handleBookingFailure(
-        doctorTarget,
-        formState,
-        attempt,
-        CONFIG.booking.maxAttemptsPerSlot,
-        "Could not find a submit control on the booking page.",
-        CONFIG.pacing.bookingRetryMs,
-      );
+      stopRun("Could not find a submit control on the booking page.");
       return;
     }
-
+    const attemptCount = recordSubmitAttempt(
+      formState.scheduleId,
+      formState.appointmentValue,
+    );
+    setSummary("info", "Submitted booking form.", { submitResult, attemptCount });
     const followupAction = await clickFollowupControl();
     if (followupAction) {
-      setStatus("info", `Booking page triggered follow-up action ${followupAction}.`, "");
+      appendLog("info", `Triggered follow-up action ${followupAction}.`);
     }
 
-    const checkpoints = [400, 900, 1600, 2400];
     let inspection = inspectBookingPage(beforeUrl);
-    for (const checkpoint of checkpoints) {
+    for (const checkpoint of [400, 900, 1600, 2400]) {
       if (inspection.success || inspection.rateLimitMessage) {
         break;
       }
@@ -1643,78 +1749,495 @@
     }
 
     if (inspection.success) {
-      clearPendingBooking();
-      recordSlotAttempts(formState.scheduleId, CONFIG.booking.maxAttemptsPerSlot);
-      setStatus(
-        "success",
-        `Booking succeeded for schedule ${formState.scheduleId}.`,
-        compactText(formState.appointmentLabel || inspection.currentUrl),
-      );
+      patchState((next) => ({ ...next, running: false, pendingBooking: null }));
+      setSummary("info", `Booking succeeded for schedule ${formState.scheduleId}.`, {
+        appointmentLabel: formState.appointmentLabel,
+        url: inspection.currentUrl,
+      });
+      renderPanel();
       return;
     }
 
-    await handleBookingFailure(
-      doctorTarget,
-      formState,
-      attempt,
-      CONFIG.booking.maxAttemptsPerSlot,
+    const reason =
       inspection.rateLimitMessage ||
-        inspection.visibleMessages.join(" | ") ||
-        `Booking page stayed on ${inspection.currentUrl}`,
+      inspection.visibleMessages.join(" | ") ||
+      `Booking page stayed on ${inspection.currentUrl}`;
+    if (!settings.booking.autoReturnAfterSubmitFailure) {
+      patchState((next) => ({ ...next, running: false }));
+      setSummary("warn", "Booking submit failed; staying on page.", reason);
+      renderPanel();
+      return;
+    }
+    await returnToDoctorAfterCurrentAttempt(
+      target,
+      `Booking submit failed: ${reason}`,
       inspection.rateLimitMessage
-        ? CONFIG.pacing.rateLimitCooldownMs
-        : CONFIG.pacing.bookingRetryMs,
+        ? settings.pacing.rateLimitCooldownMs
+        : settings.pacing.bookingRetryMs,
     );
   }
 
-  async function bootstrap() {
+  function normalizePanelPosition(position) {
+    const left = Number(position?.left);
+    const top = Number(position?.top);
+    return Number.isFinite(left) && Number.isFinite(top)
+      ? { left: Math.round(left), top: Math.round(top) }
+      : null;
+  }
+
+  function readPanelPosition() {
+    try {
+      return normalizePanelPosition(
+        JSON.parse(globalThis.localStorage?.getItem(PANEL_POSITION_KEY) ?? "null"),
+      );
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function writePanelPosition(position) {
+    const normalized = normalizePanelPosition(position);
+    if (normalized) {
+      globalThis.localStorage?.setItem(PANEL_POSITION_KEY, JSON.stringify(normalized));
+    }
+  }
+
+  function applyPanelPosition(panel, position) {
+    const normalized = normalizePanelPosition(position);
+    if (!normalized) {
+      panel.style.top = "16px";
+      panel.style.right = "16px";
+      panel.style.left = "auto";
+      return;
+    }
+    panel.style.left = `${Math.max(8, normalized.left)}px`;
+    panel.style.top = `${Math.max(8, normalized.top)}px`;
+    panel.style.right = "auto";
+  }
+
+  function installPanelDragging(panel, title) {
+    if (!panel || !title || title.dataset.dragInstalled === "1") {
+      return;
+    }
+    title.dataset.dragInstalled = "1";
+    title.style.cursor = "move";
+    let drag = null;
+    title.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      const rect = panel.getBoundingClientRect();
+      drag = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+      };
+      title.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+    });
+    title.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      applyPanelPosition(panel, {
+        left: drag.left + event.clientX - drag.startX,
+        top: drag.top + event.clientY - drag.startY,
+      });
+      event.preventDefault();
+    });
+    const finish = () => {
+      if (!drag) return;
+      const rect = panel.getBoundingClientRect();
+      writePanelPosition({ left: rect.left, top: rect.top });
+      drag = null;
+    };
+    title.addEventListener("pointerup", finish);
+    title.addEventListener("pointercancel", finish);
+    title.addEventListener("lostpointercapture", finish);
+  }
+
+  function createPanel() {
+    let panel = document.getElementById(PANEL_ID);
+    if (panel) {
+      return panel;
+    }
+    panel = document.createElement("div");
+    panel.id = PANEL_ID;
+    panel.innerHTML = `
+      <div class="grab160-title">160Grab</div>
+      <div class="grab160-body"></div>
+    `;
+    Object.assign(panel.style, {
+      position: "fixed",
+      zIndex: "999999",
+      width: "360px",
+      maxHeight: "82vh",
+      overflow: "auto",
+      padding: "12px",
+      borderRadius: "8px",
+      boxShadow: "0 8px 28px rgba(0,0,0,0.18)",
+      background: "rgba(17,24,39,0.94)",
+      color: "#f3f4f6",
+      fontSize: "13px",
+      lineHeight: "1.45",
+      fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+    });
+    const style = document.createElement("style");
+    style.textContent = `
+      #${PANEL_ID}, #${PANEL_ID} * {
+        box-sizing: border-box;
+      }
+      #${PANEL_ID} button, #${PANEL_ID} input, #${PANEL_ID} select {
+        font: inherit;
+      }
+      #${PANEL_ID} button {
+        appearance: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08);
+        color: #f9fafb;
+        border-radius: 6px;
+        padding: 5px 8px;
+        cursor: pointer;
+      }
+      #${PANEL_ID} button:hover { background: rgba(255,255,255,.16); }
+      #${PANEL_ID} input, #${PANEL_ID} select {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid rgba(255,255,255,.18);
+        border-radius: 6px;
+        padding: 5px 7px;
+        background: rgba(255,255,255,.1);
+        color: #f9fafb;
+      }
+      #${PANEL_ID} label { display: block; margin-top: 8px; color: #d1d5db; }
+      #${PANEL_ID} .grab160-title { font-weight: 700; margin-bottom: 8px; user-select: none; }
+      #${PANEL_ID} .grab160-row { display: flex; gap: 6px; align-items: center; }
+      #${PANEL_ID} .grab160-row > * { flex: 1; min-width: 0; }
+      #${PANEL_ID} .grab160-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+      #${PANEL_ID} .grab160-muted { color: #9ca3af; }
+      #${PANEL_ID} .grab160-status {
+        display: inline;
+        position: static;
+        width: auto;
+        height: auto;
+        padding: 0;
+        margin: 0;
+        line-height: inherit;
+        pointer-events: none;
+      }
+      #${PANEL_ID} .grab160-status-warn { color: #fcd34d; }
+      #${PANEL_ID} .grab160-status-error { color: #fca5a5; }
+      #${PANEL_ID} .grab160-status-success { color: #86efac; }
+      #${PANEL_ID} .grab160-log { white-space: pre-wrap; border-top: 1px solid rgba(255,255,255,.12); padding-top: 6px; margin-top: 6px; }
+    `;
+    document.documentElement.appendChild(style);
+    document.documentElement.appendChild(panel);
+    applyPanelPosition(panel, readPanelPosition());
+    installPanelDragging(panel, panel.querySelector(".grab160-title"));
+    return panel;
+  }
+
+  function htmlEscape(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderPanel() {
+    const panel = createPanel();
+    const body = panel.querySelector(".grab160-body");
+    const state = readState();
+    const settings = readSettings();
+    const summary = state.summary;
+    const autoSubmitText = settings.booking.autoSubmit ? "ON" : "off";
+    body.innerHTML = `
+      <div class="grab160-buttons">
+        <button type="button" data-action="start">${state.running ? "Restart" : "Start"}</button>
+        <button type="button" data-action="stop">Stop</button>
+        <button type="button" data-action="settings">Settings</button>
+        <button type="button" data-action="logs">Logs</button>
+        <button type="button" data-action="reset-state">Reset State</button>
+      </div>
+      <div>Status: <span class="grab160-status ${statusClassName(summary)}" data-panel-summary-message>${htmlEscape(summary?.message ?? "Ready")}</span></div>
+      <div class="grab160-muted" data-panel-summary-detail>${htmlEscape(summary?.detail ?? "")}</div>
+      <div class="grab160-muted" data-panel-running>running=${state.running ? "yes" : "no"} · autoSubmit=${autoSubmitText} · attempts=${state.pollAttempt}</div>
+      <div class="grab160-muted" data-panel-target>doctor=${htmlEscape(panelDoctorText(state))}</div>
+      ${state.activeView === "settings" ? renderSettingsView(settings) : ""}
+      ${state.activeView === "logs" ? renderLogsView(state, settings) : ""}
+    `;
+    body.querySelector('[data-action="start"]')?.addEventListener("click", startRun);
+    body.querySelector('[data-action="stop"]')?.addEventListener("click", () => stopRun());
+    body
+      .querySelector('[data-action="settings"]')
+      ?.addEventListener("click", () => setActiveView("settings"));
+    body.querySelector('[data-action="logs"]')?.addEventListener("click", () => setActiveView("logs"));
+    body
+      .querySelector('[data-action="reset-state"]')
+      ?.addEventListener("click", resetRuntimeState);
+    if (state.activeView === "settings") {
+      wireSettingsView(body, settings);
+    }
+  }
+
+  function renderSettingsView(settings) {
+    const hourRows =
+      settings.filters.hours.length > 0 ? settings.filters.hours : ["08:00-09:00"];
+    return `
+      <div class="grab160-log" data-settings-view>
+        <label>Member ID <input data-setting="member.memberId" type="password" value="${htmlEscape(settings.member.memberId ?? "")}"></label>
+        <label><input data-setting="member.show" type="checkbox" style="width:auto"> Show member ID</label>
+        <label>Member Label <input data-setting="member.memberLabel" value="${htmlEscape(settings.member.memberLabel ?? "")}"></label>
+        <label>Start At <input data-setting="runtime.startAt" type="datetime-local" value="${htmlEscape(settings.runtime.startAt ?? "")}"></label>
+        <label>Appointment From <input data-setting="filters.startDate" type="date" value="${htmlEscape(settings.filters.startDate ?? "")}"></label>
+        <div class="grab160-row">${[1, 2, 3, 4, 5, 6, 7]
+          .map(
+            (day) =>
+              `<label><input data-week="${day}" type="checkbox" style="width:auto" ${
+                settings.filters.weeks.includes(day) ? "checked" : ""
+              }> 周${"一二三四五六日"[day - 1]}</label>`,
+          )
+          .join("")}</div>
+        <div class="grab160-row">${["am", "pm", "em"]
+          .map(
+            (day) =>
+              `<label><input data-period="${day}" type="checkbox" style="width:auto" ${
+                settings.filters.days.includes(day) ? "checked" : ""
+              }> ${day}</label>`,
+          )
+          .join("")}</div>
+        <label>Hours</label>
+        <div data-hours>${hourRows
+          .map((range) => {
+            const [start, end] = range.split("-");
+            return `<div class="grab160-row" data-hour-row><input type="time" step="1800" value="${htmlEscape(start)}"><input type="time" step="1800" value="${htmlEscape(end)}"><button type="button" data-remove-hour>Delete</button></div>`;
+          })
+          .join("")}</div>
+        <button type="button" data-add-hour>Add Time Range</button>
+        <div class="grab160-row">
+          ${renderRangeInputs("Poll", "pacing.pollMs", settings.pacing.pollMs, 3000)}
+          ${renderRangeInputs("Action", "pacing.pageActionMs", settings.pacing.pageActionMs)}
+        </div>
+        <div class="grab160-row">
+          ${renderRangeInputs("Retry", "pacing.bookingRetryMs", settings.pacing.bookingRetryMs, 1000)}
+          ${renderRangeInputs("Rate Limit", "pacing.rateLimitCooldownMs", settings.pacing.rateLimitCooldownMs, 15000)}
+        </div>
+        <label><input data-setting="booking.autoSubmit" type="checkbox" style="width:auto" ${
+          settings.booking.autoSubmit ? "checked" : ""
+        }> Auto Submit</label>
+        <label><input data-setting="booking.autoReturnAfterSubmitFailure" type="checkbox" style="width:auto" ${
+          settings.booking.autoReturnAfterSubmitFailure ? "checked" : ""
+        }> Auto return after submit failure</label>
+        <label>Max submit attempts <input data-setting="booking.maxSubmitAttemptsPerAppointment" type="number" min="1" max="20" value="${settings.booking.maxSubmitAttemptsPerAppointment}"></label>
+        <label><input data-setting="session.recoveryEnabled" type="checkbox" style="width:auto" ${
+          settings.session.recoveryEnabled ? "checked" : ""
+        }> Session Recovery</label>
+        <label>Keepalive seconds <input data-setting="session.keepAliveIntervalSeconds" type="number" min="0" value="${settings.session.keepAliveIntervalSeconds}"></label>
+        <label>Recovery max attempts <input data-setting="session.recoveryMaxAttempts" type="number" min="0" value="${settings.session.recoveryMaxAttempts}"></label>
+        <label>Log Level <select data-setting="logging.level">${LOG_LEVELS.map(
+          (level) =>
+            `<option value="${level}" ${level === settings.logging.level ? "selected" : ""}>${level}</option>`,
+        ).join("")}</select></label>
+        <div class="grab160-buttons">
+          <button type="button" data-save-settings>Save Settings</button>
+          <button type="button" data-reset-settings>Reset Settings</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderRangeInputs(label, path, value, min = 0) {
+    return `<label>${label} min/max ms <span class="grab160-row"><input data-range="${path}" data-range-index="0" type="number" min="${min}" value="${value[0]}"><input data-range="${path}" data-range-index="1" type="number" min="${min}" value="${value[1]}"></span></label>`;
+  }
+
+  function renderLogsView(state, settings) {
+    const logs = (state.logs ?? []).filter((entry) => shouldLog(entry.level, settings));
+    return `<div class="grab160-log">${logs
+      .map(
+        (entry) =>
+          `[${entry.ts}] ${entry.level.toUpperCase()} ${htmlEscape(entry.message)} ${htmlEscape(entry.detail)}`,
+      )
+      .join("\n")}</div>`;
+  }
+
+  function setByPath(target, path, value) {
+    const parts = path.split(".");
+    let cursor = target;
+    for (const part of parts.slice(0, -1)) {
+      cursor[part] = cursor[part] ?? {};
+      cursor = cursor[part];
+    }
+    cursor[parts[parts.length - 1]] = value;
+  }
+
+  function readSettingInput(container, path, fallback = "") {
+    const input = container.querySelector(`[data-setting="${path}"]`);
+    if (!input) {
+      return fallback;
+    }
+    if (input.type === "checkbox") {
+      return input.checked;
+    }
+    return input.value;
+  }
+
+  function collectSettingsFromPanel(container, previous) {
+    const next = clone(previous);
+    for (const path of [
+      "member.memberId",
+      "member.memberLabel",
+      "filters.startDate",
+      "runtime.startAt",
+      "booking.autoSubmit",
+      "booking.autoReturnAfterSubmitFailure",
+      "booking.maxSubmitAttemptsPerAppointment",
+      "session.recoveryEnabled",
+      "session.keepAliveIntervalSeconds",
+      "session.recoveryMaxAttempts",
+      "logging.level",
+    ]) {
+      setByPath(next, path, readSettingInput(container, path));
+    }
+    next.filters.weeks = Array.from(container.querySelectorAll("[data-week]:checked")).map(
+      (input) => Number(input.dataset.week),
+    );
+    next.filters.days = Array.from(container.querySelectorAll("[data-period]:checked")).map(
+      (input) => input.dataset.period,
+    );
+    next.filters.hours = Array.from(container.querySelectorAll("[data-hour-row]"))
+      .map((row) => {
+        const inputs = row.querySelectorAll("input");
+        return `${inputs[0].value}-${inputs[1].value}`;
+      })
+      .filter((value) => value !== "-");
+    for (const path of [
+      "pacing.pollMs",
+      "pacing.pageActionMs",
+      "pacing.bookingRetryMs",
+      "pacing.rateLimitCooldownMs",
+    ]) {
+      const values = Array.from(container.querySelectorAll(`[data-range="${path}"]`))
+        .sort((a, b) => Number(a.dataset.rangeIndex) - Number(b.dataset.rangeIndex))
+        .map((input) => Number(input.value));
+      setByPath(next, path, values);
+    }
+    return normalizeSettings(next);
+  }
+
+  function wireSettingsView(body, settings) {
+    const memberInput = body.querySelector('[data-setting="member.memberId"]');
+    body.querySelector('[data-setting="member.show"]')?.addEventListener("change", (event) => {
+      memberInput.type = event.target.checked ? "text" : "password";
+    });
+    body.querySelector("[data-add-hour]")?.addEventListener("click", () => {
+      const hours = body.querySelector("[data-hours]");
+      const row = document.createElement("div");
+      row.className = "grab160-row";
+      row.dataset.hourRow = "1";
+      row.innerHTML =
+        '<input type="time" step="1800" value="08:00"><input type="time" step="1800" value="09:00"><button type="button" data-remove-hour>Delete</button>';
+      hours.appendChild(row);
+      row.querySelector("[data-remove-hour]").addEventListener("click", () => row.remove());
+    });
+    body.querySelectorAll("[data-remove-hour]").forEach((button) => {
+      button.addEventListener("click", () => button.closest("[data-hour-row]")?.remove());
+    });
+    body.querySelector("[data-save-settings]")?.addEventListener("click", () => {
+      try {
+        const next = collectSettingsFromPanel(body, settings);
+        if (next.booking.autoSubmit && !settings.booking.autoSubmit) {
+          const confirmed = globalThis.confirm?.(
+            "autoSubmit will click the final booking submit control automatically. Continue?",
+          );
+          if (!confirmed) {
+            return;
+          }
+        }
+        writeSettings(next);
+        setSummary("info", "Settings saved.", "", { force: true });
+      } catch (error) {
+        setSummary("error", "Settings validation failed.", error.message);
+      }
+    });
+    body.querySelector("[data-reset-settings]")?.addEventListener("click", () => {
+      resetSettings();
+      setSummary("info", "Settings reset to defaults.", "", { force: true });
+    });
+  }
+
+  function bootstrapController(controllerId = null) {
+    renderPanel();
     const doctorTarget = parseDoctorPageUrl(location.href);
     if (doctorTarget) {
-      await runDoctorPageController();
+      const claimedControllerId = controllerId || claimPageController("doctor");
+      if (!claimedControllerId) {
+        return;
+      }
+      void runDoctorPageController(claimedControllerId).catch((error) => {
+        stopRun(`Userscript crashed: ${error?.message || error}`);
+      });
       return;
     }
-
     const bookingTarget = parseBookingUrl(location.href);
     if (bookingTarget) {
-      await runBookingPageController();
+      const claimedControllerId = controllerId || claimPageController("booking");
+      if (!claimedControllerId) {
+        return;
+      }
+      void runBookingPageController(claimedControllerId).catch((error) => {
+        stopRun(`Userscript crashed: ${error?.message || error}`);
+      });
       return;
     }
-
-    setStatus(
+    setSummary(
       "warn",
-      "Userscript only supports 91160 doctor detail pages and their derived ystep1 booking pages.",
+      "This userscript only supports 91160 doctor detail and ystep1 pages.",
       location.href,
     );
   }
 
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
-    CONFIG,
+    CONFIG_DEFAULTS,
+    SETTINGS_KEY,
+    STATE_KEY,
     normalizeOptionalValue,
-    normalizeDoctorTargetConfig,
-    normalizeFilters,
+    normalizeSettings,
+    normalizeHourValue,
+    normalizeHours,
+    readCookieValue,
+    resolveCurrentUserKey,
+    findCurrentUserKey,
+    buildUrlWithParams,
+    fetchJsonInsidePage,
+    makeControllerId,
+    isControllerActive,
+    claimPageController,
+    prepareManualControllerStart,
     parseDoctorPageUrl,
     parseBookingUrl,
     buildDoctorUrl,
     buildBookingUrl,
     resolveTargetFromSnapshot,
-    normalizeHourValue,
     parseDoctorSchedulePayload,
     filterSlots,
+    pickNextSlot,
     extractRateLimitMessage,
     chooseAppointmentOption,
-    pickNextSlot,
-    normalizePanelPosition,
-    clampPanelPosition,
-    findMemberRadios,
+    appointmentKey,
+    parseBookingFormState,
     resolveMemberSelection,
     memberRadioDebugSummary,
+    inspectBookingPage,
   };
 
   if (DISABLE_AUTO_START) {
     return;
   }
 
-  void bootstrap().catch((error) => {
-    setStatus("error", "Userscript crashed.", error?.stack || error?.message || String(error));
-  });
+  if (readSettings().runtime.autoStart && !readState().running) {
+    patchState((state) => ({ ...state, running: true }));
+  }
+  bootstrapController();
 })();
