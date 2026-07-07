@@ -47,6 +47,7 @@ const sandbox = {{
   document: {{
     querySelector: () => null,
     querySelectorAll: () => [],
+    getElementById: () => null,
     createElement: () => ({{ style: {{}}, dataset: {{}}, addEventListener() {{}}, appendChild() {{}}, querySelector: () => null, querySelectorAll: () => [] }}),
     documentElement: {{ appendChild() {{}}, outerHTML: "", innerText: "", textContent: "" }},
     body: {{ innerText: "", textContent: "" }},
@@ -65,8 +66,12 @@ const sandbox = {{
   }},
   fetch: async () => ({{ text: async () => "{{}}", status: 200 }}),
   getComputedStyle: () => ({{ display: "block", visibility: "visible" }}),
-  MouseEvent: class MouseEvent {{}},
-  Event: class Event {{}},
+  MouseEvent: class MouseEvent {{
+    constructor(type) {{ this.type = type; }}
+  }},
+  Event: class Event {{
+    constructor(type) {{ this.type = type; }}
+  }},
   GM_getValue: (_key, fallback) => fallback,
   GM_setValue: () => undefined,
   GM_deleteValue: () => undefined,
@@ -745,6 +750,95 @@ sandbox.document.querySelector = (selector) =>
 
     assert result["ok"] is False
     assert "Missing address province" in result["reason"]
+
+
+def test_find_submit_control_does_not_click_before_trigger():
+    result = _run_hook(
+        """(() => {
+  const control = hooks.findSubmitControl();
+  const eventsBeforeTrigger = submitButton.events.slice();
+  const submitResult = hooks.triggerSubmitControl(control);
+  return {
+    found: { method: control.method, target: control.target },
+    eventsBeforeTrigger,
+    eventsAfterTrigger: submitButton.events,
+    submitResult,
+  };
+})()""",
+        extra_js="""
+const submitButton = {
+  value: "提交订单",
+  textContent: "",
+  events: [],
+  dispatchEvent(event) {
+    this.events.push(event.type);
+  },
+};
+sandbox.document.querySelector = (selector) =>
+  selector === "#suborder #submitbtn" ? submitButton : null;
+sandbox.document.querySelectorAll = () => [];
+""",
+    )
+
+    assert result["found"] == {"method": "selector", "target": "#suborder #submitbtn"}
+    assert result["eventsBeforeTrigger"] == []
+    assert result["eventsAfterTrigger"] == ["click"]
+    assert result["submitResult"] == {"method": "selector", "target": "#suborder #submitbtn"}
+
+
+def test_mark_submit_in_progress_pauses_runner_before_navigation():
+    result = _run_hook(
+        """(() => {
+  sandbox.sessionStorage.setItem(hooks.STATE_KEY, JSON.stringify({
+    running: true,
+    controllerId: "booking:active",
+    pendingBooking: { doctorId: "14707" },
+    submitAttempts: { "sch-1::detl-1": 1 },
+  }));
+  const detail = hooks.markSubmitInProgress(
+    {
+      scheduleId: "sch-1",
+      appointmentValue: "detl-1",
+      appointmentLabel: "08:00-08:30",
+    },
+    { memberId: "147750901" },
+    { addressSelection: { ok: true, area: { value: "8", text: "南山区" } } },
+    2
+  );
+  const state = JSON.parse(sandbox.sessionStorage.getItem(hooks.STATE_KEY));
+  return {
+    detail,
+    running: state.running,
+    controllerId: state.controllerId,
+    pendingBooking: state.pendingBooking,
+    submittingBooking: state.submittingBooking,
+    summary: state.summary,
+  };
+})()""",
+        extra_js="""
+const fakeBody = {
+  innerHTML: "",
+  querySelector: () => null,
+};
+const fakePanel = {
+  querySelector: (selector) => (selector === ".grab160-body" ? fakeBody : null),
+};
+sandbox.document.getElementById = () => fakePanel;
+sandbox.console.log = () => {};
+sandbox.console.warn = () => {};
+sandbox.console.error = () => {};
+""",
+    )
+
+    assert result["running"] is False
+    assert result["controllerId"] is None
+    assert result["pendingBooking"] is None
+    assert result["submittingBooking"]["scheduleId"] == "sch-1"
+    assert result["submittingBooking"]["appointmentValue"] == "detl-1"
+    assert result["submittingBooking"]["attemptCount"] == 2
+    assert result["summary"]["message"] == (
+        "Submitted booking form; runner paused to avoid duplicate submit."
+    )
 
 
 def test_inspect_booking_page_treats_navigation_away_as_success():

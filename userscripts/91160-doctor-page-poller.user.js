@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.0
+// @version      0.2.1
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -371,6 +371,7 @@
       pollAttempt: 0,
       lastTarget: null,
       pendingBooking: null,
+      submittingBooking: null,
       submitAttempts: {},
       sessionRecoveryAttempts: 0,
       lastKeepAliveAt: 0,
@@ -453,6 +454,7 @@
       pollAttempt: 0,
       sessionRecoveryAttempts: 0,
       pendingBooking: null,
+      submittingBooking: null,
     }));
     return controllerId;
   }
@@ -1556,7 +1558,7 @@
     return style.display !== "none" && style.visibility !== "hidden";
   }
 
-  function triggerSubmitControl() {
+  function findSubmitControl() {
     for (const selector of [
       "#suborder #submitbtn",
       "#submitbtn",
@@ -1574,8 +1576,7 @@
     ]) {
       const element = document.querySelector(selector);
       if (isVisible(element)) {
-        clickElement(element);
-        return { method: "selector", target: selector };
+        return { method: "selector", target: selector, element };
       }
     }
     const textCandidates = Array.from(
@@ -1585,22 +1586,63 @@
       return isVisible(element) && /确认预约|提交预约|提交|预约|下一步/.test(text);
     });
     if (textCandidates.length > 0) {
-      clickElement(textCandidates[0]);
       return {
         method: "text-match",
         target: compactText(textCandidates[0].textContent || textCandidates[0].value),
+        element: textCandidates[0],
       };
     }
     const form = document.querySelector("form");
     if (form) {
       if (typeof form.requestSubmit === "function") {
-        form.requestSubmit();
-        return { method: "requestSubmit", target: "form" };
+        return { method: "requestSubmit", target: "form", form };
       }
-      form.submit();
-      return { method: "submit", target: "form" };
+      return { method: "submit", target: "form", form };
     }
     return { method: "not-found", target: null };
+  }
+
+  function triggerSubmitControl(control = findSubmitControl()) {
+    if (control.method === "not-found") {
+      return { method: "not-found", target: null };
+    }
+    if (control.method === "requestSubmit") {
+      control.form.requestSubmit();
+      return { method: "requestSubmit", target: control.target };
+    }
+    if (control.method === "submit") {
+      control.form.submit();
+      return { method: "submit", target: control.target };
+    }
+    clickElement(control.element);
+    return { method: control.method, target: control.target };
+  }
+
+  function markSubmitInProgress(formState, memberSelection, fillResult, attemptCount) {
+    const detail = {
+      scheduleId: formState.scheduleId,
+      appointmentValue: formState.appointmentValue,
+      appointmentLabel: formState.appointmentLabel,
+      memberId: memberSelection.memberId,
+      address: fillResult.addressSelection,
+      attemptCount,
+      startedAt: new Date().toISOString(),
+    };
+    activeControllerId = null;
+    patchState((next) => ({
+      ...next,
+      running: false,
+      controllerId: null,
+      pendingBooking: null,
+      submittingBooking: detail,
+    }));
+    setSummary(
+      "info",
+      "Submitted booking form; runner paused to avoid duplicate submit.",
+      detail,
+      { force: true },
+    );
+    return detail;
   }
 
   async function clickFollowupControl() {
@@ -1685,6 +1727,7 @@
       running: false,
       controllerId: null,
       pendingBooking: null,
+      submittingBooking: null,
     }));
     setSummary("info", reason, "");
   }
@@ -1719,6 +1762,7 @@
       ...next,
       running: true,
       pendingBooking: null,
+      submittingBooking: null,
       sessionRecoveryAttempts: next.sessionRecoveryAttempts + 1,
     }));
     setSummary(
@@ -1819,6 +1863,7 @@
       if (nextSlot) {
         patchState((next) => ({
           ...next,
+          submittingBooking: null,
           pendingBooking: {
             unitId: target.unitId,
             depId: target.depId,
@@ -1926,7 +1971,12 @@
       return;
     }
     if (!settings.booking.autoSubmit) {
-      patchState((next) => ({ ...next, running: false, pendingBooking: null }));
+      patchState((next) => ({
+        ...next,
+        running: false,
+        pendingBooking: null,
+        submittingBooking: null,
+      }));
       setSummary(
         "info",
         "Booking form prepared; waiting for manual submit.",
@@ -1944,8 +1994,8 @@
 
     await sleepMs(pickDelayMs(settings.pacing.pageActionMs));
     const beforeUrl = location.href;
-    const submitResult = triggerSubmitControl();
-    if (submitResult.method === "not-found") {
+    const submitControl = findSubmitControl();
+    if (submitControl.method === "not-found") {
       stopRun("Could not find a submit control on the booking page.");
       return;
     }
@@ -1953,6 +2003,8 @@
       formState.scheduleId,
       formState.appointmentValue,
     );
+    markSubmitInProgress(formState, memberSelection, fillResult, attemptCount);
+    const submitResult = triggerSubmitControl(submitControl);
     setSummary("info", "Submitted booking form.", { submitResult, attemptCount });
     const followupAction = await clickFollowupControl();
     if (followupAction) {
@@ -1969,7 +2021,12 @@
     }
 
     if (inspection.success) {
-      patchState((next) => ({ ...next, running: false, pendingBooking: null }));
+      patchState((next) => ({
+        ...next,
+        running: false,
+        pendingBooking: null,
+        submittingBooking: null,
+      }));
       setSummary("info", `Booking succeeded for schedule ${formState.scheduleId}.`, {
         appointmentLabel: formState.appointmentLabel,
         url: inspection.currentUrl,
@@ -1988,6 +2045,7 @@
       renderPanel();
       return;
     }
+    patchState((next) => ({ ...next, running: true, submittingBooking: null }));
     await returnToDoctorAfterCurrentAttempt(
       target,
       `Booking submit failed: ${reason}`,
@@ -2460,6 +2518,9 @@
     findSelectOption,
     fillAddressSelection,
     fillBookingForm,
+    findSubmitControl,
+    triggerSubmitControl,
+    markSubmitInProgress,
     resolveMemberSelection,
     memberRadioDebugSummary,
     inspectBookingPage,
