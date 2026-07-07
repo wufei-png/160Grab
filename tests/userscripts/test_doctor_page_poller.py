@@ -162,7 +162,11 @@ def test_normalize_settings_keeps_python_config_semantics_for_business_fields():
     hours: ["8-9", "9.5-10", "14:00-14:30"]
   },
   pacing: { pollMs: [5000, 3000] },
-  booking: { autoSubmit: true, maxSubmitAttemptsPerAppointment: "4" },
+  booking: {
+    autoSubmit: true,
+    maxSubmitAttemptsPerAppointment: "4",
+    diseaseDescription: "门诊就诊，具体病情现场面诊沟通"
+  },
   session: { keepAliveIntervalSeconds: "180", recoveryMaxAttempts: "2" },
   logging: { level: "debug", maxEntries: "25" },
 })""",
@@ -185,6 +189,7 @@ def test_normalize_settings_keeps_python_config_semantics_for_business_fields():
     }
     assert result["booking"]["autoSubmit"] is True
     assert result["booking"]["maxSubmitAttemptsPerAppointment"] == 4
+    assert result["booking"]["diseaseDescription"] == "门诊就诊，具体病情现场面诊沟通"
     assert result["session"]["keepAliveIntervalSeconds"] == 180
     assert result["logging"]["level"] == "debug"
 
@@ -587,6 +592,42 @@ sandbox.document.querySelectorAll = (selector) =>
 
     assert result["ok"] is False
     assert "Multiple member candidates" in result["reason"]
+
+
+def test_fill_booking_form_uses_configured_disease_description():
+    result = _run_hook(
+        """(() => {
+  const fillResult = hooks.fillBookingForm(
+    { appointmentValue: null, appointmentOptions: [] },
+    { memberId: "147750901", radio: null },
+    {},
+    { diseaseDescription: "门诊就诊，具体病情现场面诊沟通" }
+  );
+  return {
+    fillResult,
+    diseaseInputValue: diseaseInput.value,
+    diseaseContentValue: diseaseContent.value,
+    memberValue: memberInput.value,
+  };
+})()""",
+        extra_js="""
+const memberInput = { value: "" };
+const diseaseInput = { value: "" };
+const diseaseContent = { value: "" };
+const elements = {
+  'input[name="member_id"]': memberInput,
+  'input[name="disease_input"]': diseaseInput,
+  'textarea[name="disease_content"]': diseaseContent,
+};
+sandbox.document.querySelector = (selector) => elements[selector] ?? null;
+""",
+    )
+
+    assert result["fillResult"]["addressSelection"]["ok"] is True
+    assert result["fillResult"]["clinicIdSelection"]["required"] is False
+    assert result["memberValue"] == "147750901"
+    assert result["diseaseInputValue"] == "门诊就诊，具体病情现场面诊沟通"
+    assert result["diseaseContentValue"] == "门诊就诊，具体病情现场面诊沟通"
 
 
 def test_fill_address_selection_cascades_configured_region():

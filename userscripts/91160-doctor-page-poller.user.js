@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.4
+// @version      0.2.5
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -28,6 +28,7 @@
     "操作过于频繁",
   ];
   const LOG_LEVELS = ["debug", "info", "warn", "error"];
+  const DEFAULT_DISEASE_DESCRIPTION = "门诊就诊，具体病情现场面诊沟通";
   const DISABLE_AUTO_START = Boolean(
     globalThis.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__,
   );
@@ -71,6 +72,7 @@
       autoSubmit: false,
       maxSubmitAttemptsPerAppointment: 3,
       autoReturnAfterSubmitFailure: false,
+      diseaseDescription: DEFAULT_DISEASE_DESCRIPTION,
     },
     session: {
       recoveryEnabled: true,
@@ -272,6 +274,9 @@
           merged.booking.autoReturnAfterSubmitFailure,
           false,
         ),
+        diseaseDescription:
+          normalizeOptionalValue(merged.booking.diseaseDescription) ??
+          DEFAULT_DISEASE_DESCRIPTION,
       },
       session: {
         recoveryEnabled: normalizeBoolean(merged.session.recoveryEnabled, true),
@@ -1565,7 +1570,12 @@
     return { ok: false, reason: "No member selection was found on this booking page." };
   }
 
-  function fillBookingForm(formState, memberSelection, addressConfig) {
+  function fillBookingForm(
+    formState,
+    memberSelection,
+    addressConfig,
+    bookingConfig = CONFIG_DEFAULTS.booking,
+  ) {
     if (formState.appointmentValue) {
       const appointmentElement = formState.appointmentOptions.find(
         (option) => option.value === formState.appointmentValue,
@@ -1592,6 +1602,8 @@
     }
     const clinicIdSelection = fillClinicId(memberSelection);
     const addressSelection = fillAddressSelection(addressConfig, memberSelection);
+    const diseaseDescription =
+      normalizeOptionalValue(bookingConfig?.diseaseDescription) ?? DEFAULT_DISEASE_DESCRIPTION;
     for (const selector of [
       'input[name="disease_input"]',
       "#disease_input",
@@ -1600,7 +1612,7 @@
     ]) {
       const input = document.querySelector(selector);
       if (input && !compactText(input.value)) {
-        input.value = "11111111111111";
+        input.value = diseaseDescription;
       }
     }
     for (const selector of ['input[name="accept"][value="1"]', "#check_yuyue_rule"]) {
@@ -2087,7 +2099,12 @@
       return;
     }
 
-    const fillResult = fillBookingForm(formState, memberSelection, settings.address);
+    const fillResult = fillBookingForm(
+      formState,
+      memberSelection,
+      settings.address,
+      settings.booking,
+    );
     if (!fillResult.addressSelection.ok) {
       stopRun(`Address selection failed: ${fillResult.addressSelection.reason}`);
       return;
@@ -2447,6 +2464,7 @@
         <label><input data-setting="booking.autoReturnAfterSubmitFailure" type="checkbox" style="width:auto" ${
           settings.booking.autoReturnAfterSubmitFailure ? "checked" : ""
         }> Auto return after submit failure</label>
+        <label>Disease description <input data-setting="booking.diseaseDescription" value="${htmlEscape(settings.booking.diseaseDescription ?? "")}"></label>
         <label>Max submit attempts <input data-setting="booking.maxSubmitAttemptsPerAppointment" type="number" min="1" max="20" value="${settings.booking.maxSubmitAttemptsPerAppointment}"></label>
         <label><input data-setting="session.recoveryEnabled" type="checkbox" style="width:auto" ${
           settings.session.recoveryEnabled ? "checked" : ""
@@ -2513,6 +2531,7 @@
       "runtime.startAt",
       "booking.autoSubmit",
       "booking.autoReturnAfterSubmitFailure",
+      "booking.diseaseDescription",
       "booking.maxSubmitAttemptsPerAppointment",
       "session.recoveryEnabled",
       "session.keepAliveIntervalSeconds",
