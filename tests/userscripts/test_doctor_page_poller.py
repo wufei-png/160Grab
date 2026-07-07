@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.7" in content
-    assert 'const SCRIPT_VERSION = "0.2.7";' in content
+    assert "// @version      0.2.8" in content
+    assert 'const SCRIPT_VERSION = "0.2.8";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -595,6 +595,34 @@ sandbox.document.querySelectorAll = (selector) =>
 
     assert result["ok"] is False
     assert "Multiple member candidates" in result["reason"]
+
+
+def test_selected_member_blocker_detects_review_pending_member():
+    result = _run_hook(
+        """hooks.readSelectedMemberBlocker({
+  memberId: "147750901",
+  radio: memberRadio
+})""",
+        extra_js="""
+const attrs = {
+  "data-title": "您当前的就诊人信息审核中，暂不能预约挂号",
+  "need_check": "1",
+  "record_created": "0",
+  "is_complete": "",
+  "is_info_complete": "0",
+};
+const memberRadio = {
+  getAttribute: (name) => attrs[name] ?? "",
+};
+""",
+    )
+
+    assert result["ok"] is False
+    assert result["blocked"] is True
+    assert result["reason"] == "您当前的就诊人信息审核中，暂不能预约挂号"
+    assert result["status"]["needCheck"] == "1"
+    assert result["status"]["recordCreated"] == "0"
+    assert result["status"]["isInfoComplete"] == "0"
 
 
 def test_fill_booking_form_uses_configured_disease_description():

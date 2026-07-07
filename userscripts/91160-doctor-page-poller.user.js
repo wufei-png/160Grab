@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.7
+// @version      0.2.8
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.7";
+  const SCRIPT_VERSION = "0.2.8";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -1550,6 +1550,33 @@
     return lines.join("\n");
   }
 
+  function readSelectedMemberBlocker(memberSelection) {
+    const radio = memberSelection?.radio;
+    if (!radio) {
+      return { ok: true, blocked: false };
+    }
+    const dataTitle = compactText(
+      radio.getAttribute("data-title") || radio.getAttribute("title") || "",
+    );
+    const status = {
+      needCheck: compactText(radio.getAttribute("need_check")),
+      recordCreated: compactText(radio.getAttribute("record_created")),
+      isComplete: compactText(radio.getAttribute("is_complete")),
+      isInfoComplete: compactText(radio.getAttribute("is_info_complete")),
+      dataTitle,
+    };
+    if (/暂不能预约|审核中/.test(dataTitle)) {
+      return { ok: false, blocked: true, reason: dataTitle, status };
+    }
+    if (
+      status.needCheck === "1" &&
+      /认证|审核|建档|暂不能预约/.test(dataTitle)
+    ) {
+      return { ok: false, blocked: true, reason: dataTitle, status };
+    }
+    return { ok: true, blocked: false, status };
+  }
+
   function resolveMemberSelection(memberConfig) {
     const { memberRadios, ignoredRadios } = collectRadioGroups();
     const hiddenMemberId =
@@ -2159,6 +2186,12 @@
       stopRun(`Schedule date fill failed: ${fillResult.scheduleDateSelection.reason}`);
       return;
     }
+    const memberBlocker = readSelectedMemberBlocker(memberSelection);
+    if (!memberBlocker.ok) {
+      stopRun(`Selected member cannot submit booking: ${memberBlocker.reason}`);
+      appendLog("warn", "Selected member blocked before submit.", memberBlocker.status);
+      return;
+    }
     const checkIdInfoPatch = installCheckIdInfoBlankResponsePatch();
     if (checkIdInfoPatch.installed) {
       appendLog("debug", "Installed checkIdInfo blank-response JSON patch.");
@@ -2730,6 +2763,7 @@
     triggerSubmitControl,
     markSubmitInProgress,
     resolveMemberSelection,
+    readSelectedMemberBlocker,
     memberRadioDebugSummary,
     inspectBookingPage,
   };
