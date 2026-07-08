@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.12" in content
-    assert 'const SCRIPT_VERSION = "0.2.12";' in content
+    assert "// @version      0.2.13" in content
+    assert 'const SCRIPT_VERSION = "0.2.13";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -1105,7 +1105,7 @@ sandbox.document.querySelector = (selector) =>
     assert result["events"] == []
 
 
-def test_fill_clinic_id_clears_identity_number_and_readiness_rejects_it():
+def test_fill_clinic_id_preserves_page_managed_identity_value():
     result = _run_hook(
         """(() => {
   const before = hooks.readBookingFormReadiness();
@@ -1136,9 +1136,6 @@ const input = {
   setAttribute(name, value) {
     this.attrs[name] = value;
   },
-  removeAttribute(name) {
-    delete this.attrs[name];
-  },
   dispatchEvent(event) {
     this.events.push(event.type);
   },
@@ -1148,18 +1145,18 @@ sandbox.document.querySelector = (selector) =>
 """,
     )
 
-    assert result["before"] == {"ok": False, "missing": ["hisMemId.identity_number"]}
+    assert result["before"] == {"ok": True, "missing": []}
     assert result["clinicId"] == {
         "ok": True,
         "required": True,
         "filled": False,
-        "waiting": True,
-        "reason": "Clinic card id looked like an identity number; waiting for page card lookup.",
+        "source": "existing",
+        "valueLength": 18,
     }
     assert result["after"] == {"ok": True, "missing": []}
-    assert result["inputValue"] == ""
-    assert result["trueValue"] == ""
-    assert result["events"] == ["input", "change", "blur"]
+    assert result["inputValue"] == "11010519491231002X"
+    assert result["trueValue"] == "11010519491231002X"
+    assert result["events"] == []
 
 
 def test_checkidinfo_blank_response_patch_only_normalizes_target_json():
@@ -1255,8 +1252,18 @@ const submitButton = {
   value: "提交订单",
   textContent: "",
   events: [],
+  scrollIntoView() {
+    this.events.push("scrollIntoView");
+  },
+  focus() {
+    this.events.push("focus");
+  },
+  click() {
+    this.events.push("native-click");
+  },
   dispatchEvent(event) {
     this.events.push(event.type);
+    return true;
   },
 };
 sandbox.document.querySelector = (selector) =>
@@ -1267,8 +1274,23 @@ sandbox.document.querySelectorAll = () => [];
 
     assert result["found"] == {"method": "selector", "target": "#suborder #submitbtn"}
     assert result["eventsBeforeTrigger"] == []
-    assert result["eventsAfterTrigger"] == ["click"]
-    assert result["submitResult"] == {"method": "selector", "target": "#suborder #submitbtn"}
+    assert result["eventsAfterTrigger"] == [
+        "scrollIntoView",
+        "focus",
+        "mouseover",
+        "mousemove",
+        "mousedown",
+        "mouseup",
+        "native-click",
+    ]
+    assert result["submitResult"] == {
+        "method": "selector",
+        "target": "#suborder #submitbtn",
+        "activation": {
+            "method": "native-click",
+            "dispatched": ["mouseover", "mousemove", "mousedown", "mouseup"],
+        },
+    }
 
 
 def test_mark_submit_in_progress_pauses_runner_before_navigation():

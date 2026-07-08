@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.12
+// @version      0.2.13
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.12";
+  const SCRIPT_VERSION = "0.2.13";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -117,11 +117,6 @@
   function normalizeOptionalValue(value) {
     const text = compactText(value);
     return PLACEHOLDER_VALUES.has(text.toLowerCase()) ? null : text;
-  }
-
-  function isLikelyIdentityNumber(value) {
-    const text = compactText(value);
-    return /^\d{15}$/.test(text) || /^\d{17}[\dXx]$/.test(text);
   }
 
   function normalizeBoolean(value, fallback = false) {
@@ -1499,20 +1494,6 @@
 
     const existing = compactText(input.value);
     if (existing) {
-      if (isLikelyIdentityNumber(existing)) {
-        input.value = "";
-        input.removeAttribute?.("true_value");
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
-        input.dispatchEvent(new Event("blur", { bubbles: true }));
-        return {
-          ok: true,
-          required: true,
-          filled: false,
-          waiting: true,
-          reason: "Clinic card id looked like an identity number; waiting for page card lookup.",
-        };
-      }
       if (input.getAttribute && !compactText(input.getAttribute("true_value"))) {
         input.setAttribute?.("true_value", existing);
       }
@@ -1758,18 +1739,6 @@
       missing.push("address.detail");
     }
 
-    const clinicIdInput =
-      document.querySelector("#hismemid") ??
-      document.querySelector('input[name="hisMemId"]') ??
-      document.querySelector('input[name="hismemid"]') ??
-      document.querySelector('select[name="hismemid"]');
-    if (clinicIdInput) {
-      const clinicId = compactText(clinicIdInput.value);
-      if (clinicId && isLikelyIdentityNumber(clinicId)) {
-        missing.push("hisMemId.identity_number");
-      }
-    }
-
     const scheduleDateInput =
       document.querySelector("#sch_date") ?? document.querySelector('input[name="sch_date"]');
     if (scheduleDateInput && !compactText(scheduleDateInput.value)) {
@@ -1950,8 +1919,39 @@
       control.form.submit();
       return { method: "submit", target: control.target };
     }
-    clickElement(control.element);
-    return { method: control.method, target: control.target };
+    const activation = activateSubmitElement(control.element);
+    return { method: control.method, target: control.target, activation };
+  }
+
+  function dispatchMouseLikeEvent(element, type) {
+    try {
+      return element.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: globalThis,
+          button: 0,
+        }),
+      );
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function activateSubmitElement(element) {
+    if (!element) {
+      return { method: "none" };
+    }
+    element.scrollIntoView?.({ block: "center", inline: "center" });
+    element.focus?.({ preventScroll: true });
+    const preClickEvents = ["mouseover", "mousemove", "mousedown", "mouseup"];
+    const dispatched = preClickEvents.filter((type) => dispatchMouseLikeEvent(element, type));
+    if (typeof element.click === "function") {
+      element.click();
+      return { method: "native-click", dispatched };
+    }
+    dispatchMouseLikeEvent(element, "click");
+    return { method: "dispatch-click", dispatched };
   }
 
   function markSubmitInProgress(formState, memberSelection, fillResult, attemptCount) {
