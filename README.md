@@ -198,6 +198,10 @@ create-profile 流程会：
 
 这个脚本的行为和当前 CLI 主链路保持一致，但宿主从 Playwright 切成了你自己的真实浏览器页面：
 
+- **更适合用 Tampermonkey 脚本的情况**：你已经习惯在自己的 Chrome/Edge 里手动登录 91160，想直接在医生详情页右上角值守，不想额外启动 Python 进程或独立 Playwright 浏览器；你更看重“复用当前真实浏览器会话”和“命中后在当前标签页接着操作”。
+- **更适合用 Python/Playwright 主程序的情况**：你要可重复的本地配置文件、结构化日志、桌面/ webhook 通知、独立持久化 profile、打包后的跨平台可执行文件，或者后续要继续接自动化测试和发布包。
+- 两条路径的核心取舍是：Tampermonkey 更贴近你正在操作的真实页面，启动成本低，但配置和诊断能力更轻；Python/Playwright 更像一个完整工具链，适合长期维护、打包和自动化验证，但需要单独启动运行环境。
+
 1. 在 Tampermonkey 中导入 `userscripts/91160-doctor-page-poller.user.js`
 2. 登录 91160，并打开目标医生详情页
 3. 在右上角面板点 `Settings`
@@ -215,11 +219,12 @@ create-profile 流程会：
 右上角面板提供：
 
 - `Start` / `Stop`
-- `Settings`
-- `Logs`
+- `Overview` / `Settings` / `Logs`
 - `Reset State`
 
-`Settings` 会保存配置，但 `Reset State` 只清运行状态、pending booking、提交计数和日志，不会清配置。日志级别默认为 `info`，可在 `Settings` 中改为 `debug` / `warn` / `error`。
+面板默认显示“挂号值守”状态：首页能直接看到 `待命 / 轮询 / 命中 / 提交 / 冷却 / 异常` 阶段、医生目标识别状态、轮询次数、自动提交状态和会话恢复次数。`Settings` 按“就诊人与地址 / 筛选时间 / 自动提交 / Advanced”分组；模糊字段旁边的 `?` 会在 hover 或键盘 focus 时显示中文解释。
+
+`Settings` 会保存配置，但 `Reset State` 只清运行状态、pending booking、提交计数和日志，不会清配置。日志级别默认为 `info`，可在 `Advanced` 中改为 `debug` / `warn` / `error`。
 
 几个限制要提前知道：
 

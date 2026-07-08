@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.15" in content
-    assert 'const SCRIPT_VERSION = "0.2.15";' in content
+    assert "// @version      0.2.16" in content
+    assert 'const SCRIPT_VERSION = "0.2.16";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -139,9 +139,11 @@ def test_panel_markup_uses_prefixed_classes_and_non_submit_buttons():
     assert "Dep ID" not in content
     assert "Doctor ID" not in content
     assert "target=" not in content
-    assert "doctor=${htmlEscape(panelDoctorText(state))}" in content
+    assert "data-panel-target>${htmlEscape(panelDoctorText(state))}" in content
     assert "Start Date" not in content
     assert "Appointment From" in content
+    assert "PANEL_TOOLTIP_ID" in content
+    assert 'data-help="${htmlEscape(text)}"' in content
 
 
 def test_userscript_passes_node_syntax_check():

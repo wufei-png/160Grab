@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.15
+// @version      0.2.16
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,8 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.15";
+  const PANEL_TOOLTIP_ID = "grab160-doctor-page-poller-tooltip";
+  const SCRIPT_VERSION = "0.2.16";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -507,6 +508,59 @@
         : "grab160-status-success";
   }
 
+  function panelPhase(state = readState(), summary = state.summary) {
+    const message = compactText(summary?.message).toLowerCase();
+    if (
+      summary?.level === "error" ||
+      message.includes("failed") ||
+      message.includes("cannot") ||
+      message.includes("invalid")
+    ) {
+      return "error";
+    }
+    if (message.includes("rate limiting") || message.includes("returning to doctor page")) {
+      return "cooldown";
+    }
+    if (state.submittingBooking || message.includes("submitted booking")) {
+      return "submit";
+    }
+    if (
+      state.pendingBooking ||
+      message.includes("matched slot") ||
+      message.includes("booking form prepared")
+    ) {
+      return "hit";
+    }
+    return state.running ? "polling" : "idle";
+  }
+
+  function panelPhaseLabel(phase) {
+    return (
+      {
+        idle: "待命",
+        polling: "轮询",
+        hit: "命中",
+        submit: "提交",
+        cooldown: "冷却",
+        error: "异常",
+      }[phase] ?? "待命"
+    );
+  }
+
+  function formatPanelDetail(detail) {
+    if (detail === null || detail === undefined || detail === "") {
+      return "";
+    }
+    if (typeof detail === "string") {
+      return compactText(detail);
+    }
+    try {
+      return compactText(JSON.stringify(detail));
+    } catch (_error) {
+      return compactText(detail);
+    }
+  }
+
   function panelDoctorText(state = readState()) {
     const target = state.lastTarget ?? parseDoctorPageUrl(location.href) ?? {};
     if (isResolvedTarget(target)) {
@@ -527,6 +581,14 @@
     const state = readState();
     const settings = readSettings();
     const summary = state.summary;
+    const phase = panelPhase(state, summary);
+    const phaseLabel = body.querySelector("[data-panel-phase-label]");
+    if (phaseLabel) {
+      phaseLabel.textContent = panelPhaseLabel(phase);
+    }
+    body.querySelectorAll("[data-panel-stage]").forEach((stage) => {
+      stage.classList.toggle("grab160-stage-active", stage.dataset.panelStage === phase);
+    });
     const message = body.querySelector("[data-panel-summary-message]");
     if (message) {
       message.classList.remove(
@@ -539,17 +601,28 @@
     }
     const detail = body.querySelector("[data-panel-summary-detail]");
     if (detail) {
-      detail.textContent = summary?.detail ?? "";
+      detail.textContent = formatPanelDetail(summary?.detail);
     }
     const running = body.querySelector("[data-panel-running]");
     if (running) {
-      running.textContent = `running=${state.running ? "yes" : "no"} · autoSubmit=${
-        settings.booking.autoSubmit ? "ON" : "off"
-      } · attempts=${state.pollAttempt}`;
+      running.textContent = state.running ? "运行中" : "已停止";
+    }
+    const autoSubmit = body.querySelector("[data-panel-auto-submit]");
+    if (autoSubmit) {
+      autoSubmit.textContent = settings.booking.autoSubmit ? "ON" : "off";
+      autoSubmit.classList.toggle("grab160-danger-text", settings.booking.autoSubmit);
+    }
+    const attempts = body.querySelector("[data-panel-attempts]");
+    if (attempts) {
+      attempts.textContent = String(state.pollAttempt);
+    }
+    const recoveryAttempts = body.querySelector("[data-panel-recovery-attempts]");
+    if (recoveryAttempts) {
+      recoveryAttempts.textContent = `${state.sessionRecoveryAttempts}/${settings.session.recoveryMaxAttempts}`;
     }
     const target = body.querySelector("[data-panel-target]");
     if (target) {
-      target.textContent = `doctor=${panelDoctorText(state)}`;
+      target.textContent = panelDoctorText(state);
     }
     const startButton = body.querySelector('[data-action="start"]');
     if (startButton) {
@@ -2546,62 +2619,263 @@
     panel = document.createElement("div");
     panel.id = PANEL_ID;
     panel.innerHTML = `
-      <div class="grab160-title">160Grab v${SCRIPT_VERSION}</div>
+      <div class="grab160-title">
+        <div>
+          <div class="grab160-title-main">挂号值守</div>
+          <div class="grab160-title-sub">160Grab v${SCRIPT_VERSION}</div>
+        </div>
+        <span class="grab160-drag-hint">drag</span>
+      </div>
       <div class="grab160-body"></div>
     `;
     Object.assign(panel.style, {
       position: "fixed",
       zIndex: "999999",
-      width: "360px",
-      maxHeight: "82vh",
+      width: "420px",
+      maxWidth: "calc(100vw - 24px)",
+      maxHeight: "86vh",
       overflow: "auto",
-      padding: "12px",
-      borderRadius: "8px",
-      boxShadow: "0 8px 28px rgba(0,0,0,0.18)",
-      background: "rgba(17,24,39,0.94)",
-      color: "#f3f4f6",
+      padding: "14px",
+      borderRadius: "10px",
+      boxShadow:
+        "0 0 0 1px rgba(188, 224, 217, 0.12), 0 18px 42px rgba(2, 12, 18, 0.36)",
+      background: "#101d23",
+      color: "#eef7f5",
       fontSize: "13px",
-      lineHeight: "1.45",
-      fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+      lineHeight: "1.5",
+      fontFamily:
+        "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
     });
     const style = document.createElement("style");
     style.textContent = `
       #${PANEL_ID}, #${PANEL_ID} * {
         box-sizing: border-box;
+        -webkit-font-smoothing: antialiased;
       }
-      #${PANEL_ID} button, #${PANEL_ID} input, #${PANEL_ID} select {
+      #${PANEL_ID} {
+        scrollbar-color: rgba(116, 211, 197, 0.36) transparent;
+      }
+      #${PANEL_ID} button,
+      #${PANEL_ID} input,
+      #${PANEL_ID} select {
         font: inherit;
+      }
+      #${PANEL_ID} .grab160-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 2px 2px 12px;
+        user-select: none;
+      }
+      #${PANEL_ID} .grab160-title-main {
+        color: #f5fffc;
+        font-size: 17px;
+        font-weight: 750;
+        line-height: 1.15;
+        letter-spacing: 0;
+      }
+      #${PANEL_ID} .grab160-title-sub {
+        margin-top: 2px;
+        color: #8ea7a5;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      #${PANEL_ID} .grab160-drag-hint {
+        border: 1px solid rgba(188, 224, 217, 0.12);
+        border-radius: 999px;
+        padding: 3px 8px;
+        color: #8ea7a5;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: .08em;
+        text-transform: uppercase;
+      }
+      #${PANEL_ID} .grab160-body {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
       }
       #${PANEL_ID} button {
         appearance: none;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        border: 1px solid rgba(255,255,255,.18);
-        background: rgba(255,255,255,.08);
-        color: #f9fafb;
-        border-radius: 6px;
-        padding: 5px 8px;
+        gap: 6px;
+        min-height: 40px;
+        border: 1px solid rgba(188, 224, 217, 0.16);
+        background: rgba(188, 224, 217, 0.07);
+        color: #eef7f5;
+        border-radius: 7px;
+        padding: 7px 10px;
         cursor: pointer;
+        font-weight: 650;
+        transition:
+          background-color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+          border-color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+          color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+          transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
       }
-      #${PANEL_ID} button:hover { background: rgba(255,255,255,.16); }
-      #${PANEL_ID} input, #${PANEL_ID} select {
+      #${PANEL_ID} button:hover {
+        border-color: rgba(116, 211, 197, 0.38);
+        background: rgba(116, 211, 197, 0.14);
+      }
+      #${PANEL_ID} button:active {
+        transform: scale(0.98);
+      }
+      #${PANEL_ID} button:focus-visible,
+      #${PANEL_ID} input:focus-visible,
+      #${PANEL_ID} select:focus-visible,
+      #${PANEL_ID} summary:focus-visible,
+      #${PANEL_ID} .grab160-help:focus-visible {
+        outline: 2px solid rgba(116, 211, 197, 0.72);
+        outline-offset: 2px;
+      }
+      #${PANEL_ID} .grab160-primary-button {
+        background: #4fd1bd;
+        border-color: #80e4d4;
+        color: #062521;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset;
+      }
+      #${PANEL_ID} .grab160-primary-button:hover {
+        background: #6de0ce;
+        border-color: #9af2de;
+      }
+      #${PANEL_ID} .grab160-danger-button {
+        border-color: rgba(255, 138, 138, 0.32);
+        color: #ffd6d6;
+      }
+      #${PANEL_ID} .grab160-danger-button:hover {
+        background: rgba(255, 138, 138, 0.12);
+        border-color: rgba(255, 138, 138, 0.52);
+      }
+      #${PANEL_ID} input,
+      #${PANEL_ID} select {
         width: 100%;
-        box-sizing: border-box;
-        border: 1px solid rgba(255,255,255,.18);
-        border-radius: 6px;
-        padding: 5px 7px;
-        background: rgba(255,255,255,.1);
-        color: #f9fafb;
+        min-height: 40px;
+        border: 1px solid rgba(188, 224, 217, 0.16);
+        border-radius: 7px;
+        padding: 7px 9px;
+        background: #17272e;
+        color: #f5fffc;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
       }
-      #${PANEL_ID} label { display: block; margin-top: 8px; color: #d1d5db; }
-      #${PANEL_ID} .grab160-title { font-weight: 700; margin-bottom: 8px; user-select: none; }
-      #${PANEL_ID} .grab160-row { display: flex; gap: 6px; align-items: center; }
+      #${PANEL_ID} input::placeholder {
+        color: #6f8583;
+      }
+      #${PANEL_ID} input[type="checkbox"] {
+        width: 16px;
+        min-width: 16px;
+        height: 16px;
+        min-height: 16px;
+        padding: 0;
+        accent-color: #4fd1bd;
+      }
+      #${PANEL_ID} label {
+        color: #cfe0dd;
+      }
+      #${PANEL_ID} .grab160-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
       #${PANEL_ID} .grab160-row > * { flex: 1; min-width: 0; }
-      #${PANEL_ID} .grab160-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-      #${PANEL_ID} .grab160-muted { color: #9ca3af; }
+      #${PANEL_ID} .grab160-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      #${PANEL_ID} .grab160-grid-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      #${PANEL_ID} .grab160-grid-1 {
+        grid-template-columns: 1fr;
+      }
+      #${PANEL_ID} .grab160-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #${PANEL_ID} .grab160-buttons button {
+        flex: 1 1 auto;
+      }
+      #${PANEL_ID} .grab160-actionbar {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      #${PANEL_ID} .grab160-actionbar button {
+        padding-left: 8px;
+        padding-right: 8px;
+      }
+      #${PANEL_ID} .grab160-watch {
+        border: 1px solid rgba(188, 224, 217, 0.12);
+        border-radius: 9px;
+        background: #13242b;
+        padding: 11px;
+      }
+      #${PANEL_ID} .grab160-stage-rail {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 5px;
+        margin-bottom: 10px;
+      }
+      #${PANEL_ID} .grab160-stage {
+        min-width: 0;
+        border-radius: 999px;
+        padding: 4px 5px;
+        background: rgba(188, 224, 217, 0.06);
+        color: #78918e;
+        font-size: 10px;
+        font-weight: 700;
+        text-align: center;
+        white-space: nowrap;
+      }
+      #${PANEL_ID} .grab160-stage-active {
+        background: rgba(79, 209, 189, 0.18);
+        color: #9af2de;
+        box-shadow: 0 0 0 1px rgba(79, 209, 189, 0.28) inset;
+      }
+      #${PANEL_ID} .grab160-watch-grid {
+        display: grid;
+        grid-template-columns: 1.15fr .85fr .85fr;
+        gap: 8px;
+      }
+      #${PANEL_ID} .grab160-watch-card {
+        min-width: 0;
+        border: 1px solid rgba(188, 224, 217, 0.10);
+        border-radius: 8px;
+        background: rgba(188, 224, 217, 0.05);
+        padding: 8px;
+      }
+      #${PANEL_ID} .grab160-watch-card span,
+      #${PANEL_ID} .grab160-field-note {
+        display: block;
+        color: #8ea7a5;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      #${PANEL_ID} .grab160-watch-card strong {
+        display: block;
+        margin-top: 2px;
+        color: #f5fffc;
+        font-size: 18px;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.2;
+      }
+      #${PANEL_ID} .grab160-watch-card-primary strong {
+        color: #9af2de;
+        font-size: 22px;
+      }
+      #${PANEL_ID} .grab160-summary {
+        margin-top: 10px;
+        display: grid;
+        gap: 3px;
+      }
+      #${PANEL_ID} .grab160-muted { color: #8ea7a5; }
+      #${PANEL_ID} .grab160-danger-text { color: #ffb4b4 !important; }
       #${PANEL_ID} .grab160-status {
-        display: inline;
+        display: block;
         position: static;
         width: auto;
         height: auto;
@@ -2609,11 +2883,185 @@
         margin: 0;
         line-height: inherit;
         pointer-events: none;
+        font-weight: 700;
       }
-      #${PANEL_ID} .grab160-status-warn { color: #fcd34d; }
-      #${PANEL_ID} .grab160-status-error { color: #fca5a5; }
-      #${PANEL_ID} .grab160-status-success { color: #86efac; }
-      #${PANEL_ID} .grab160-log { white-space: pre-wrap; border-top: 1px solid rgba(255,255,255,.12); padding-top: 6px; margin-top: 6px; }
+      #${PANEL_ID} .grab160-status-warn { color: #f6c453; }
+      #${PANEL_ID} .grab160-status-error { color: #ff8a8a; }
+      #${PANEL_ID} .grab160-status-success { color: #7de3a6; }
+      #${PANEL_ID} .grab160-section {
+        border: 1px solid rgba(188, 224, 217, 0.12);
+        border-radius: 9px;
+        background: rgba(188, 224, 217, 0.04);
+        overflow: hidden;
+      }
+      #${PANEL_ID} .grab160-section + .grab160-section {
+        margin-top: 10px;
+      }
+      #${PANEL_ID} summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 40px;
+        padding: 9px 11px;
+        color: #f5fffc;
+        cursor: pointer;
+        font-weight: 750;
+        list-style: none;
+      }
+      #${PANEL_ID} summary::-webkit-details-marker {
+        display: none;
+      }
+      #${PANEL_ID} summary::after {
+        content: "+";
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 999px;
+        background: rgba(188, 224, 217, 0.08);
+        color: #8ea7a5;
+        font-weight: 800;
+      }
+      #${PANEL_ID} details[open] summary::after {
+        content: "-";
+      }
+      #${PANEL_ID} .grab160-section-body {
+        display: grid;
+        gap: 10px;
+        padding: 0 11px 11px;
+      }
+      #${PANEL_ID} .grab160-field {
+        display: grid;
+        gap: 5px;
+      }
+      #${PANEL_ID} .grab160-label-text {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: #cfe0dd;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      #${PANEL_ID} .grab160-help {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 17px;
+        height: 17px;
+        border-radius: 999px;
+        border: 1px solid rgba(116, 211, 197, 0.32);
+        color: #9af2de;
+        font-size: 11px;
+        font-weight: 850;
+        cursor: help;
+      }
+      #${PANEL_TOOLTIP_ID} {
+        position: fixed;
+        z-index: 1000000;
+        display: none;
+        max-width: min(300px, calc(100vw - 24px));
+        border: 1px solid rgba(116, 211, 197, 0.42);
+        border-radius: 8px;
+        background: #f5fffc;
+        color: #0d2328;
+        box-shadow:
+          0 0 0 1px rgba(2, 12, 18, 0.06),
+          0 14px 30px rgba(2, 12, 18, 0.28);
+        padding: 8px 10px;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 12px;
+        font-weight: 650;
+        line-height: 1.45;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(2px);
+        transition:
+          opacity 120ms cubic-bezier(0.23, 1, 0.32, 1),
+          transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+      }
+      #${PANEL_TOOLTIP_ID}.grab160-tooltip-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      #${PANEL_ID} .grab160-check {
+        display: flex;
+        align-items: center;
+        min-height: 40px;
+        gap: 8px;
+        border: 1px solid rgba(188, 224, 217, 0.10);
+        border-radius: 8px;
+        background: rgba(188, 224, 217, 0.04);
+        padding: 7px 9px;
+      }
+      #${PANEL_ID} .grab160-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #${PANEL_ID} .grab160-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        min-height: 40px;
+        border: 1px solid rgba(188, 224, 217, 0.10);
+        border-radius: 999px;
+        background: rgba(188, 224, 217, 0.04);
+        padding: 5px 9px;
+        white-space: nowrap;
+      }
+      #${PANEL_ID} .grab160-hour-list {
+        display: grid;
+        gap: 7px;
+      }
+      #${PANEL_ID} .grab160-hour-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto;
+        gap: 8px;
+        align-items: center;
+      }
+      #${PANEL_ID} .grab160-range-field .grab160-row {
+        gap: 8px;
+      }
+      #${PANEL_ID} .grab160-warning-box {
+        border: 1px solid rgba(246, 196, 83, 0.24);
+        border-radius: 8px;
+        background: rgba(246, 196, 83, 0.08);
+        color: #f8df9b;
+        padding: 8px 9px;
+        font-size: 12px;
+      }
+      #${PANEL_ID} .grab160-log {
+        white-space: pre-wrap;
+        border: 1px solid rgba(188, 224, 217, 0.12);
+        border-radius: 8px;
+        background: #0d181d;
+        color: #bdd7d3;
+        padding: 9px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.55;
+      }
+      @media (max-width: 520px) {
+        #${PANEL_ID} {
+          width: calc(100vw - 24px) !important;
+        }
+        #${PANEL_ID} .grab160-actionbar,
+        #${PANEL_ID} .grab160-watch-grid,
+        #${PANEL_ID} .grab160-grid,
+        #${PANEL_ID} .grab160-grid-3 {
+          grid-template-columns: 1fr;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #${PANEL_ID} button {
+          transition: none;
+        }
+        #${PANEL_ID} button:active {
+          transform: none;
+        }
+      }
     `;
     document.documentElement.appendChild(style);
     document.documentElement.appendChild(panel);
@@ -2630,30 +3078,184 @@
       .replace(/"/g, "&quot;");
   }
 
+  function renderHelp(text) {
+    return `<span class="grab160-help" data-help="${htmlEscape(text)}" aria-label="${htmlEscape(
+      text,
+    )}" tabindex="0">?</span>`;
+  }
+
+  function ensurePanelTooltip() {
+    let tooltip = document.getElementById(PANEL_TOOLTIP_ID);
+    if (tooltip) {
+      return tooltip;
+    }
+    tooltip = document.createElement("div");
+    tooltip.id = PANEL_TOOLTIP_ID;
+    tooltip.setAttribute("role", "tooltip");
+    document.documentElement.appendChild(tooltip);
+    return tooltip;
+  }
+
+  function positionPanelTooltip(trigger, tooltip) {
+    const margin = 10;
+    const gap = 10;
+    const triggerRect = trigger.getBoundingClientRect();
+    const tooltipWidth = tooltip.offsetWidth || 260;
+    const tooltipHeight = tooltip.offsetHeight || 40;
+    let left = triggerRect.right + gap;
+    if (left + tooltipWidth + margin > globalThis.innerWidth) {
+      left = triggerRect.left - tooltipWidth - gap;
+    }
+    left = Math.max(margin, Math.min(left, globalThis.innerWidth - tooltipWidth - margin));
+    const centeredTop = triggerRect.top + triggerRect.height / 2 - tooltipHeight / 2;
+    const top = Math.max(
+      margin,
+      Math.min(centeredTop, globalThis.innerHeight - tooltipHeight - margin),
+    );
+    tooltip.style.left = `${Math.round(left)}px`;
+    tooltip.style.top = `${Math.round(top)}px`;
+  }
+
+  function showPanelTooltip(trigger) {
+    const text = trigger.getAttribute("data-help");
+    if (!text) {
+      return;
+    }
+    const tooltip = ensurePanelTooltip();
+    tooltip.textContent = text;
+    tooltip.style.display = "block";
+    trigger.setAttribute("aria-describedby", PANEL_TOOLTIP_ID);
+    positionPanelTooltip(trigger, tooltip);
+    globalThis.requestAnimationFrame?.(() => {
+      tooltip.classList.add("grab160-tooltip-visible");
+    });
+    if (!globalThis.requestAnimationFrame) {
+      tooltip.classList.add("grab160-tooltip-visible");
+    }
+  }
+
+  function hidePanelTooltip(trigger = null) {
+    const tooltip = document.getElementById(PANEL_TOOLTIP_ID);
+    if (!tooltip?.classList || !tooltip?.style) {
+      return;
+    }
+    tooltip.classList.remove("grab160-tooltip-visible");
+    tooltip.style.display = "none";
+    trigger?.removeAttribute("aria-describedby");
+  }
+
+  function installPanelTooltips(container) {
+    if (!container?.querySelectorAll) {
+      return;
+    }
+    container.querySelectorAll(".grab160-help").forEach((trigger) => {
+      if (trigger.dataset.tooltipInstalled === "1") {
+        return;
+      }
+      trigger.dataset.tooltipInstalled = "1";
+      trigger.addEventListener("pointerenter", () => showPanelTooltip(trigger));
+      trigger.addEventListener("pointermove", () => {
+        const tooltip = document.getElementById(PANEL_TOOLTIP_ID);
+        if (tooltip?.classList.contains("grab160-tooltip-visible")) {
+          positionPanelTooltip(trigger, tooltip);
+        }
+      });
+      trigger.addEventListener("pointerleave", () => hidePanelTooltip(trigger));
+      trigger.addEventListener("focus", () => showPanelTooltip(trigger));
+      trigger.addEventListener("blur", () => hidePanelTooltip(trigger));
+      trigger.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          hidePanelTooltip(trigger);
+          trigger.blur();
+        }
+      });
+    });
+  }
+
+  function renderLabelText(label, helpText = "") {
+    return `<span class="grab160-label-text"><span>${htmlEscape(label)}</span>${
+      helpText ? renderHelp(helpText) : ""
+    }</span>`;
+  }
+
+  function renderStageRail(activePhase) {
+    return ["idle", "polling", "hit", "submit", "cooldown", "error"]
+      .map(
+        (phase) =>
+          `<span class="grab160-stage ${
+            phase === activePhase ? "grab160-stage-active" : ""
+          }" data-panel-stage="${phase}">${panelPhaseLabel(phase)}</span>`,
+      )
+      .join("");
+  }
+
+  function renderField(label, helpText, inputHtml) {
+    return `<label class="grab160-field">${renderLabelText(label, helpText)}${inputHtml}</label>`;
+  }
+
+  function renderCheck(path, label, checked, helpText) {
+    return `<label class="grab160-check"><input data-setting="${path}" type="checkbox" ${
+      checked ? "checked" : ""
+    }><span>${htmlEscape(label)}</span>${renderHelp(helpText)}</label>`;
+  }
+
   function renderPanel() {
     const panel = createPanel();
     const body = panel.querySelector(".grab160-body");
     const state = readState();
     const settings = readSettings();
     const summary = state.summary;
+    const phase = panelPhase(state, summary);
     const autoSubmitText = settings.booking.autoSubmit ? "ON" : "off";
+    hidePanelTooltip();
     body.innerHTML = `
-      <div class="grab160-buttons">
-        <button type="button" data-action="start">${state.running ? "Restart" : "Start"}</button>
-        <button type="button" data-action="stop">Stop</button>
+      <div class="grab160-watch">
+        <div class="grab160-stage-rail">${renderStageRail(phase)}</div>
+        <div class="grab160-watch-grid">
+          <div class="grab160-watch-card grab160-watch-card-primary">
+            <span>阶段</span>
+            <strong data-panel-phase-label>${panelPhaseLabel(phase)}</strong>
+          </div>
+          <div class="grab160-watch-card">
+            <span>医生目标</span>
+            <strong data-panel-target>${htmlEscape(panelDoctorText(state))}</strong>
+          </div>
+          <div class="grab160-watch-card">
+            <span>轮询次数</span>
+            <strong data-panel-attempts>${state.pollAttempt}</strong>
+          </div>
+          <div class="grab160-watch-card">
+            <span>运行</span>
+            <strong data-panel-running>${state.running ? "运行中" : "已停止"}</strong>
+          </div>
+          <div class="grab160-watch-card">
+            <span>自动提交</span>
+            <strong class="${settings.booking.autoSubmit ? "grab160-danger-text" : ""}" data-panel-auto-submit>${autoSubmitText}</strong>
+          </div>
+          <div class="grab160-watch-card">
+            <span>会话恢复</span>
+            <strong data-panel-recovery-attempts>${state.sessionRecoveryAttempts}/${settings.session.recoveryMaxAttempts}</strong>
+          </div>
+        </div>
+        <div class="grab160-summary">
+          <span class="grab160-status ${statusClassName(summary)}" data-panel-summary-message>${htmlEscape(summary?.message ?? "Ready")}</span>
+          <span class="grab160-muted" data-panel-summary-detail>${htmlEscape(formatPanelDetail(summary?.detail))}</span>
+        </div>
+      </div>
+      <div class="grab160-buttons grab160-actionbar">
+        <button class="grab160-primary-button" type="button" data-action="start">${state.running ? "Restart" : "Start"}</button>
+        <button class="grab160-danger-button" type="button" data-action="stop">Stop</button>
+        <button type="button" data-action="main">Overview</button>
         <button type="button" data-action="settings">Settings</button>
         <button type="button" data-action="logs">Logs</button>
         <button type="button" data-action="reset-state">Reset State</button>
       </div>
-      <div>Status: <span class="grab160-status ${statusClassName(summary)}" data-panel-summary-message>${htmlEscape(summary?.message ?? "Ready")}</span></div>
-      <div class="grab160-muted" data-panel-summary-detail>${htmlEscape(summary?.detail ?? "")}</div>
-      <div class="grab160-muted" data-panel-running>running=${state.running ? "yes" : "no"} · autoSubmit=${autoSubmitText} · attempts=${state.pollAttempt}</div>
-      <div class="grab160-muted" data-panel-target>doctor=${htmlEscape(panelDoctorText(state))}</div>
       ${state.activeView === "settings" ? renderSettingsView(settings) : ""}
       ${state.activeView === "logs" ? renderLogsView(state, settings) : ""}
     `;
     body.querySelector('[data-action="start"]')?.addEventListener("click", startRun);
     body.querySelector('[data-action="stop"]')?.addEventListener("click", () => stopRun());
+    body.querySelector('[data-action="main"]')?.addEventListener("click", () => setActiveView("main"));
     body
       .querySelector('[data-action="settings"]')
       ?.addEventListener("click", () => setActiveView("settings"));
@@ -2661,6 +3263,7 @@
     body
       .querySelector('[data-action="reset-state"]')
       ?.addEventListener("click", resetRuntimeState);
+    installPanelTooltips(body);
     if (state.activeView === "settings") {
       wireSettingsView(body, settings);
     }
@@ -2669,71 +3272,233 @@
   function renderSettingsView(settings) {
     const hourRows =
       settings.filters.hours.length > 0 ? settings.filters.hours : ["08:00-09:00"];
+    const dayLabels = {
+      am: "上午 am",
+      pm: "下午 pm",
+      em: "夜间 em",
+    };
     return `
-      <div class="grab160-log" data-settings-view>
-        <label>Member ID <input data-setting="member.memberId" type="password" value="${htmlEscape(settings.member.memberId ?? "")}"></label>
-        <label><input data-setting="member.show" type="checkbox" style="width:auto"> Show member ID</label>
-        <label>Member Label <input data-setting="member.memberLabel" value="${htmlEscape(settings.member.memberLabel ?? "")}"></label>
-        <div class="grab160-row">
-          <label>Province <input data-setting="address.province" value="${htmlEscape(settings.address.province ?? "")}"></label>
-          <label>City <input data-setting="address.city" value="${htmlEscape(settings.address.city ?? "")}"></label>
-          <label>Area <input data-setting="address.area" value="${htmlEscape(settings.address.area ?? "")}"></label>
-        </div>
-        <label>Address Detail <input data-setting="address.detail" value="${htmlEscape(settings.address.detail ?? "")}"></label>
-        <label>Start At <input data-setting="runtime.startAt" type="datetime-local" value="${htmlEscape(settings.runtime.startAt ?? "")}"></label>
-        <label>Appointment From <input data-setting="filters.startDate" type="date" value="${htmlEscape(settings.filters.startDate ?? "")}"></label>
-        <div class="grab160-row">${[1, 2, 3, 4, 5, 6, 7]
-          .map(
-            (day) =>
-              `<label><input data-week="${day}" type="checkbox" style="width:auto" ${
-                settings.filters.weeks.includes(day) ? "checked" : ""
-              }> 周${"一二三四五六日"[day - 1]}</label>`,
-          )
-          .join("")}</div>
-        <div class="grab160-row">${["am", "pm", "em"]
-          .map(
-            (day) =>
-              `<label><input data-period="${day}" type="checkbox" style="width:auto" ${
-                settings.filters.days.includes(day) ? "checked" : ""
-              }> ${day}</label>`,
-          )
-          .join("")}</div>
-        <label>Hours</label>
-        <div data-hours>${hourRows
-          .map((range) => {
-            const [start, end] = range.split("-");
-            return `<div class="grab160-row" data-hour-row><input type="time" step="1800" value="${htmlEscape(start)}"><input type="time" step="1800" value="${htmlEscape(end)}"><button type="button" data-remove-hour>Delete</button></div>`;
-          })
-          .join("")}</div>
-        <button type="button" data-add-hour>Add Time Range</button>
-        <div class="grab160-row">
-          ${renderRangeInputs("Poll", "pacing.pollMs", settings.pacing.pollMs, 3000)}
-          ${renderRangeInputs("Action", "pacing.pageActionMs", settings.pacing.pageActionMs)}
-        </div>
-        <div class="grab160-row">
-          ${renderRangeInputs("Booking Settle", "pacing.bookingSubmitSettleMs", settings.pacing.bookingSubmitSettleMs, 500)}
-          ${renderRangeInputs("Retry", "pacing.bookingRetryMs", settings.pacing.bookingRetryMs, 1000)}
-        </div>
-        <div class="grab160-row">
-          ${renderRangeInputs("Rate Limit", "pacing.rateLimitCooldownMs", settings.pacing.rateLimitCooldownMs, 15000)}
-        </div>
-        <label><input data-setting="booking.autoSubmit" type="checkbox" style="width:auto" ${
-          settings.booking.autoSubmit ? "checked" : ""
-        }> Auto Submit</label>
-        <label><input data-setting="booking.autoReturnAfterSubmitFailure" type="checkbox" style="width:auto" ${
-          settings.booking.autoReturnAfterSubmitFailure ? "checked" : ""
-        }> Auto return after submit failure</label>
-        <label>Disease description <input data-setting="booking.diseaseDescription" value="${htmlEscape(settings.booking.diseaseDescription ?? "")}"></label>
-        <label>Max submit attempts <input data-setting="booking.maxSubmitAttemptsPerAppointment" type="number" min="1" max="20" value="${settings.booking.maxSubmitAttemptsPerAppointment}"></label>
-        <label><input data-setting="session.recoveryEnabled" type="checkbox" style="width:auto" ${
-          settings.session.recoveryEnabled ? "checked" : ""
-        }> Session Recovery</label>
-        <label>Keepalive seconds <input data-setting="session.keepAliveIntervalSeconds" type="number" min="0" value="${settings.session.keepAliveIntervalSeconds}"></label>
-        <label>Recovery max attempts <input data-setting="session.recoveryMaxAttempts" type="number" min="0" value="${settings.session.recoveryMaxAttempts}"></label>
-        <label>Log Level <select data-setting="logging.level">${LOG_LEVELS.map(
-          (level) =>
-            `<option value="${level}" ${level === settings.logging.level ? "selected" : ""}>${level}</option>`,
-        ).join("")}</select></label>
+      <div data-settings-view>
+        <details class="grab160-section" open>
+          <summary><span>就诊人与地址</span><span class="grab160-field-note">预约页填表使用</span></summary>
+          <div class="grab160-section-body">
+            <div class="grab160-grid">
+              ${renderField(
+                "Member ID",
+                "指定就诊人 ID。为空时，如果预约页只有一个明确就诊人，脚本会自动选择；多个候选时需要填 ID 或标签。",
+                `<input data-setting="member.memberId" type="password" value="${htmlEscape(
+                  settings.member.memberId ?? "",
+                )}">`,
+              )}
+              ${renderField(
+                "Member Label",
+                "按就诊人显示文字做模糊匹配，例如姓名的一部分；当不知道 memberId 时可用。",
+                `<input data-setting="member.memberLabel" value="${htmlEscape(
+                  settings.member.memberLabel ?? "",
+                )}">`,
+              )}
+            </div>
+            ${renderCheck(
+              "member.show",
+              "Show member ID",
+              false,
+              "只临时显示上方 Member ID 明文，不会保存为配置。",
+            )}
+            <div class="grab160-grid grab160-grid-3">
+              ${renderField(
+                "Province",
+                "预约页所在城市的省份。若就诊人资料自带地区 ID，会优先使用资料里的值。",
+                `<input data-setting="address.province" value="${htmlEscape(
+                  settings.address.province ?? "",
+                )}">`,
+              )}
+              ${renderField(
+                "City",
+                "预约页所在城市的城市名称。默认用于三级地址选择。",
+                `<input data-setting="address.city" value="${htmlEscape(
+                  settings.address.city ?? "",
+                )}">`,
+              )}
+              ${renderField(
+                "Area",
+                "预约页所在城市的区县名称。默认用于三级地址选择。",
+                `<input data-setting="address.area" value="${htmlEscape(
+                  settings.address.area ?? "",
+                )}">`,
+              )}
+            </div>
+            ${renderField(
+              "Address Detail",
+              "预约页要求填写详细地址时使用。若就诊人资料已有详细地址，会优先复用资料值。",
+              `<input data-setting="address.detail" value="${htmlEscape(
+                settings.address.detail ?? "",
+              )}">`,
+            )}
+          </div>
+        </details>
+
+        <details class="grab160-section" open>
+          <summary><span>筛选时间</span><span class="grab160-field-note">决定刷哪些号源</span></summary>
+          <div class="grab160-section-body">
+            <div class="grab160-grid">
+              ${renderField(
+                "Start At",
+                "到这个时间才开始轮询；为空则点击 Start 后立即开始。",
+                `<input data-setting="runtime.startAt" type="datetime-local" value="${htmlEscape(
+                  settings.runtime.startAt ?? "",
+                )}">`,
+              )}
+              ${renderField(
+                "Appointment From",
+                "从哪一天开始查询号源，不是脚本启动时间；为空则从今天开始。",
+                `<input data-setting="filters.startDate" type="date" value="${htmlEscape(
+                  settings.filters.startDate ?? "",
+                )}">`,
+              )}
+            </div>
+            <div class="grab160-field">
+              ${renderLabelText("Weekdays", "只提交选中星期的号源；全不选表示星期不限。")}
+              <div class="grab160-chip-row">${[1, 2, 3, 4, 5, 6, 7]
+                .map(
+                  (day) =>
+                    `<label class="grab160-chip"><input data-week="${day}" type="checkbox" ${
+                      settings.filters.weeks.includes(day) ? "checked" : ""
+                    }>周${"一二三四五六日"[day - 1]}</label>`,
+                )
+                .join("")}</div>
+            </div>
+            <div class="grab160-field">
+              ${renderLabelText("Periods", "只提交选中时段的号源；全不选表示上午/下午/夜间不限。")}
+              <div class="grab160-chip-row">${["am", "pm", "em"]
+                .map(
+                  (day) =>
+                    `<label class="grab160-chip"><input data-period="${day}" type="checkbox" ${
+                      settings.filters.days.includes(day) ? "checked" : ""
+                    }>${dayLabels[day]}</label>`,
+                )
+                .join("")}</div>
+            </div>
+            <div class="grab160-field">
+              ${renderLabelText(
+                "Hours",
+                "只提交落在这些具体时间范围内的号源，固定半小时粒度；为空表示具体时间不限。",
+              )}
+              <div class="grab160-hour-list" data-hours>${hourRows
+                .map((range) => {
+                  const [start, end] = range.split("-");
+                  return `<div class="grab160-hour-row" data-hour-row><input type="time" step="1800" value="${htmlEscape(
+                    start,
+                  )}"><input type="time" step="1800" value="${htmlEscape(
+                    end,
+                  )}"><button type="button" data-remove-hour>Delete</button></div>`;
+                })
+                .join("")}</div>
+              <button type="button" data-add-hour>Add Time Range</button>
+            </div>
+          </div>
+        </details>
+
+        <details class="grab160-section" open>
+          <summary><span>自动提交</span><span class="grab160-field-note">提交前最后一道开关</span></summary>
+          <div class="grab160-section-body">
+            <div class="grab160-warning-box">Auto Submit 开启后，脚本会在预约页准备完成时点击最终提交按钮；首次 smoke 建议保持关闭。</div>
+            ${renderCheck(
+              "booking.autoSubmit",
+              "Auto Submit",
+              settings.booking.autoSubmit,
+              "开启后会自动点击最终预约提交按钮；关闭时只准备表单，停在提交前等你手动确认。",
+            )}
+            ${renderCheck(
+              "booking.autoReturnAfterSubmitFailure",
+              "Auto return after submit failure",
+              settings.booking.autoReturnAfterSubmitFailure,
+              "提交失败后是否自动回到医生页继续刷；关闭时会停在失败页面方便你检查原因。",
+            )}
+            ${renderField(
+              "Disease description",
+              "预约页病情描述输入框内容。",
+              `<input data-setting="booking.diseaseDescription" value="${htmlEscape(
+                settings.booking.diseaseDescription ?? "",
+              )}">`,
+            )}
+            ${renderField(
+              "Max submit attempts",
+              "同一个号源最多自动提交尝试次数，超过后停止，避免短时间重复提交。",
+              `<input data-setting="booking.maxSubmitAttemptsPerAppointment" type="number" min="1" max="20" value="${settings.booking.maxSubmitAttemptsPerAppointment}">`,
+            )}
+          </div>
+        </details>
+
+        <details class="grab160-section">
+          <summary><span>Advanced</span><span class="grab160-field-note">节流、恢复、日志</span></summary>
+          <div class="grab160-section-body">
+            <div class="grab160-grid">
+              ${renderRangeInputs(
+                "轮询间隔 ms",
+                "pacing.pollMs",
+                settings.pacing.pollMs,
+                3000,
+                "两次查询排班之间的随机等待；越小越快，也越容易触发访问频繁。",
+              )}
+              ${renderRangeInputs(
+                "页面动作 ms",
+                "pacing.pageActionMs",
+                settings.pacing.pageActionMs,
+                0,
+                "打开预约页、选择表单、点击按钮前后的随机等待，模拟人工操作节奏。",
+              )}
+              ${renderRangeInputs(
+                "提交稳定 ms",
+                "pacing.bookingSubmitSettleMs",
+                settings.pacing.bookingSubmitSettleMs,
+                500,
+                "提交预约前等待预约页初始化稳定的时间，只在医生页自动跳转到预约页后生效。",
+              )}
+              ${renderRangeInputs(
+                "失败重试 ms",
+                "pacing.bookingRetryMs",
+                settings.pacing.bookingRetryMs,
+                1000,
+                "同一个号源提交失败后，再次尝试前的随机等待。",
+              )}
+              ${renderRangeInputs(
+                "限频冷却 ms",
+                "pacing.rateLimitCooldownMs",
+                settings.pacing.rateLimitCooldownMs,
+                15000,
+                "检测到访问频繁后暂停多久再继续。",
+              )}
+            </div>
+            ${renderCheck(
+              "session.recoveryEnabled",
+              "Session Recovery",
+              settings.session.recoveryEnabled,
+              "登录态或会话 key 丢失时，是否尝试刷新医生页并恢复轮询。",
+            )}
+            <div class="grab160-grid">
+              ${renderField(
+                "Keepalive seconds",
+                "轮询期间多久后台访问一次就诊人页面，尽量维持登录态；设为 0 可关闭。",
+                `<input data-setting="session.keepAliveIntervalSeconds" type="number" min="0" value="${settings.session.keepAliveIntervalSeconds}">`,
+              )}
+              ${renderField(
+                "Recovery max attempts",
+                "登录态丢失后最多允许几次恢复尝试，超过后停止并提示人工处理。",
+                `<input data-setting="session.recoveryMaxAttempts" type="number" min="0" value="${settings.session.recoveryMaxAttempts}">`,
+              )}
+              ${renderField(
+                "Log Level",
+                "控制面板和控制台保留的最低日志级别；debug 最详细，error 最安静。",
+                `<select data-setting="logging.level">${LOG_LEVELS.map(
+                  (level) =>
+                    `<option value="${level}" ${
+                      level === settings.logging.level ? "selected" : ""
+                    }>${level}</option>`,
+                ).join("")}</select>`,
+              )}
+            </div>
+          </div>
+        </details>
         <div class="grab160-buttons">
           <button type="button" data-save-settings>Save Settings</button>
           <button type="button" data-reset-settings>Reset Settings</button>
@@ -2742,18 +3507,29 @@
     `;
   }
 
-  function renderRangeInputs(label, path, value, min = 0) {
-    return `<label>${label} min/max ms <span class="grab160-row"><input data-range="${path}" data-range-index="0" type="number" min="${min}" value="${value[0]}"><input data-range="${path}" data-range-index="1" type="number" min="${min}" value="${value[1]}"></span></label>`;
+  function renderRangeInputs(label, path, value, min = 0, helpText = "") {
+    return `<label class="grab160-field grab160-range-field">${renderLabelText(
+      label,
+      helpText,
+    )}<span class="grab160-row"><input data-range="${path}" data-range-index="0" type="number" min="${min}" value="${value[0]}" aria-label="${htmlEscape(
+      `${label} min`,
+    )}"><input data-range="${path}" data-range-index="1" type="number" min="${min}" value="${
+      value[1]
+    }" aria-label="${htmlEscape(`${label} max`)}"></span></label>`;
   }
 
   function renderLogsView(state, settings) {
     const logs = (state.logs ?? []).filter((entry) => shouldLog(entry.level, settings));
-    return `<div class="grab160-log">${logs
-      .map(
-        (entry) =>
-          `[${entry.ts}] ${entry.level.toUpperCase()} ${htmlEscape(entry.message)} ${htmlEscape(entry.detail)}`,
-      )
-      .join("\n")}</div>`;
+    return `<div class="grab160-log">${htmlEscape(
+      logs.length
+        ? logs
+            .map(
+              (entry) =>
+                `[${entry.ts}] ${entry.level.toUpperCase()} ${entry.message} ${entry.detail}`,
+            )
+            .join("\n")
+        : "暂无日志",
+    )}</div>`;
   }
 
   function setByPath(target, path, value) {
@@ -2834,7 +3610,7 @@
     body.querySelector("[data-add-hour]")?.addEventListener("click", () => {
       const hours = body.querySelector("[data-hours]");
       const row = document.createElement("div");
-      row.className = "grab160-row";
+      row.className = "grab160-hour-row";
       row.dataset.hourRow = "1";
       row.innerHTML =
         '<input type="time" step="1800" value="08:00"><input type="time" step="1800" value="09:00"><button type="button" data-remove-hour>Delete</button>';
