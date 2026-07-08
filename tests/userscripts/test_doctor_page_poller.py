@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.11" in content
-    assert 'const SCRIPT_VERSION = "0.2.11";' in content
+    assert "// @version      0.2.12" in content
+    assert 'const SCRIPT_VERSION = "0.2.12";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -1156,7 +1156,7 @@ sandbox.document.querySelector = (selector) =>
         "waiting": True,
         "reason": "Clinic card id looked like an identity number; waiting for page card lookup.",
     }
-    assert result["after"] == {"ok": False, "missing": ["hisMemId"]}
+    assert result["after"] == {"ok": True, "missing": []}
     assert result["inputValue"] == ""
     assert result["trueValue"] == ""
     assert result["events"] == ["input", "change", "blur"]

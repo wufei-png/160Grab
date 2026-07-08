@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.11
+// @version      0.2.12
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.11";
+  const SCRIPT_VERSION = "0.2.12";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -1765,9 +1765,7 @@
       document.querySelector('select[name="hismemid"]');
     if (clinicIdInput) {
       const clinicId = compactText(clinicIdInput.value);
-      if (!clinicId) {
-        missing.push("hisMemId");
-      } else if (isLikelyIdentityNumber(clinicId)) {
+      if (clinicId && isLikelyIdentityNumber(clinicId)) {
         missing.push("hisMemId.identity_number");
       }
     }
