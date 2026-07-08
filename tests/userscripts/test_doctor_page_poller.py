@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.9" in content
-    assert 'const SCRIPT_VERSION = "0.2.9";' in content
+    assert "// @version      0.2.10" in content
+    assert 'const SCRIPT_VERSION = "0.2.10";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -644,8 +644,8 @@ def test_fill_booking_form_uses_configured_disease_description():
 })()""",
         extra_js="""
 const memberInput = { value: "" };
-const diseaseInput = { value: "" };
-const diseaseContent = { value: "" };
+const diseaseInput = { value: "", events: [], dispatchEvent(event) { this.events.push(event.type); } };
+const diseaseContent = { value: "", events: [], dispatchEvent(event) { this.events.push(event.type); } };
 const elements = {
   'input[name="member_id"]': memberInput,
   'input[name="disease_input"]': diseaseInput,
@@ -695,8 +695,8 @@ const schData = {
   value: 'a:1:{s:10:"sch-live-1";a:1:{s:3:"sch";a:1:{s:7:"to_date";s:10:"2026-07-10";}}}',
 };
 const memberInput = { value: "" };
-const diseaseInput = { value: "" };
-const diseaseContent = { value: "" };
+const diseaseInput = { value: "", dispatchEvent() {} };
+const diseaseContent = { value: "", dispatchEvent() {} };
 const elements = {
   "#sch_date": schDate,
   'input[name="sch_date"]': schDate,
@@ -789,6 +789,130 @@ sandbox.document.querySelector = (selector) => elements[selector] ?? null;
     assert result["detailValue"] == "深南花园"
     assert result["provinceEvents"] == ["input", "change"]
     assert result["cityEvents"] == ["input", "change"]
+
+
+def test_prepare_booking_form_waits_for_async_address_cascade():
+    result = _run_hook(
+        """hooks.prepareBookingFormForSubmit(
+  { scheduleId: "sch-live-1", appointmentValue: null, appointmentOptions: [] },
+  { memberId: "147750901", radio: null },
+  { province: "广东", city: "深圳", area: "南山", detail: "深南花园" },
+  { diseaseDescription: "门诊就诊，具体病情现场面诊沟通" },
+  { attempts: 6, delayMs: 1 }
+).then((preparation) => ({
+  preparation,
+  values: {
+    province: province.value,
+    city: city.value,
+    area: area.value,
+    detail: detail.value,
+    schDate: schDate.value,
+    diseaseInput: diseaseInput.value,
+    diseaseContent: diseaseContent.value,
+    accept: accept.checked,
+  },
+  events: {
+    province: province.events,
+    city: city.events,
+    area: area.events,
+  },
+}))""",
+        extra_js="""
+sandbox.Event = class Event {
+  constructor(type) {
+    this.type = type;
+  }
+};
+const option = (value, text) => ({ value, text, textContent: text, selected: false });
+const makeSelect = (id, options) => ({
+  id,
+  options,
+  value: options[0].value,
+  selectedIndex: 0,
+  events: [],
+  dispatchEvent(event) {
+    this.events.push(event.type);
+    if (event.type !== "change") return;
+    if (id === "useraddress_province" && this.value === "2") {
+      setTimeout(() => {
+        city.options = [option("0", "选择市"), option("5", "深圳")];
+        city.value = "0";
+        city.selectedIndex = 0;
+      }, 0);
+    }
+    if (id === "useraddress_city" && this.value === "5") {
+      setTimeout(() => {
+        area.options = [option("0", "选择区"), option("8", "南山区")];
+        area.value = "0";
+        area.selectedIndex = 0;
+      }, 0);
+    }
+  },
+});
+const province = makeSelect("useraddress_province", [
+  option("0", "请选择"),
+  option("2", "广东"),
+]);
+const city = makeSelect("useraddress_city", [option("0", "请选择")]);
+const area = makeSelect("useraddress_area", [option("0", "请选择")]);
+const detail = { value: "", dispatchEvent() {} };
+const schDate = { value: "", dispatchEvent() {} };
+const schData = {
+  value: 'a:1:{s:10:"sch-live-1";a:1:{s:3:"sch";a:1:{s:7:"to_date";s:10:"2026-07-10";}}}',
+};
+const memberInput = { value: "" };
+const diseaseInput = {
+  id: "disease_input",
+  value: "",
+  dispatchEvent() {},
+  getAttribute(name) { return name === "name" ? "disease_input" : ""; },
+};
+const diseaseContent = {
+  id: "disease_content",
+  value: "",
+  dispatchEvent() {},
+  getAttribute(name) { return name === "name" ? "disease_content" : ""; },
+};
+const accept = {
+  checked: false,
+  attrs: {},
+  setAttribute(name, value) { this.attrs[name] = value; },
+  dispatchEvent() {},
+};
+const elements = {
+  "#useraddress_province": province,
+  "#useraddress_city": city,
+  "#useraddress_area": area,
+  "#useraddress_area, select[name='addressId']": area,
+  "#useraddress_detail": detail,
+  "#sch_date": schDate,
+  'input[name="sch_date"]': schDate,
+  'input[name="sch_data"]': schData,
+  'input[name="member_id"]': memberInput,
+  'textarea[name="disease_input"]': diseaseInput,
+  "#disease_input": diseaseInput,
+  'input[name="disease_content"]': diseaseContent,
+  "#disease_content": diseaseContent,
+  'input[name="accept"][value="1"]': accept,
+  'input[name="accept"][value="1"], #check_yuyue_rule': accept,
+};
+sandbox.document.querySelector = (selector) => elements[selector] ?? null;
+""",
+    )
+
+    assert result["preparation"]["ok"] is True
+    assert result["preparation"]["attempt"] > 1
+    assert result["preparation"]["readiness"] == {"ok": True, "missing": []}
+    assert result["values"] == {
+        "province": "2",
+        "city": "5",
+        "area": "8",
+        "detail": "深南花园",
+        "schDate": "2026-07-10",
+        "diseaseInput": "门诊就诊，具体病情现场面诊沟通",
+        "diseaseContent": "门诊就诊，具体病情现场面诊沟通",
+        "accept": True,
+    }
 
 
 def test_fill_address_selection_uses_member_region_ids_before_config():

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.9
+// @version      0.2.10
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.9";
+  const SCRIPT_VERSION = "0.2.10";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -1207,6 +1207,67 @@
     return { ok: true, required: true, filled: true, source: "schedule", value: date };
   }
 
+  function uniqueElementsFromSelectors(selectors) {
+    const elements = [];
+    const seen = new Set();
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element && !seen.has(element)) {
+        seen.add(element);
+        elements.push(element);
+      }
+    }
+    return elements;
+  }
+
+  function fillDiseaseDescription(bookingConfig = CONFIG_DEFAULTS.booking) {
+    const diseaseDescription =
+      normalizeOptionalValue(bookingConfig?.diseaseDescription) ?? DEFAULT_DISEASE_DESCRIPTION;
+    const inputs = uniqueElementsFromSelectors([
+      'input[name="disease_input"]',
+      'textarea[name="disease_input"]',
+      "#disease_input",
+      'textarea[name="disease_content"]',
+      'input[name="disease_content"]',
+      "#disease_content",
+    ]);
+    if (!inputs.length) {
+      return { ok: true, required: false };
+    }
+    const values = [];
+    for (const input of inputs) {
+      if (!compactText(input.value)) {
+        input.value = diseaseDescription;
+      }
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      values.push({ name: input.getAttribute?.("name") || "", filled: Boolean(compactText(input.value)) });
+    }
+    const missing = values.filter((item) => !item.filled);
+    return {
+      ok: missing.length === 0,
+      required: true,
+      filledCount: values.length - missing.length,
+      missing,
+    };
+  }
+
+  function fillBookingRulesAcceptance() {
+    const inputs = uniqueElementsFromSelectors([
+      'input[name="accept"][value="1"]',
+      "#check_yuyue_rule",
+    ]);
+    if (!inputs.length) {
+      return { ok: true, required: false };
+    }
+    for (const input of inputs) {
+      input.checked = true;
+      input.setAttribute("checked", "checked");
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return { ok: true, required: true, checkedCount: inputs.length };
+  }
+
   function clickElement(element) {
     if (!element) {
       return false;
@@ -1677,27 +1738,93 @@
     const clinicIdSelection = fillClinicId(memberSelection);
     const addressSelection = fillAddressSelection(addressConfig, memberSelection);
     const scheduleDateSelection = fillScheduleDate(formState);
-    const diseaseDescription =
-      normalizeOptionalValue(bookingConfig?.diseaseDescription) ?? DEFAULT_DISEASE_DESCRIPTION;
-    for (const selector of [
+    const diseaseSelection = fillDiseaseDescription(bookingConfig);
+    const acceptSelection = fillBookingRulesAcceptance();
+    return {
+      addressSelection,
+      clinicIdSelection,
+      scheduleDateSelection,
+      diseaseSelection,
+      acceptSelection,
+    };
+  }
+
+  function readBookingFormReadiness() {
+    const missing = [];
+    const checkSelect = (selector, field) => {
+      const select = document.querySelector(selector);
+      if (select && isPlaceholderSelectValue(select.value)) {
+        missing.push(field);
+      }
+    };
+    checkSelect("#useraddress_province", "address.province");
+    checkSelect("#useraddress_city", "address.city");
+    checkSelect("#useraddress_area, select[name='addressId']", "address.area");
+
+    const detailInput =
+      document.querySelector("#useraddress_detail") ??
+      document.querySelector('input[name="address"]');
+    if (detailInput && !compactText(detailInput.value)) {
+      missing.push("address.detail");
+    }
+
+    const scheduleDateInput =
+      document.querySelector("#sch_date") ?? document.querySelector('input[name="sch_date"]');
+    if (scheduleDateInput && !compactText(scheduleDateInput.value)) {
+      missing.push("sch_date");
+    }
+
+    const diseaseInputs = uniqueElementsFromSelectors([
       'input[name="disease_input"]',
+      'textarea[name="disease_input"]',
       "#disease_input",
       'textarea[name="disease_content"]',
+      'input[name="disease_content"]',
       "#disease_content",
-    ]) {
-      const input = document.querySelector(selector);
-      if (input && !compactText(input.value)) {
-        input.value = diseaseDescription;
+    ]);
+    for (const input of diseaseInputs) {
+      if (!compactText(input.value)) {
+        missing.push(input.getAttribute?.("name") || input.id || "disease");
       }
     }
-    for (const selector of ['input[name="accept"][value="1"]', "#check_yuyue_rule"]) {
-      const input = document.querySelector(selector);
-      if (input) {
-        input.checked = true;
-        input.setAttribute("checked", "checked");
+
+    const accept = document.querySelector('input[name="accept"][value="1"], #check_yuyue_rule');
+    if (accept && !accept.checked) {
+      missing.push("accept");
+    }
+    return { ok: missing.length === 0, missing };
+  }
+
+  async function prepareBookingFormForSubmit(
+    formState,
+    memberSelection,
+    addressConfig,
+    bookingConfig = CONFIG_DEFAULTS.booking,
+    options = {},
+  ) {
+    const attempts = Math.max(1, Number(options.attempts ?? 10));
+    const delayMs = Math.max(0, Number(options.delayMs ?? 250));
+    let fillResult = null;
+    let readiness = { ok: false, missing: ["not_checked"] };
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      fillResult = fillBookingForm(formState, memberSelection, addressConfig, bookingConfig);
+      readiness = readBookingFormReadiness();
+      if (fillResult.addressSelection.ok && fillResult.scheduleDateSelection.ok && readiness.ok) {
+        return { ok: true, attempt, fillResult, readiness };
+      }
+      if (attempt < attempts) {
+        await sleepMs(delayMs);
       }
     }
-    return { addressSelection, clinicIdSelection, scheduleDateSelection };
+    return {
+      ok: false,
+      attempt: attempts,
+      fillResult,
+      readiness,
+      reason: readiness.ok
+        ? "Booking form fill did not stabilize."
+        : `Booking form required fields are not ready: ${readiness.missing.join(", ")}`,
+    };
   }
 
   function isCheckIdInfoUrl(url) {
@@ -2175,18 +2302,27 @@
       return;
     }
 
-    const fillResult = fillBookingForm(
+    const preparation = await prepareBookingFormForSubmit(
       formState,
       memberSelection,
       settings.address,
       settings.booking,
     );
+    const fillResult = preparation.fillResult;
     if (!fillResult.addressSelection.ok) {
       stopRun(`Address selection failed: ${fillResult.addressSelection.reason}`);
       return;
     }
     if (!fillResult.scheduleDateSelection.ok) {
       stopRun(`Schedule date fill failed: ${fillResult.scheduleDateSelection.reason}`);
+      return;
+    }
+    if (!preparation.ok) {
+      stopRun(preparation.reason);
+      appendLog("warn", "Booking form did not become ready before submit.", {
+        readiness: preparation.readiness,
+        attempts: preparation.attempt,
+      });
       return;
     }
     const memberBlocker = readSelectedMemberBlocker(memberSelection);
@@ -2766,7 +2902,10 @@
     fillClinicId,
     readScheduleDateFromSerializedData,
     fillScheduleDate,
+    fillDiseaseDescription,
     fillBookingForm,
+    readBookingFormReadiness,
+    prepareBookingFormForSubmit,
     installCheckIdInfoBlankResponsePatch,
     normalizeCheckIdInfoJsonResponse,
     findSubmitControl,
