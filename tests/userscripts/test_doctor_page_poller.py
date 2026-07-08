@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.13" in content
-    assert 'const SCRIPT_VERSION = "0.2.13";' in content
+    assert "// @version      0.2.14" in content
+    assert 'const SCRIPT_VERSION = "0.2.14";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -184,6 +184,7 @@ def test_normalize_settings_keeps_python_config_semantics_for_business_fields():
     assert result["filters"]["weeks"] == [1, 3]
     assert result["filters"]["days"] == ["am", "pm"]
     assert result["pacing"]["pollMs"] == [3000, 5000]
+    assert result["pacing"]["bookingSubmitSettleMs"] == [3500, 4500]
     assert result["address"] == {
         "province": "广东",
         "city": "深圳",
@@ -226,6 +227,17 @@ def test_normalize_settings_clamps_polling_and_cooldown_minimums():
     assert result["pacing"]["pollMs"] == [3000, 3000]
     assert result["pacing"]["bookingRetryMs"] == [1000, 1000]
     assert result["pacing"]["rateLimitCooldownMs"] == [15000, 15000]
+
+
+def test_booking_submit_settle_only_applies_after_doctor_page_auto_open():
+    result = _run_hook(
+        """[
+  hooks.resolveBookingSubmitSettleMs({ pacing: { bookingSubmitSettleMs: [12, 12] } }, true),
+  hooks.resolveBookingSubmitSettleMs({ pacing: { bookingSubmitSettleMs: [12, 12] } }, false)
+]"""
+    )
+
+    assert result == [12, 0]
 
 
 def test_controller_claim_is_singleton_per_page_instance():

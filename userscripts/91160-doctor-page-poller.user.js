@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.13
+// @version      0.2.14
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.13";
+  const SCRIPT_VERSION = "0.2.14";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -66,6 +66,7 @@
     pacing: {
       pollMs: [3000, 5000],
       pageActionMs: [400, 900],
+      bookingSubmitSettleMs: [3500, 4500],
       bookingRetryMs: [2000, 4000],
       rateLimitCooldownMs: [15000, 25000],
     },
@@ -252,6 +253,11 @@
         pageActionMs: normalizeRange(
           merged.pacing.pageActionMs,
           CONFIG_DEFAULTS.pacing.pageActionMs,
+        ),
+        bookingSubmitSettleMs: normalizeRange(
+          merged.pacing.bookingSubmitSettleMs,
+          CONFIG_DEFAULTS.pacing.bookingSubmitSettleMs,
+          { min: 0 },
         ),
         bookingRetryMs: normalizeRange(
           merged.pacing.bookingRetryMs,
@@ -1798,6 +1804,29 @@
     };
   }
 
+  function resolveBookingSubmitSettleMs(settings, autoOpenedFromDoctor) {
+    if (!autoOpenedFromDoctor) {
+      return 0;
+    }
+    return pickDelayMs(
+      settings?.pacing?.bookingSubmitSettleMs ??
+        CONFIG_DEFAULTS.pacing.bookingSubmitSettleMs,
+    );
+  }
+
+  async function waitForBookingSubmitSettle(settings, autoOpenedFromDoctor) {
+    const delayMs = resolveBookingSubmitSettleMs(settings, autoOpenedFromDoctor);
+    if (delayMs <= 0) {
+      return { waited: false, delayMs: 0 };
+    }
+    setSummary("info", "Waiting for booking page initialization before submit.", {
+      delayMs,
+      source: "doctor-page-auto-open",
+    });
+    await sleepMs(delayMs);
+    return { waited: true, delayMs };
+  }
+
   function isCheckIdInfoUrl(url) {
     return /checkidinfo|checkIdInfo/.test(String(url || ""));
   }
@@ -2240,6 +2269,7 @@
     const settings = readSettings();
     const bookingTarget = parseBookingUrl(location.href);
     const state = readState();
+    const autoOpenedFromDoctor = Boolean(state.pendingBooking?.scheduleId);
     if (!bookingTarget) {
       stopRun("Unsupported booking page URL.");
       return;
@@ -2369,6 +2399,10 @@
       return;
     }
 
+    const settle = await waitForBookingSubmitSettle(settings, autoOpenedFromDoctor);
+    if (settle.waited) {
+      appendLog("debug", "Waited for booking page initialization before submit.", settle);
+    }
     await sleepMs(pickDelayMs(settings.pacing.pageActionMs));
     const beforeUrl = location.href;
     const submitControl = findSubmitControl();
@@ -2687,7 +2721,10 @@
           ${renderRangeInputs("Action", "pacing.pageActionMs", settings.pacing.pageActionMs)}
         </div>
         <div class="grab160-row">
+          ${renderRangeInputs("Booking Settle", "pacing.bookingSubmitSettleMs", settings.pacing.bookingSubmitSettleMs, 500)}
           ${renderRangeInputs("Retry", "pacing.bookingRetryMs", settings.pacing.bookingRetryMs, 1000)}
+        </div>
+        <div class="grab160-row">
           ${renderRangeInputs("Rate Limit", "pacing.rateLimitCooldownMs", settings.pacing.rateLimitCooldownMs, 15000)}
         </div>
         <label><input data-setting="booking.autoSubmit" type="checkbox" style="width:auto" ${
@@ -2787,6 +2824,7 @@
     for (const path of [
       "pacing.pollMs",
       "pacing.pageActionMs",
+      "pacing.bookingSubmitSettleMs",
       "pacing.bookingRetryMs",
       "pacing.rateLimitCooldownMs",
     ]) {
@@ -2908,6 +2946,8 @@
     fillBookingForm,
     readBookingFormReadiness,
     prepareBookingFormForSubmit,
+    resolveBookingSubmitSettleMs,
+    waitForBookingSubmitSettle,
     installCheckIdInfoBlankResponsePatch,
     normalizeCheckIdInfoJsonResponse,
     findSubmitControl,
