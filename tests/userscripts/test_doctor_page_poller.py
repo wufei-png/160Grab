@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.14" in content
-    assert 'const SCRIPT_VERSION = "0.2.14";' in content
+    assert "// @version      0.2.15" in content
+    assert 'const SCRIPT_VERSION = "0.2.15";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -1289,10 +1289,6 @@ sandbox.document.querySelectorAll = () => [];
     assert result["eventsAfterTrigger"] == [
         "scrollIntoView",
         "focus",
-        "mouseover",
-        "mousemove",
-        "mousedown",
-        "mouseup",
         "native-click",
     ]
     assert result["submitResult"] == {
@@ -1300,7 +1296,6 @@ sandbox.document.querySelectorAll = () => [];
         "target": "#suborder #submitbtn",
         "activation": {
             "method": "native-click",
-            "dispatched": ["mouseover", "mousemove", "mousedown", "mouseup"],
         },
     }
 

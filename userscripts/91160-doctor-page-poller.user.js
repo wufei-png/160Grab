@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.14
+// @version      0.2.15
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.14";
+  const SCRIPT_VERSION = "0.2.15";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -1952,35 +1952,25 @@
     return { method: control.method, target: control.target, activation };
   }
 
-  function dispatchMouseLikeEvent(element, type) {
-    try {
-      return element.dispatchEvent(
-        new MouseEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          view: globalThis,
-          button: 0,
-        }),
-      );
-    } catch (_error) {
-      return false;
-    }
-  }
-
   function activateSubmitElement(element) {
     if (!element) {
       return { method: "none" };
     }
     element.scrollIntoView?.({ block: "center", inline: "center" });
     element.focus?.({ preventScroll: true });
-    const preClickEvents = ["mouseover", "mousemove", "mousedown", "mouseup"];
-    const dispatched = preClickEvents.filter((type) => dispatchMouseLikeEvent(element, type));
     if (typeof element.click === "function") {
       element.click();
-      return { method: "native-click", dispatched };
+      return { method: "native-click" };
     }
-    dispatchMouseLikeEvent(element, "click");
-    return { method: "dispatch-click", dispatched };
+    element.dispatchEvent?.(
+      new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: globalThis,
+        button: 0,
+      }),
+    );
+    return { method: "dispatch-click" };
   }
 
   function markSubmitInProgress(formState, memberSelection, fillResult, attemptCount) {
