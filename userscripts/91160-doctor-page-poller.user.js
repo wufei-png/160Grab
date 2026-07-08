@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.10
+// @version      0.2.11
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -20,7 +20,7 @@
   const STATE_KEY = "grab160.doctorPagePoller.state.v2";
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
-  const SCRIPT_VERSION = "0.2.10";
+  const SCRIPT_VERSION = "0.2.11";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -117,6 +117,11 @@
   function normalizeOptionalValue(value) {
     const text = compactText(value);
     return PLACEHOLDER_VALUES.has(text.toLowerCase()) ? null : text;
+  }
+
+  function isLikelyIdentityNumber(value) {
+    const text = compactText(value);
+    return /^\d{15}$/.test(text) || /^\d{17}[\dXx]$/.test(text);
   }
 
   function normalizeBoolean(value, fallback = false) {
@@ -1482,21 +1487,7 @@
     };
   }
 
-  function readMemberClinicId(memberSelection) {
-    const radio = memberSelection?.radio;
-    if (!radio?.getAttribute) {
-      return { value: null, source: null };
-    }
-    for (const source of ["real_card", "true_value", "card", "social_card"]) {
-      const value = normalizeOptionalValue(radio.getAttribute(source));
-      if (value) {
-        return { value, source: `member-radio:${source}` };
-      }
-    }
-    return { value: null, source: null };
-  }
-
-  function fillClinicId(memberSelection) {
+  function fillClinicId() {
     const input =
       document.querySelector("#hismemid") ??
       document.querySelector('input[name="hisMemId"]') ??
@@ -1508,6 +1499,20 @@
 
     const existing = compactText(input.value);
     if (existing) {
+      if (isLikelyIdentityNumber(existing)) {
+        input.value = "";
+        input.removeAttribute?.("true_value");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+        return {
+          ok: true,
+          required: true,
+          filled: false,
+          waiting: true,
+          reason: "Clinic card id looked like an identity number; waiting for page card lookup.",
+        };
+      }
       if (input.getAttribute && !compactText(input.getAttribute("true_value"))) {
         input.setAttribute?.("true_value", existing);
       }
@@ -1520,27 +1525,12 @@
       };
     }
 
-    const candidate = readMemberClinicId(memberSelection);
-    if (!candidate.value) {
-      return {
-        ok: true,
-        required: true,
-        filled: false,
-        reason: "No member clinic card/id value was available.",
-      };
-    }
-
-    input.value = candidate.value;
-    input.setAttribute?.("true_value", candidate.value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.dispatchEvent(new Event("blur", { bubbles: true }));
     return {
       ok: true,
       required: true,
-      filled: true,
-      source: candidate.source,
-      valueLength: candidate.value.length,
+      filled: false,
+      waiting: true,
+      reason: "Waiting for page card lookup to populate clinic card id.",
     };
   }
 
@@ -1735,7 +1725,7 @@
     if (memberSelection.radio) {
       clickElement(memberSelection.radio);
     }
-    const clinicIdSelection = fillClinicId(memberSelection);
+    const clinicIdSelection = fillClinicId();
     const addressSelection = fillAddressSelection(addressConfig, memberSelection);
     const scheduleDateSelection = fillScheduleDate(formState);
     const diseaseSelection = fillDiseaseDescription(bookingConfig);
@@ -1766,6 +1756,20 @@
       document.querySelector('input[name="address"]');
     if (detailInput && !compactText(detailInput.value)) {
       missing.push("address.detail");
+    }
+
+    const clinicIdInput =
+      document.querySelector("#hismemid") ??
+      document.querySelector('input[name="hisMemId"]') ??
+      document.querySelector('input[name="hismemid"]') ??
+      document.querySelector('select[name="hismemid"]');
+    if (clinicIdInput) {
+      const clinicId = compactText(clinicIdInput.value);
+      if (!clinicId) {
+        missing.push("hisMemId");
+      } else if (isLikelyIdentityNumber(clinicId)) {
+        missing.push("hisMemId.identity_number");
+      }
     }
 
     const scheduleDateInput =

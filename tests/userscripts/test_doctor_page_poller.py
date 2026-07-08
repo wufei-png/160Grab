@@ -109,8 +109,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.10" in content
-    assert 'const SCRIPT_VERSION = "0.2.10";' in content
+    assert "// @version      0.2.11" in content
+    assert 'const SCRIPT_VERSION = "0.2.11";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -1007,7 +1007,7 @@ sandbox.document.querySelector = (selector) =>
     assert "Missing address province" in result["reason"]
 
 
-def test_fill_clinic_id_uses_member_real_card_without_returning_value():
+def test_fill_clinic_id_waits_for_page_card_lookup_instead_of_copying_identity_number():
     result = _run_hook(
         """(() => {
   const clinicId = hooks.fillClinicId({ radio });
@@ -1051,15 +1051,15 @@ sandbox.document.querySelector = (selector) =>
     assert result["clinicId"] == {
         "ok": True,
         "required": True,
-        "filled": True,
-        "source": "member-radio:real_card",
-        "valueLength": 18,
+        "filled": False,
+        "waiting": True,
+        "reason": "Waiting for page card lookup to populate clinic card id.",
     }
-    assert result["inputValueLength"] == 18
-    assert result["inputWasFilled"] is True
-    assert result["submitValueLength"] == 18
+    assert result["inputValueLength"] == 0
+    assert result["inputWasFilled"] is False
+    assert result["submitValueLength"] == 0
     assert result["submitValueMatchesInput"] is True
-    assert result["events"] == ["input", "change", "blur"]
+    assert result["events"] == []
 
 
 def test_fill_clinic_id_keeps_existing_value():
@@ -1103,6 +1103,63 @@ sandbox.document.querySelector = (selector) =>
     assert result["inputValue"] == "existing-card"
     assert result["trueValue"] == "existing-card"
     assert result["events"] == []
+
+
+def test_fill_clinic_id_clears_identity_number_and_readiness_rejects_it():
+    result = _run_hook(
+        """(() => {
+  const before = hooks.readBookingFormReadiness();
+  const clinicId = hooks.fillClinicId();
+  const after = hooks.readBookingFormReadiness();
+  return {
+    before,
+    clinicId,
+    after,
+    inputValue: input.value,
+    trueValue: input.attrs.true_value || "",
+    events: input.events,
+  };
+})()""",
+        extra_js="""
+sandbox.Event = class Event {
+  constructor(type) {
+    this.type = type;
+  }
+};
+const input = {
+  value: "11010519491231002X",
+  attrs: { true_value: "11010519491231002X" },
+  events: [],
+  getAttribute(name) {
+    return this.attrs[name] || "";
+  },
+  setAttribute(name, value) {
+    this.attrs[name] = value;
+  },
+  removeAttribute(name) {
+    delete this.attrs[name];
+  },
+  dispatchEvent(event) {
+    this.events.push(event.type);
+  },
+};
+sandbox.document.querySelector = (selector) =>
+  selector === "#hismemid" ? input : null;
+""",
+    )
+
+    assert result["before"] == {"ok": False, "missing": ["hisMemId.identity_number"]}
+    assert result["clinicId"] == {
+        "ok": True,
+        "required": True,
+        "filled": False,
+        "waiting": True,
+        "reason": "Clinic card id looked like an identity number; waiting for page card lookup.",
+    }
+    assert result["after"] == {"ok": False, "missing": ["hisMemId"]}
+    assert result["inputValue"] == ""
+    assert result["trueValue"] == ""
+    assert result["events"] == ["input", "change", "blur"]
 
 
 def test_checkidinfo_blank_response_patch_only_normalizes_target_json():
