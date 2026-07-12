@@ -342,6 +342,10 @@ src/grab/
 └── utils/     # 配置加载、访问频率提示解析与运行时工具
 ```
 
+## License
+
+本项目采用 [MIT License](LICENSE)。
+
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=wufei-png/160Grab&type=Date)](https://star-history.com/#wufei-png/160Grab&Date)
