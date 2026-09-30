@@ -117,3 +117,21 @@ async def test_read_interval_uses_monotonic_clock_during_wall_clock_jump(
     await page.wait_for_function("requests === 2", timeout=1000)
     await page.evaluate(f"{HOOKS}.stopRun()")
     await page.wait_for_function("finished")
+
+@pytest.mark.parametrize(
+    "instant", ["2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00.250-04:00"]
+)
+async def test_real_datetime_input_roundtrip_preserves_offset_dst_time(
+    chromium_page, instant
+):
+    page = chromium_page
+    await setup(page)
+    result = await page.evaluate(f"""() => {{
+      const h={HOOKS};
+      const previous=h.normalizeSettings({{schedule:{{timezone:'America/New_York'}},runtime:{{startAt:{instant!r}}}}});
+      const form=document.createElement('div');
+      form.innerHTML='<input data-setting="runtime.startAt" type="datetime-local" step="0.001"><input data-setting="schedule.timezone" value="America/New_York"><input data-setting="schedule.lateStartGraceSeconds" value="30"><select data-setting="booking.submitMode"><option value="manual_confirm">manual</option></select>';
+      form.querySelector('[data-setting="runtime.startAt"]').value=h.startAtInputValue(previous.runtime.startAt,previous.schedule.timezone);
+      return {{normalized:h.collectSettingsFromPanel(form,previous).runtime.startAt, expected:previous.runtime.startAt}};
+    }}""")
+    assert result["normalized"] == result["expected"]

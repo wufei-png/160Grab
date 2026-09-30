@@ -3684,7 +3684,8 @@
     // Preserve an explicit instant when the displayed wall time is unchanged,
     // including an offset-disambiguated DST fold and subsecond precision.
     if (next.schedule.timezone === previous.schedule.timezone &&
-        next.runtime.startAt === startAtInputValue(previous.runtime.startAt, previous.schedule.timezone)) {
+        normalizeStartAtValue(next.runtime.startAt, "UTC") ===
+        normalizeStartAtValue(startAtInputValue(previous.runtime.startAt, previous.schedule.timezone), "UTC")) {
       next.runtime.startAt = previous.runtime.startAt;
     }
     next.runtime.startBlocked = false;
