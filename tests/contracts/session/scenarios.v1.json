@@ -75,6 +75,23 @@
       "payload": null,
       "state": "UNKNOWN",
       "failure_class": "schema_drift"
+    },
+    {
+      "payload": {
+        "result_code": 1,
+        "data": {
+          "schedules": []
+        },
+        "sch": {
+          "changed": {
+            "schedule_id": "slot",
+            "y_state": true,
+            "to_date": "2030-01-01"
+          }
+        }
+      },
+      "state": "UNKNOWN",
+      "failure_class": "schema_drift"
     }
   ]
 }

@@ -72,6 +72,10 @@ def classify_schedule(payload) -> SessionAssessment:
     if str(code) != "1":
         return SessionAssessment(SessionState.UNKNOWN, "unknown")
     data = payload.get("data")
+    if isinstance(data, dict) and "schedules" in data and "sch" in payload:
+        # Two provider representations have no verified precedence contract.
+        # Do not validate one source and then let the parser consume another.
+        return SessionAssessment(SessionState.UNKNOWN, "schema_drift")
     if isinstance(data, dict) and isinstance(data.get("schedules"), list):
         try:
             for item in data["schedules"]:

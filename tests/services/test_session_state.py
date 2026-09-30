@@ -66,3 +66,22 @@ def test_retry_after():
     assert parse_retry_after("33") == 33
     for value in [None, "bad", "nan", "inf", "-1"]:
         assert parse_retry_after(value, now) == 0
+
+
+def test_mixed_representations_do_not_authorize_unvalidated_fallback():
+    from grab.models.schemas import DoctorPageTarget
+    from grab.services.schedule import ScheduleService
+
+    reader = ScheduleService(None)
+    reader.set_target(
+        DoctorPageTarget(unit_id="u", dept_id="d", doctor_id="doc", source_url="")
+    )
+    payload = {
+        "result_code": 1,
+        "data": {"schedules": []},
+        "sch": {
+            "changed": {"schedule_id": "slot", "y_state": True, "to_date": "2030-01-01"}
+        },
+    }
+    with pytest.raises(UnknownSessionError, match="schema_drift"):
+        reader.parse_doctor_schedule(payload)

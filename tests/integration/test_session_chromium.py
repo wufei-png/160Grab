@@ -86,7 +86,22 @@ async def test_userscript_stop_cancels_immediately_without_extra_request(
 
 
 @pytest.mark.parametrize(
-    "payload", [{"code": 1, "sch": {"new": "shape"}}, {"error_code": 10021}]
+    "payload",
+    [
+        {"code": 1, "sch": {"new": "shape"}},
+        {"error_code": 10021},
+        {
+            "result_code": 1,
+            "data": {"schedules": []},
+            "sch": {
+                "changed": {
+                    "schedule_id": "slot",
+                    "y_state": True,
+                    "to_date": "2030-01-01",
+                }
+            },
+        },
+    ],
 )
 async def test_unknown_or_expired_stops_without_navigation_or_booking(
     chromium_page, payload

@@ -1510,6 +1510,7 @@
     if (String(payload.error_code ?? "") === "10021") return {state: "EXPIRED", failureClass: "session_expired"};
     if (String(payload.result_code ?? payload.code) !== "1") return {state: "UNKNOWN", failureClass: "unknown"};
     const schedules = payload.data?.schedules;
+    if (payload.data && typeof payload.data === 'object' && 'schedules' in payload.data && 'sch' in payload) return {state: 'UNKNOWN', failureClass: 'schema_drift'};
     if (Array.isArray(schedules)) {
       if (schedules.every(item => item && typeof item.schedule_id === 'string' && item.schedule_id && typeof item.doctor_id === 'string' && item.doctor_id && Number.isInteger(item.weekday) && item.weekday >= 1 && item.weekday <= 7 && ['am','pm','em'].includes(item.day_period) && ['available','full','expired','stopped','not_open','unavailable'].includes(item.status))) return {state: "VALID"};
       return {state: "UNKNOWN", failureClass: "schema_drift"};
