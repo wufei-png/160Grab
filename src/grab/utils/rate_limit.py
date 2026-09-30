@@ -12,7 +12,8 @@ RATE_LIMIT_PATTERNS = (
 
 
 class RateLimitError(RuntimeError):
-    def __init__(self, message: str, context: str):
+    def __init__(self, message: str, context: str, *, retry_after: float = 0):
+        self.retry_after = retry_after
         self.message = message
         self.context = context
         super().__init__(f"{context}: {message}")
@@ -55,3 +56,20 @@ def _extract_snippet(text: str, pattern: str, radius: int = 48) -> str:
     start = max(0, index - radius)
     end = min(len(text), index + len(pattern) + radius)
     return text[start:end]
+
+
+def parse_retry_after(value, now=None) -> float:
+    """HTTP delta-seconds or date; invalid hints never shorten local cooldown."""
+    import math
+    from datetime import UTC, datetime
+    from email.utils import parsedate_to_datetime
+
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        try:
+            instant = parsedate_to_datetime(str(value))
+            seconds = (instant - (now or datetime.now(UTC))).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return 0
+    return max(0, seconds) if math.isfinite(seconds) else 0

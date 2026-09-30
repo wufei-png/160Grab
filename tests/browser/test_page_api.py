@@ -83,19 +83,16 @@ async def test_page_api_fetch_runs_inside_page_context(fake_page):
 
 
 @pytest.mark.asyncio
-async def test_page_api_falls_back_to_context_request_when_fetch_is_blocked():
+async def test_page_api_transport_failure_has_no_second_request():
+    from grab.errors import TransientSessionRefreshError
+
     page = FakePage(
-        evaluate_error=RuntimeError("Page.evaluate: TypeError: Failed to fetch"),
-        request_payload={"result_code": 1, "source": "context.request"},
+        evaluate_error=RuntimeError("Page.evaluate: TypeError: Failed to fetch")
     )
-    api = BrowserPageApi(page)
-
-    payload = await api.get_json("/guahao/v1/pc/sch/dep", params={"unit_id": "u1"})
-
-    assert payload["source"] == "context.request"
-    assert page.request_calls == [
-        "https://www.91160.com/guahao/v1/pc/sch/dep?unit_id=u1"
-    ]
+    with pytest.raises(TransientSessionRefreshError):
+        await BrowserPageApi(page).get_json("/guahao/v1/pc/sch/dep", {"unit_id": "u1"})
+    assert page.request_calls == []
+    assert len(page.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -141,15 +138,12 @@ class FakePageFlakyEvaluate(FakePage):
 
 
 @pytest.mark.asyncio
-async def test_page_api_get_global_value_retries_after_destroyed_context():
+async def test_page_api_get_global_value_is_single_shot():
     page = FakePageFlakyEvaluate({"_user_key": "page-user-key"}, fail_before_success=2)
-    api = BrowserPageApi(page)
-
-    value = await api.get_global_value("_user_key")
-
-    assert value == "page-user-key"
-    assert page._evaluate_attempts == 3
-    assert page.wait_for_load_state_calls == 3
+    with pytest.raises(RuntimeError, match="Execution context was destroyed"):
+        await BrowserPageApi(page).get_global_value("_user_key")
+    assert page._evaluate_attempts == 1
+    assert page.wait_for_load_state_calls == 0
 
 
 @pytest.mark.asyncio

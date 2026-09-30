@@ -1,7 +1,4 @@
-import asyncio
 from typing import Any
-
-from grab.observability.safe_logging import logger
 
 
 def _is_destroyed_context_error(exc: BaseException) -> bool:
@@ -14,74 +11,86 @@ class BrowserPageApi:
         self.base_url = base_url
 
     async def get_json(self, path: str, params: dict[str, str] | None = None) -> dict:
-        request_params = {"path": path, "params": params or {}}
-        try:
-            return await self.page.evaluate(
-                """async ({path, params}) => {
-                    const url = new URL(path, "https://www.91160.com");
-                    Object.entries(params ?? {}).forEach(([key, value]) => {
-                        url.searchParams.set(key, value);
-                    });
-                    const response = await fetch(url.toString(), {
-                        credentials: "include",
-                    });
-                    return await response.json();
-                }""",
-                request_params,
-            )
-        except Exception as exc:
-            if not self._should_fallback_to_context_request(exc):
-                raise
-            context = getattr(self.page, "context", None)
-            request = getattr(context, "request", None)
-            if request is None:
-                raise
-
-            url = self._build_url(path, params or {})
-            response = await request.get(url)
-            return await self._parse_response_json(response, url)
+        return await self.get_json_via_page_ajax(path, params)
 
     async def get_json_via_page_ajax(
         self, path: str, params: dict[str, str] | None = None
     ) -> dict:
-        request_params = {"path": path, "params": params or {}}
-        return await self.page.evaluate(
-            """async ({path, params}) => {
-                const url = new URL(path, "https://www.91160.com");
-                return await new Promise((resolve, reject) => {
-                    if (window.jQuery?.ajax) {
-                        window.jQuery.ajax({
-                            url: url.toString(),
-                            type: 'GET',
-                            data: params ?? {},
-                            dataType: 'json',
-                            timeout: 15000,
-                            success: resolve,
-                            error: (xhr, textStatus, errorThrown) => {
-                                const body = (xhr?.responseText || '').slice(0, 160);
-                                reject(
-                                    new Error(
-                                        `ajax error status=${xhr?.status || ''} `
-                                        + `textStatus=${textStatus || ''} `
-                                        + `error=${errorThrown || ''} `
-                                        + `body=${body}`
-                                    )
-                                );
-                            }
-                        });
-                        return;
-                    }
+        # One transport per call. The polling owner alone decides whether to retry.
+        from grab.errors import TransientSessionRefreshError
 
-                    Object.entries(params ?? {}).forEach(([key, value]) => {
-                        url.searchParams.set(key, value);
+        try:
+            result = await self.page.evaluate(
+                r"""async ({path, params}) => {
+                    const url = new URL(path, "https://www.91160.com");
+                    const pack = (status, body, retryAfter, finalUrl = '') => ({
+                        __grab_read_response__: true, status, body, retryAfter,
+                        loginRedirect: /https:\/\/(www|user)\.91160\.com\/login\.html(?:[?#]|$)/.test(finalUrl),
+                        redirected: !!finalUrl && new URL(finalUrl).pathname !== url.pathname,
                     });
-                    fetch(url.toString(), { credentials: 'include' })
-                        .then(async (response) => resolve(await response.json()))
-                        .catch((error) => reject(error));
-                });
-            }""",
-            request_params,
+                    if (window.jQuery?.ajax) {
+                        return await new Promise(resolve => window.jQuery.ajax({
+                            url: url.toString(), type: 'GET', data: params ?? {},
+                            dataType: 'json', timeout: 15000,
+                            success: (data, _, xhr) => resolve(pack(xhr?.status || 200, data, xhr?.getResponseHeader?.('Retry-After'))),
+                            error: (xhr) => resolve(pack(xhr?.status || 0, null, xhr?.getResponseHeader?.('Retry-After'), xhr?.responseURL || '')),
+                        }));
+                    }
+                    Object.entries(params ?? {}).forEach(([key, value]) => url.searchParams.set(key, value));
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), 15000);
+                    try {
+                        const response = await fetch(url.toString(), { credentials: 'include', signal: controller.signal });
+                        let body = null;
+                        try { body = await response.json(); } catch (_) { }
+                        return pack(response.status, body, response.headers.get('Retry-After'), response.url);
+                    } finally { clearTimeout(timer); }
+                }""",
+                {"path": path, "params": params or {}},
+            )
+        except Exception as exc:
+            from playwright.async_api import Error as PlaywrightError
+
+            if isinstance(exc, (PlaywrightError, TimeoutError)) or any(
+                marker in str(exc)
+                for marker in ("Failed to fetch", "Execution context was destroyed")
+            ):
+                raise TransientSessionRefreshError(
+                    "Read-only transport failed."
+                ) from None
+            raise
+        return self._unwrap_read_response(result)
+
+    def _unwrap_read_response(self, result):
+        from grab.errors import (
+            SessionExpiredError,
+            TransientSessionRefreshError,
+            UnknownSessionError,
         )
+        from grab.utils.rate_limit import RateLimitError, parse_retry_after
+
+        if (
+            not isinstance(result, dict)
+            or result.get("__grab_read_response__") is not True
+        ):
+            return result
+        status = result.get("status", 0)
+        retry_after = parse_retry_after(result.get("retryAfter"))
+        if status == 429:
+            raise RateLimitError(
+                "Rate limited.", "schedule_polling", retry_after=retry_after
+            )
+        if status == 0 or 500 <= status < 600:
+            exc = TransientSessionRefreshError("Read-only transport failed.")
+            exc.retry_after = retry_after
+            raise exc
+        if result.get("loginRedirect"):
+            raise SessionExpiredError("Authenticated session expired.")
+        if result.get("redirected") or not 200 <= status < 300:
+            raise UnknownSessionError()
+        if result.get("body") is None:
+            raise UnknownSessionError("schema_drift")
+        return result["body"]
 
     async def get_cookie_value(
         self,
@@ -133,67 +142,7 @@ class BrowserPageApi:
                 await probe_page.close()
 
     async def get_global_value(self, name: str):
-        """Read a JS global from the page.
-
-        Doctor pages may still be navigating or re-rendering shortly after a
-        paste/goto; evaluate in that window raises "Execution context was
-        destroyed". Wait for DOM readiness and retry a few times before surfacing
-        the error.
-        """
-        wait = getattr(self.page, "wait_for_load_state", None)
-        expression = """({ name }) => {
-                if (name in globalThis) {
-                    return globalThis[name];
-                }
-                return null;
-            }"""
-        arg = {"name": name}
-        last_error: BaseException | None = None
-        for attempt in range(3):
-            if callable(wait):
-                try:
-                    await wait("domcontentloaded", timeout=8_000)
-                except Exception:
-                    logger.warning("Page.wait_for_load_state failed.")
-            try:
-                return await self.page.evaluate(expression, arg)
-            except Exception as exc:
-                last_error = exc
-                if _is_destroyed_context_error(exc) and attempt < 2:
-                    await asyncio.sleep(0.15 * (attempt + 1))
-                    continue
-                raise
-        assert last_error is not None
-        raise last_error
-
-    def _build_url(self, path: str, params: dict[str, str]) -> str:
-        from urllib.parse import urlencode
-
-        if path.startswith("http://") or path.startswith("https://"):
-            base = path
-        else:
-            base = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
-        if not params:
-            return base
-        return f"{base}?{urlencode(params)}"
-
-    def _should_fallback_to_context_request(self, exc: Exception) -> bool:
-        message = str(exc)
-        return any(
-            token in message
-            for token in (
-                "Failed to fetch",
-                "Unexpected token",
-                "not valid JSON",
-            )
+        return await self.page.evaluate(
+            "({name}) => name in globalThis ? globalThis[name] : null",
+            {"name": name},
         )
-
-    async def _parse_response_json(self, response, url: str) -> dict:
-        try:
-            return await response.json()
-        except Exception as exc:
-            text = await response.text()
-            snippet = text[:160].replace("\n", " ").replace("\r", " ")
-            raise ValueError(
-                f"Expected JSON from {url}, got non-JSON response: {snippet}"
-            ) from exc
