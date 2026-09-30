@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "provenance": "handwritten-synthetic",
+  "scenarios": [
+    {
+      "id": "first-option",
+      "scope": "parse-only",
+      "html": "options.html",
+      "selection": {
+        "member_id": "synthetic-member-a",
+        "schedule_id": "synthetic-schedule-a",
+        "date": "2030-01-02",
+        "time": "08:00-08:30"
+      },
+      "filters": {
+        "hours": []
+      },
+      "field_sources": {
+        "member_id": "explicit-config",
+        "schedule_id": "page",
+        "date": "page",
+        "time": "page"
+      },
+      "required_field_blockers": [],
+      "submit_candidate_count": 1,
+      "expected": {
+        "parser": {
+          "schedule_id": "synthetic-schedule-a",
+          "appointment_value": "synthetic-time-a",
+          "appointment_label": "08:00-08:30",
+          "is_valid": true,
+          "invalid_reason": null
+        },
+        "state": "DISCOVERED",
+        "click_count": 0
+      }
+    },
+    {
+      "id": "filtered-option",
+      "scope": "parse-only",
+      "html": "options.html",
+      "selection": {
+        "member_id": "synthetic-member-a",
+        "schedule_id": "synthetic-schedule-a",
+        "date": "2030-01-02",
+        "time": "09:00-09:30"
+      },
+      "filters": {
+        "hours": [
+          "09:00-10:00"
+        ]
+      },
+      "field_sources": {
+        "member_id": "explicit-config",
+        "schedule_id": "page",
+        "date": "page",
+        "time": "page"
+      },
+      "required_field_blockers": [],
+      "submit_candidate_count": 1,
+      "expected": {
+        "parser": {
+          "schedule_id": "synthetic-schedule-a",
+          "appointment_value": "synthetic-time-b",
+          "appointment_label": "09:00-09:30",
+          "is_valid": true,
+          "invalid_reason": null
+        },
+        "state": "DISCOVERED",
+        "click_count": 0
+      }
+    },
+    {
+      "id": "time-mismatch",
+      "scope": "parse-only",
+      "html": "options.html",
+      "selection": {
+        "member_id": "synthetic-member-a",
+        "schedule_id": "synthetic-schedule-a",
+        "date": "2030-01-02",
+        "time": null
+      },
+      "filters": {
+        "hours": [
+          "11:00-12:00"
+        ]
+      },
+      "field_sources": {
+        "member_id": "explicit-config",
+        "schedule_id": "page",
+        "date": "page",
+        "time": "page"
+      },
+      "required_field_blockers": [
+        "hour_filter_mismatch"
+      ],
+      "submit_candidate_count": 1,
+      "expected": {
+        "parser": {
+          "schedule_id": "synthetic-schedule-a",
+          "appointment_value": null,
+          "appointment_label": null,
+          "is_valid": false,
+          "invalid_reason": "hour_filter_mismatch"
+        },
+        "state": "DISCOVERED",
+        "click_count": 0
+      }
+    },
+    {
+      "id": "missing-options",
+      "scope": "parse-only",
+      "html": "no-options.html",
+      "selection": {
+        "member_id": "synthetic-member-a",
+        "schedule_id": "synthetic-schedule-a",
+        "date": "2030-01-02",
+        "time": null
+      },
+      "filters": {
+        "hours": [
+          "09:00-10:00"
+        ]
+      },
+      "field_sources": {
+        "member_id": "explicit-config",
+        "schedule_id": "page",
+        "date": "page",
+        "time": "page"
+      },
+      "required_field_blockers": [
+        "no_appointment_options"
+      ],
+      "submit_candidate_count": 1,
+      "expected": {
+        "parser": {
+          "schedule_id": "synthetic-schedule-a",
+          "appointment_value": null,
+          "appointment_label": null,
+          "is_valid": false,
+          "invalid_reason": "no_appointment_options"
+        },
+        "state": "DISCOVERED",
+        "click_count": 0
+      }
+    },
+    {
+      "id": "missing-schedule",
+      "scope": "parse-only",
+      "html": "no-schedule.html",
+      "selection": {
+        "member_id": "synthetic-member-a",
+        "schedule_id": "synthetic-schedule-a",
+        "date": "2030-01-02",
+        "time": "08:00-08:30"
+      },
+      "filters": {
+        "hours": []
+      },
+      "field_sources": {
+        "member_id": "explicit-config",
+        "schedule_id": "page",
+        "date": "page",
+        "time": "page"
+      },
+      "required_field_blockers": [
+        "missing_schedule_id"
+      ],
+      "submit_candidate_count": 1,
+      "expected": {
+        "parser": {
+          "schedule_id": "",
+          "appointment_value": "synthetic-time-a",
+          "appointment_label": "08:00-08:30",
+          "is_valid": false,
+          "invalid_reason": "missing_schedule_id"
+        },
+        "state": "DISCOVERED",
+        "click_count": 0
+      }
+    }
+  ]
+}
