@@ -86,8 +86,11 @@ async def test_expired_owner_never_revives_and_readonly_takeover(tmp_path):
         with pytest.raises(LeaderLost):
             owner.renew()
         # Heartbeat releases the stale kernel owner; suspended task stays fenced.
-        task = asyncio.create_task(owner.heartbeat())
-        await task
+        for _ in range(150):
+            if owner.fd is None:
+                break
+            await asyncio.sleep(0.01)
+        assert owner.fd is None
         with pytest.raises(LeaderLost):
             check_leader()
         with pytest.raises(LeaderLost):
@@ -237,3 +240,24 @@ async def test_expired_session_refresh_does_not_issue_second_touch(tmp_path):
         with pytest.raises(LeaderLost):
             await session.refresh_session_for_polling(obj.target)
     assert len(touches) == 1
+
+
+async def test_synchronous_consent_wait_keeps_leader_and_single_click(tmp_path):
+    import time
+
+    from grab.transactions.consent import ConsentManager
+
+    obj = strategy(tmp_path / "journal")
+
+    def prompt(_message):
+        time.sleep(0.3)  # input() blocks the event loop in the same way.
+        return "AUTHORIZE"
+
+    consent = ConsentManager(obj.attempt_store, prompt=prompt, interactive=True)
+    obj.authorization = consent.ensure
+    obj.consent_manager = consent
+    async with leader_scope(LocalLeader(tmp_path / "locks", ttl=0.12)):
+        result = await obj.submit_open_form(form())
+        assert result.state == "OUTCOME_UNKNOWN"
+        assert obj.page.clicks == 1
+        check_leader()

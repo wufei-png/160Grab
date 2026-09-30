@@ -4,10 +4,10 @@ The kernel lock is authoritative; metadata is never used as a storage CAS.
 A stale live owner fences itself before releasing. Never unlink the lock inode.
 """
 
-import asyncio
 import json
 import os
 import secrets
+import threading
 import time
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -33,6 +33,15 @@ class LeaderLost(RuntimeError):
         super().__init__("Automatic operation paused; local leader unavailable")
 
 
+def _synchronized(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._mutex:
+            return method(self, *args, **kwargs)
+
+    return wrapped
+
+
 class LocalLeader:
     def __init__(self, root=DEFAULT_LEADER_DIR, *, ttl=30, clock=time.monotonic):
         if ttl <= 0:
@@ -42,7 +51,9 @@ class LocalLeader:
         self.fd = None
         self.deadline = 0
         self._directory_context = None
+        self._mutex = threading.RLock()
 
+    @_synchronized
     def acquire(self):
         if self.fd is not None:
             raise LeaderLost()
@@ -71,6 +82,7 @@ class LocalLeader:
             self.release()
             raise LeaderLost() from exc
 
+    @_synchronized
     def _write_owner(self):
         raw = json.dumps({"version": 1, "owner": self.nonce}).encode()
         os.lseek(self.fd, 0, os.SEEK_SET)
@@ -78,6 +90,7 @@ class LocalLeader:
             raise LeaderLost()
         os.ftruncate(self.fd, len(raw))
 
+    @_synchronized
     def check(self):
         try:
             if self.fd is None or self.clock() >= self.deadline:
@@ -93,10 +106,12 @@ class LocalLeader:
         except (OSError, ValueError, TypeError) as exc:
             raise LeaderLost() from exc
 
+    @_synchronized
     def renew(self):
         self.check()  # An expired owner cannot renew itself back into leadership.
         self.deadline = self.clock() + self.ttl
 
+    @_synchronized
     def release(self):
         if self.fd is not None:
             os.close(self.fd)  # Kernel releases the lock, also on process crash.
@@ -106,9 +121,10 @@ class LocalLeader:
             self._directory_context = None
             context.__exit__(None, None, None)
 
-    async def heartbeat(self):
-        while True:
-            await asyncio.sleep(self.ttl / 3)
+    def heartbeat(self, stop):
+        # input() intentionally blocks asyncio during manual login/authorization.
+        # A separate thread renews there; a truly suspended process cannot renew.
+        while not stop.wait(self.ttl / 3):
             try:
                 self.renew()
             except LeaderLost:
@@ -137,12 +153,17 @@ async def leader_scope(leader=None):
         return
     leader = (leader or LocalLeader()).acquire()
     token = _current.set(leader)
-    heartbeat = asyncio.create_task(leader.heartbeat())
+    stop = threading.Event()
+    heartbeat = threading.Thread(
+        target=leader.heartbeat, args=(stop,), name="grab-leader", daemon=True
+    )
     try:
+        heartbeat.start()
         yield leader
     finally:
-        heartbeat.cancel()
-        await asyncio.gather(heartbeat, return_exceptions=True)
+        stop.set()
+        if heartbeat.ident is not None:
+            heartbeat.join()
         _current.reset(token)
         leader.release()
 
