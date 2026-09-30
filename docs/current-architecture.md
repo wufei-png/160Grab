@@ -1,7 +1,7 @@
 # 当前架构与核验证据
 
 核验日期：2026-09-30；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`，最终证据见下。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具至 `2a20e9a`（2026-10-01），最终证据见下。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -30,7 +30,7 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 | 隐私 sink 已按 S02 收口；Windows 权限能力仍未实测 | `observability/privacy.py/safe_logging.py/reporter.py/notifications.py`；`utils/private_files.py/retention.py`；JS `appendLog/state` |
 | 缓存 key 失效判断不足、一般网络异常退出 | `ScheduleService._resolve_schedule_user_key/fetch_doctor_schedule/poll` |
 | S05 本机/跨标签互斥已实现；时间 naive、无 channel 仍待 S08 | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
-| live 缺 ready/完整目标解析/有限等待闭环 | `tests/e2e/conftest.py::LiveRunner`；待 S06 |
+| S06 分层/ready/完整目标/预算/converter 已实现；现场输入与真实 fixture/adapter 仍缺 | `canary/`、`tests/e2e/`、JS canary panel；见 `docs/live-canary.md` |
 
 ## S01 已实现事实
 
@@ -218,3 +218,25 @@ Python 失锁后仍恢复登录。分别在 `4385214`、`9ebb1dd`、`b13be72`、
 reviewer 独立相关 **44 passed**、Ruff/Node/whitespace；主实现者逐项 regression 先证明缺陷再验证修复，
 相关 **78/70/80/67 passed**，JS 两条延迟导航补充 **2 passed**。未声称 reviewer 再审修复提交。
 现场 canary 仍属 S06。
+
+## S06 已实现事实（2026-10-01）
+
+- `canary/runner.py` 独立有限 canary owner：人工 ready 后 docid-only 完整解析，校验 doctor/unit/dept/date、
+  status 与配置时段；readonly 不解析/选择成员、不打开/改写预约表单。prepare 需具体场景确认；
+  submit 需明确层级、两个 live 开关及最终场景确认，仍经过产品 consent、readiness、leader 和 durable journal。
+  booking 底层读取 canary scope，低层级即使产品 auto/有效 grant 也零提交；pending 持续阻断。
+- 默认 3 次查询/120 秒，配置最多 10 次/600 秒；准备、人工等待包含在 run 预算。
+  无号源/超时分别返回 inconclusive；cancel 传播。live harness 需显式专用 profile，不复制认证状态；
+  browser 启动前持有真实本机锁，离线 autouse 临时锁不应用于 live。仅 POSIX TTY 支持人工 ready。
+- userscript 增加本机 canary panel/同 document 执行入口。readonly 查询、prepare 静态准备、submit 显式审批，
+  无自动换号/导航/follow-up；每次检查 owner 与单调 deadline。sessionStorage 只存固定 canary latch，
+  当前标签导航/reload/Start/reset 不能恢复产品自动运行；批准内存有效，退出后不清 pending。
+  原生 dialog 暂停 timer 时，恢复后仍以 deadline 拒绝超时动作。
+- converter 只重建已知 booking DOM/snapshot、normalized schedule JSON；未知字段/schema 拒绝，
+  去除 script/嵌入 JSON、URL、事件正文，敏感值转 synthetic token；保留空值、关联、日期冲突与静态状态。
+  输出含版本/日期/层级/路径/source/覆盖及只依赖结构的 fingerprint。no-follow/private 创建、不覆盖文件、
+  错误不带原文；已有 synthetic fixture CLI 转换样例用于 Chromium 两适配 parity。
+  静态夹具不复制站点异步/网络脚本；非 normalized sch provider 树尚无 converter，保守拒绝。
+- [现场操作与证据](live-canary.md) 分别记录 Python/userscript 的现场 blocker；未提供具体目标/profile/批准，
+  无真实网络登录/预约、真实 fixture 刷新或 live evidence adapter。原有 UNKNOWN 合同保留。
+  Tampermonkey 扩展 sandbox、Windows ready、远端 CI/frozen/release 尚未验证。
