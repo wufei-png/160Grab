@@ -277,3 +277,41 @@ async def test_legacy_pending_blocks_other_normal_booking_controller(chromium_pa
     assert result["pending"] is True
     assert len(result["journal"]["attempts"]) == 1
     assert result["journal"]["attempts"][0]["failure_class"] == "interrupted"
+
+
+@pytest.mark.parametrize("old_path", ["session", "rate-limit"])
+async def test_old_delayed_navigation_cannot_borrow_new_owner(chromium_page, old_path):
+    first, _ = await pages_for(
+        chromium_page, DOCTOR if old_path == "session" else BOOKING
+    )
+    await first.clock.install()
+    await first.evaluate("""() => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        h.writeSettings({session:{recoveryCooldownMs:[3000,3000]},pacing:{rateLimitCooldownMs:[15000,15000]}});
+    }""")
+    if old_path == "session":
+        await first.evaluate(START_DOCTOR)
+        await first.wait_for_function("polls === 1")
+        await first.evaluate("pollRespond({error_code:'10021'})")
+    else:
+        await first.evaluate("""() => {
+            document.body.append('访问次数过多');
+            const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+            const id = h.prepareManualControllerStart('booking');
+            h.runBookingPageController(id).then(() => {finished = true;});
+        }""")
+    await first.wait_for_function(
+        f"{HOOKS}.readState().summary.message.includes('Refresh') || {HOOKS}.readState().summary.message === 'Booking page hit rate limiting.'"
+    )
+    await first.evaluate(f"""() => {{
+        {HOOKS}.pauseForLeaderLoss();
+        history.replaceState(null,'','/doctors/index/unit_id-u/dep_id-d/docid-doc.html');
+        window.marker = 'new-owner';
+    }}""")
+    await first.wait_for_function("finished")
+    await first.evaluate(START_DOCTOR)
+    await first.wait_for_function("polls === " + str(2 if old_path == "session" else 1))
+    await first.clock.fast_forward(3100 if old_path == "session" else 15100)
+    assert await first.evaluate("window.marker") == "new-owner"
+    assert await first.evaluate(f"{HOOKS}.ownsBrowserLeader()") is True
+    await first.evaluate(f"{HOOKS}.stopRun()")

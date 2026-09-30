@@ -2003,14 +2003,15 @@
     );
   }
 
-  function navigateToDoctorPage(target) {
+  function navigateToDoctorPage(target, owner) {
+    if (!ownsBrowserLeader(owner)) return false;
     if (!isCompleteTarget(target)) {
       setSummary("error", "Cannot return to doctor page; target is incomplete.", target);
       patchState((state) => ({ ...state, running: false }));
       return;
     }
-    if (!ownsBrowserLeader()) return;
     location.replace(buildDoctorUrl(target));
+    return true;
   }
 
   function startRun() {
@@ -2052,6 +2053,7 @@
   }
 
   async function recoverSession(target, reason, settings) {
+    const owner = browserLeader;
     if (!settings.session.recoveryEnabled) {
       stopRun("Session recovery disabled; manual login required.");
       return false;
@@ -2075,8 +2077,7 @@
       `${reason}; attempt ${state.sessionRecoveryAttempts + 1}; delay ${delayMs} ms`,
     );
     await sleepMs(delayMs);
-    navigateToDoctorPage(target);
-    return true;
+    return navigateToDoctorPage(target, owner);
   }
 
   async function runDoctorPageController(controllerId) {
@@ -2201,10 +2202,11 @@
   }
 
   async function returnToDoctorAfterCurrentAttempt(target, message, delayConfig) {
+    const owner = browserLeader;
     const delayMs = pickDelayMs(delayConfig);
     setSummary("warn", message, `Returning to doctor page in ${delayMs} ms.`);
     await sleepMs(delayMs);
-    navigateToDoctorPage(target);
+    navigateToDoctorPage(target, owner);
   }
 
   async function runBookingPageController(controllerId) {
