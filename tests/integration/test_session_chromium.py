@@ -180,3 +180,41 @@ async def test_valid_response_resets_userscript_budget_after_transient_failure(
     assert await page.evaluate(f"{HOOKS}.readState().sessionState") == "VALID"
     await page.evaluate(f"{HOOKS}.stopRun()")
     await page.wait_for_function("finished")
+
+
+@pytest.mark.parametrize("reset", [False, True])
+async def test_stop_start_keeps_remaining_retry_after_cooldown(chromium_page, reset):
+    page = chromium_page
+    await setup(page)
+    await page.evaluate("""() => {
+      window.requestTimes=[];
+      window.fetch=async()=>{requests++;requestTimes.push(performance.now());return {status:429,text:async()=>'',headers:{get:()=> '60'}};};start();
+    }""")
+    await page.wait_for_function(f"{HOOKS}.readState().readFailures === 1")
+    await page.evaluate(f"{HOOKS}.stopRun()")
+    await page.wait_for_function("finished")
+    if reset:
+        await page.evaluate(f"{HOOKS}.resetRuntimeState()")
+    await page.evaluate("finished=false;start()")
+    await page.wait_for_function(f"{HOOKS}.ownsBrowserLeader()")
+    await page.clock.run_for(59000)
+    assert await page.evaluate("requests") == 1
+    await page.clock.run_for(1000)
+    await page.wait_for_function(f"{HOOKS}.readState().readFailures === 2")
+    times = await page.evaluate("requestTimes")
+    assert times[1] - times[0] >= 60000
+    await page.evaluate(f"{HOOKS}.stopRun()")
+    await page.wait_for_function("finished")
+
+
+async def test_long_retry_after_does_not_overflow_timer(chromium_page):
+    page = chromium_page
+    await setup(page)
+    await page.evaluate("""() => {
+      window.fetch=async()=>{requests++;return {status:429,text:async()=>'',headers:{get:()=> '3000000'}};};start();
+    }""")
+    await page.wait_for_function(f"{HOOKS}.readState().readFailures === 1")
+    await page.clock.run_for(31000)
+    assert await page.evaluate("requests") == 1
+    await page.evaluate(f"{HOOKS}.stopRun()")
+    await page.wait_for_function("finished")

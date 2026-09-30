@@ -664,6 +664,7 @@
   const LEADER_TTL_MS = 30000;
   let browserLeader = null;
   const readCancellations = new Set();
+  let readMonotonicDeadline = 0;
   let journalWriteActive = false;
   const leaderNow = () => globalThis.performance.now();
 
@@ -763,6 +764,7 @@
       sessionRecoveryAttempts: 0,
       readFailures: 0,
       readRateLimits: 0,
+      readNotBeforeAt: 0,
       sessionState: "UNKNOWN",
       lastKeepAliveAt: 0,
       summary: null,
@@ -815,6 +817,7 @@
       activeView: state.activeView,
       readFailures: state.readFailures,
       readRateLimits: state.readRateLimits,
+      readNotBeforeAt: state.readNotBeforeAt,
       sessionRecoveryAttempts: state.sessionRecoveryAttempts,
       submittingBooking: submissionBlocked() ? { state: "OUTCOME_UNKNOWN" } : null,
     });
@@ -2115,16 +2118,33 @@
     return false;
   }
 
+  function deferRead(delayMs) {
+    readMonotonicDeadline = Math.max(readMonotonicDeadline, leaderNow() + delayMs);
+    patchState(next => ({...next, readNotBeforeAt: Math.max(Number(next.readNotBeforeAt) || 0, Date.now() + delayMs)}));
+  }
+
+  function remainingReadDelay() {
+    return Math.max(0, readMonotonicDeadline - leaderNow(), Number(readState().readNotBeforeAt || 0) - Date.now());
+  }
+
   async function waitReadDelay(delayMs, guard) {
-    if (!guard()) return false;
-    let timer, cancel;
-    try {
-      return await new Promise(resolve => {
-        cancel = () => resolve(false);
-        readCancellations.add(cancel);
-        timer = setTimeout(() => resolve(guard()), Math.max(0, delayMs));
-      });
-    } finally { clearTimeout(timer); readCancellations.delete(cancel); }
+    const deadline = leaderNow() + delayMs;
+    while (guard()) {
+      const remaining = deadline - leaderNow();
+      if (remaining <= 0) return true;
+      let timer, cancel;
+      try {
+        const ready = await new Promise(resolve => {
+          cancel = () => resolve(false);
+          readCancellations.add(cancel);
+          // Chunk long server hints to avoid JS setTimeout overflow and keep
+          // cancellation responsive. No new read occurs between chunks.
+          timer = setTimeout(() => resolve(guard()), Math.min(30000, remaining));
+        });
+        if (!ready) return false;
+      } finally { clearTimeout(timer); readCancellations.delete(cancel); }
+    }
+    return false;
   }
 
   async function handleReadFailure(error, target, settings, controllerId) {
@@ -2146,6 +2166,7 @@
     }
     const jitter = Math.random() * Math.min(30000, 1000 * 2 ** (next.readFailures - 1));
     const delay = Math.max(3000, pickDelayMs(settings.pacing.pollMs), jitter, error.retryAfterMs || 0, limited ? pickDelayMs(settings.pacing.rateLimitCooldownMs) : 0);
+    deferRead(delay);
     setSummary('warn', limited ? 'Schedule polling hit rate limiting.' : 'Schedule polling request failed.', {attempt: next.readFailures, delayMs: delay});
     return waitReadDelay(delay, () => isControllerActive(controllerId));
   }
@@ -2197,6 +2218,7 @@
         setSummary('error', 'Read-only retry budget exhausted; continue manually.', '');
         return;
       }
+      if (!await waitReadDelay(remainingReadDelay(), () => isControllerActive(controllerId))) return;
       let payload;
       try {
         payload = await fetchDoctorSchedule(target, activeSettings);
@@ -2208,6 +2230,7 @@
         return;
       }
       patchState(next => ({...next, pollAttempt: next.pollAttempt + 1, readFailures: 0, readRateLimits: 0, sessionRecoveryAttempts: 0, sessionState: 'VALID', lastKeepAliveAt: Date.now()}));
+      deferRead(Math.max(3000, pickDelayMs(activeSettings.pacing.pollMs)));
 
       const slots = filterSlots(
         parseDoctorSchedulePayload(payload, target),
@@ -2243,7 +2266,7 @@
         filters: activeSettings.filters,
       });
       refreshPanel();
-      if (!await waitReadDelay(Math.max(3000, pickDelayMs(activeSettings.pacing.pollMs)), () => isControllerActive(controllerId))) return;
+      if (!await waitReadDelay(remainingReadDelay(), () => isControllerActive(controllerId))) return;
     }
   }
 
