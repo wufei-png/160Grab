@@ -20,6 +20,23 @@ class ConsentManager:
         self.run_nonce = secrets.token_hex(16)
         self.denied = False
 
+    def is_authorized(self, target, member_id, *, account_ref=None):
+        """Read-only final gate; revoked authorization must never prompt again."""
+        if self.denied or self.store.pending():
+            return False
+        binding = self.store.reference(
+            account_ref or self.run_nonce,
+            member_id,
+            target.unit_id,
+            target.dept_id,
+            target.doctor_id,
+            POLICY_VERSION,
+        )
+        return any(
+            c["binding_ref"] == binding and c["policy_version"] == POLICY_VERSION
+            for c in self.store.read()["consents"]
+        )
+
     def ensure(self, target, member_id, *, account_ref=None):
         if self.denied or self.store.pending():
             return False

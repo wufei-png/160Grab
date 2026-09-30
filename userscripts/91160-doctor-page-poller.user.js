@@ -562,6 +562,7 @@
 
   let consentRunNonce = null;
   let consentDenied = false;
+  let activeConsentBinding = null;
 
   async function ensureSubmissionConsent(target, memberSelection, { accountRef = null, interactive = false } = {}) {
     if (consentDenied || submissionBlocked()) return false;
@@ -569,7 +570,10 @@
     consentRunNonce ??= randomRef();
     const bindingRef = await journalReference([accountRef || consentRunNonce, memberSelection.memberId, target.unitId, target.depId, target.doctorId, POLICY_VERSION]);
     const journal = readJournal();
-    if (journal.consents.some((c) => c.binding_ref === bindingRef && c.policy_version === POLICY_VERSION)) return true;
+    if (journal.consents.some((c) => c.binding_ref === bindingRef && c.policy_version === POLICY_VERSION)) {
+      activeConsentBinding = bindingRef;
+      return true;
+    }
     if (!interactive || typeof globalThis.confirm !== "function") return false;
     const accepted = globalThis.confirm(
       `医生目标：${target.unitId}/${target.depId}/${target.doctorId}；就诊人：${memberSelection.memberId}。\n` +
@@ -589,7 +593,13 @@
     const latest = readJournal();
     latest.consents.push({ binding_ref: bindingRef, policy_version: POLICY_VERSION });
     writeJournal(latest);
+    activeConsentBinding = bindingRef;
     return true;
+  }
+
+  function consentStillValid() {
+    if (consentDenied || !activeConsentBinding || submissionBlocked()) return false;
+    return readJournal().consents.some((c) => c.binding_ref === activeConsentBinding && c.policy_version === POLICY_VERSION);
   }
 
   function revokeConsent() {
@@ -597,6 +607,7 @@
     journal.consents = [];
     writeJournal(journal);
     consentRunNonce = null;
+    activeConsentBinding = null;
     consentDenied = true;
     stopRun();
     renderPanel();
@@ -702,6 +713,7 @@
   function prepareManualControllerStart(kind) {
     if (submissionBlocked()) return null;
     consentRunNonce = null;
+    activeConsentBinding = null;
     consentDenied = false;
     const controllerId = makeControllerId(kind);
     activeControllerId = controllerId;
@@ -2237,7 +2249,7 @@
     if (!authorized || control.method !== "selector") return "AWAITING_MANUAL_CONFIRMATION";
     let record;
     try { record = await markSubmitInProgress(formState, memberSelection, null, 1, target, guard); }
-    catch (_error) { return "OUTCOME_UNKNOWN"; }
+    catch (error) { return error.message === "cancelled" ? "AWAITING_MANUAL_CONFIRMATION" : "OUTCOME_UNKNOWN"; }
     let outcome = "OUTCOME_UNKNOWN";
     try {
       triggerSubmitControl(control);
@@ -2637,7 +2649,7 @@
       stopRun("Could not find a submit control on the booking page.");
       return;
     }
-    const outcome = await submitTransaction(submitControl, formState, memberSelection, target, authorized, null, () => isControllerActive(controllerId));
+    const outcome = await submitTransaction(submitControl, formState, memberSelection, target, authorized, null, () => isControllerActive(controllerId) && consentStillValid() && readSettings().booking.submitMode === "auto");
     patchState((next) => ({ ...next, running: false, outcome }));
     setSummary("warn", outcome === "OUTCOME_UNKNOWN" ? "Submission outcome unknown; verify original site records." : "Booking form prepared; waiting for manual submit.");
     renderPanel();

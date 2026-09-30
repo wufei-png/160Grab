@@ -158,3 +158,55 @@ async def test_userscript_real_controller_enforces_new_consent(chromium_page, mo
     assert "SYN_MEMBER" not in str(result["journal"])
     if mode == "reject":
         assert result["settings"]["booking"]["submitMode"] == "manual_confirm"
+
+
+async def test_userscript_rechecks_revoke_after_async_prepare(chromium_page):
+    from tests.contracts.booking.scenarios import USERSCRIPT
+
+    page = chromium_page
+    await page.context.route(
+        "**/*",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body='<input name="schedule_id" value="slot"><input name="member_id" value="member"><button id="submitbtn">预约</button>',
+        ),
+    )
+    await page.goto(
+        "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
+    )
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
+    await page.evaluate(USERSCRIPT.read_text())
+    page.on("dialog", lambda dialog: dialog.accept())
+    await page.evaluate("""() => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        h.writeSettings({target:{unitId:'u',depId:'d',doctorId:'doc'}, member:{memberId:'member'},pacing:{pageActionMs:[1000,1000]}});
+        window.clicks = 0;
+        document.querySelector('#submitbtn').onclick = () => { clicks++; };
+        window.controllerFinished = false;
+        const id = h.prepareManualControllerStart('booking');
+        h.runBookingPageController(id).then(() => {controllerFinished = true;});
+    }""")
+    await page.wait_for_function(
+        "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readJournal().consents.length === 1"
+    )
+    # A different page's revocation changes the durable store, without changing
+    # this page's controller or sessionStorage.
+    other = await page.context.new_page()
+    await other.goto("https://synthetic.invalid/revoke")
+    await other.evaluate(
+        """(key) => {
+        const state = JSON.parse(localStorage.getItem(key));
+        state.consents = [];
+        localStorage.setItem(key, JSON.stringify(state));
+    }""",
+        "grab160.submissionJournal.v1",
+    )
+    await page.wait_for_function("controllerFinished")
+    result = await page.evaluate(
+        """() => ({clicks, state:__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readState().outcome, pending:__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.submissionBlocked()})"""
+    )
+    assert result == {
+        "clicks": 0,
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "pending": False,
+    }

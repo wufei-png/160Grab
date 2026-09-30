@@ -6,6 +6,7 @@ from grab.models.schemas import (
     BookingForm,
     BookingState,
     DoctorPageTarget,
+    GrabConfig,
     Slot,
 )
 from grab.services.booking import BookingService, PageBookingStrategy
@@ -157,3 +158,28 @@ async def test_service_never_moves_slot_after_unknown(tmp_path):
     )
     assert result.state == BookingState.OUTCOME_UNKNOWN
     assert obj.page.clicks == 1
+
+
+async def test_revocation_during_prepare_wait_prevents_click_without_regrant(tmp_path):
+    from grab.transactions.consent import ConsentManager
+
+    obj = strategy(tmp_path)
+    prompts = []
+    consent = ConsentManager(
+        obj.attempt_store,
+        prompt=lambda text: prompts.append(text) or "AUTHORIZE",
+        interactive=True,
+    )
+    obj.consent_manager = consent
+    obj.authorization = consent.ensure
+    obj.config = GrabConfig(page_action_sleep_time="1")
+
+    async def revoke_during_wait(_seconds):
+        obj.attempt_store.revoke()
+
+    obj._sleep = revoke_during_wait
+    result = await obj.submit_open_form(form())
+    assert result.state == BookingState.AWAITING_MANUAL_CONFIRMATION
+    assert obj.page.clicks == 0
+    assert len(prompts) == 1
+    assert not obj.attempt_store.pending()

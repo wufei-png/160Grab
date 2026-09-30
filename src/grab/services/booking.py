@@ -356,6 +356,14 @@ class PageBookingStrategy:
         if control is None:
             return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         try:
+            # Recheck after every preparatory await. Revocation cannot be replaced
+            # by another confirmation prompt at this final boundary.
+            if self.consent_manager and not self.consent_manager.is_authorized(
+                self.target, form.member_id
+            ):
+                return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
+            if self.config and self.config.booking.submit_mode != "auto":
+                return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
             booking_ref = self.attempt_store.reference(
                 self.target.unit_id,
                 self.target.dept_id,
