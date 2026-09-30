@@ -1,7 +1,7 @@
 # 当前架构与核验证据
 
-核验日期：2026-09-30；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具/回归/review 修复至 `82a7788`（2026-10-01），最终证据见下。
+核验日期：2026-10-01；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具/回归/review 修复至 `82a7788`（2026-10-01）；S07 分类/退避及 review 修复至 `4c81780`，最终证据见下。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -15,7 +15,7 @@ S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回�
 `https://gate.91160.com/guahao/v1/pc/sch/doctor`。channel_2 fixture 不代表科室 provider 已实现。
 
 已有：独立持久化 profile、创建/选择及部分配置写回；profile 名校验；`_user_key/access_hash` 解析、
-缓存 key、周期保活和 bounded 人工恢复；随机节流/限频冷却；heartbeat、JSONL、桌面/webhook；
+缓存 key、必要时低频诊断和 bounded 人工恢复；随机节流/限频冷却；heartbeat、JSONL、桌面/webhook；
 Windows/macOS 打包、frozen browser smoke、默认配置 bootstrap；两路径严格 card/address/date/disease/readiness 填表。
 
 ## 缺口定位
@@ -28,7 +28,7 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 | S04 真实值/冲突/readiness 已实现；现场字段与选择语义仍待 canary | Python `booking/form.py/page.py`、`fill_booking_form`；JS snapshot/decision/preparation |
 | 最终控件唯一且可操作；无安全证明的 checkIdInfo patch 已移除 | Python `fill_booking_form/_submit_control`；JS readiness/submit guard；未验证 follow-up 已交人工 |
 | 隐私 sink 已按 S02 收口；Windows 权限能力仍未实测 | `observability/privacy.py/safe_logging.py/reporter.py/notifications.py`；`utils/private_files.py/retention.py`；JS `appendLog/state` |
-| 缓存 key 失效判断不足、一般网络异常退出 | `ScheduleService._resolve_schedule_user_key/fetch_doctor_schedule/poll` |
+| S07 session 分类、单 owner 只读预算已实现；真实 schema/失效语义仍需现场证据 | `services/session_state.py`、`ScheduleService.poll`、`BrowserPageApi`、runner recovery、JS doctor controller |
 | S05 本机/跨标签互斥已实现；时间 naive、无 channel 仍待 S08 | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
 | S06 分层/ready/完整目标/预算/converter 已实现；现场输入与真实 fixture/adapter 仍缺 | `canary/`、`tests/e2e/`、JS canary panel；见 `docs/live-canary.md` |
 
@@ -250,3 +250,41 @@ S06 最终全套 **513 passed, 3 live skipped**；contract/integration/canary **
 发现 **2 P2**，全部独立复核接受，无拒绝项。`575ed2f` 拒绝非法来源日期，防止 HTML 丢 date.conflict；
 相关 **20 passed**。`82a7788` 保留空 time_range，Python/JS filter/排班相关 **55 passed**。
 最终修复由主实现者验证，未声称 reviewer 再审修复提交。两路径现场与真实夹具/adapter 仍 blocked。
+
+## S07 已实现事实（2026-10-01）
+
+- Python `SessionState`/assessment 与 JS `classifySchedule` 区分 VALID、EXPIRED、TRANSIENT_FAILURE、
+  RATE_LIMITED、UNKNOWN；schema_drift、missing_key 是 UNKNOWN 的安全失败分类。
+  显式 10021 与已知站点 login.html redirect 才确认失效；缺 key、旧 cookie 的存在本身不证明过期或有效，
+  未知 code/结构、非 JSON、其他 redirect/4xx 均停下交人工。已知 normalized schedules 与 sch tree
+  结构保守验证后才能作为空号源或排班；两个表示同时存在没有已验证的优先级合同，归 schema_drift，
+  防止分类器验一个 source 而解析器消费另一个。没有把新的现场 schema 当成已验证事实。
+- `BrowserPageApi` 与 JS 页面传输每调用只发一条请求；有 jQuery 用 jQuery，否则 fetch，失败不再切换
+  transport/context.request。HTTP 429/5xx、网络/timeout 分类；错误不带 response body、URL 或服务端自由文本。
+  Retry-After 支持 delta seconds/HTTP date；跨域页面只能读取服务端通过 CORS 暴露的 header，缺失时使用本地 floor。
+- Python ScheduleService 与 JS doctor controller 各是单一只读 retry owner；连续失败共用默认 5 次预算，
+  第 5 次停止（四次等待），base 1s/cap 30s/full jitter。实际 delay 取 jitter、poll 至少 3s、Retry-After、
+  限频原有 cooldown 下限的最大值。JS 保存 next-read 截止时间并在新 controller 请求前执行，
+  Stop/Start/reset 不缩短尚未结束的冷却；同 document 使用单调截止时间，跨 document 保留 epoch 截止时间。
+  超长 Retry-After 分段计时，防 setTimeout 溢出。有效业务响应才清预算；Python 新 poll generator、JS Start/reset
+  不清连续失败。预算只包围 read/poll，不包围任何 booking/final/follow-up 副作用。
+- Python 有效轮询不再周期 probe；缺 key 诊断最多每 60s 一轮（member/target 各一次），失败窗口保留原分类
+  与低频等待，不把 timeout 当 expired。confirmed expired 清缓存并通过原 bounded 人工登录，重新捕获完整目标、
+  成员和运行授权；恢复入口重查 pending。JS expired 清缓存/授权绑定，停下等待人工登录后按 Start，
+  不再自动刷新医生页；恢复次数保留到有效响应，目标/成员/授权/pending 仍走既有 gates。
+- Python cancel 传播且无后续 retry；JS Stop/失锁/pagehide 取消 delay 与在途请求（AbortController/jqXHR），
+  恢复/重启不能解除 S03 pending。UNKNOWN 在 runner 返回人工等待并安全告警，JS panel 显示固定人工检查错误。
+- 共享 synthetic `tests/contracts/session/scenarios.v1.json` 由 Python 与 Node 实际执行。
+  本地 Chromium 使用临时 context、synthetic route/transport、冻结时钟，验证两路径请求计数、Retry-After、
+  五次耗尽、有效响应恢复、取消、UNKNOWN/expired 无导航及无预约；既有 S03/S05 合同保留。
+
+新鲜只读 reviewer 审查 `c16601e..eed7282` 与文档草稿，独立 **128 passed**；发现 **3 P2**，
+全部由主实现者独立复现接受，无拒绝项：混合 schema 的验证/解析不一致（`b52da53`，31 passed），
+Stop/Start 绕过冷却（`69ad4ba`，32 passed），5xx 诊断丢 Retry-After（`4c81780`，63 passed）。
+三个 regression 均先证明缺陷再通过；最终修复由主实现者验证，未声称 reviewer 再审修复提交。
+修复后完整 **563 passed, 3 live skipped**；Ruff、userscript/Node harness 语法、锁定离线 dev sync、
+完整 diff whitespace 通过，uv.lock 未改。最后独立 contract/integration/canary **270 passed, 1 failed**，
+唯一失败为下述基线可复现的双页面零 click 用例，单独复验 **1 passed**；修复前联合 **267 passed**。
+不把一次全套绿灯当作测试稳定性证明。未执行真实登录/预约或刷新 live fixture；两路径现场 schema、
+Tampermonkey 扩展 sandbox、Windows/远端 CI/frozen/release 未验证。既有双页面提交用例偶发零 click/UNKNOWN，
+在会话基线 c16601e 的临时源码上同样复现（5 次 1 失败；当前源码 5 次通过）；不作为 S07 引入的缺陷。

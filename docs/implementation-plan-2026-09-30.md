@@ -235,7 +235,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 | S04 | 已完成（2026-09-30） | `d9cae53`, `519d83a`, `528f760`, `8199211`, `71afcd2`, `ad1489a`, `47804a5`；记录提交见文件历史 | 最终 449 passed, 2 live skipped；contract/integration 205 passed（Chromium 100）；CI 同命令 449 passed, 2 deselected；Ruff/Node/离线锁定 sync/whitespace 通过；review 1 P1 + 2 P2 接受并修复 | 无 live adapter；S05 发布 gate/跨平台/远端 CI/frozen 未验证 |
 | S05 | 已完成（2026-09-30） | `3cdadf4`, `96dea17`, `f0a010f`, `4385214`, `9ebb1dd`, `b13be72`, `f1545ca`；记录提交见历史 | 最终 477 passed, 2 live skipped；contract/integration 221（Chromium 116）；CI 同参数 477 passed, 2 deselected；Ruff/Node/锁定离线 sync/whitespace 通过；review 1 P1 + 3 P2 全接受并修复 | 无跨路径/profile/机器协调；live/跨平台/扩展/远端 CI/frozen 未验证 |
 | S06 | 工具/离线已完成（2026-10-01）；live blocked | `b9e110a`, `2a20e9a`, `222dbba`, `44f8c03`, `575ed2f`, `82a7788`；记录提交见历史 | 最终 513 passed, 3 live skipped；contract/integration/canary 257（Chromium 129）；Ruff/Node/锁定离线 sync/whitespace 通过；只读 review 2 P2 全接受并修复 | 缺具体目标/profile/场景批准；两路径 live、真实 fixture/adapter、扩展 sandbox/Windows/远端 CI/frozen 未验证 |
-| S07 | 未开始 | — | — | S06 工具与可用证据 |
+| S07 | 已完成（2026-10-01） | `7284c72`, `6ee5743`, `eed7282`, `b52da53`, `69ad4ba`, `4c81780`；记录提交见历史 | 最终完整 563 passed, 3 live skipped；Ruff/Node/锁定离线 sync/whitespace 通过；review 3 P2 全接受修复；独立合同/集成/canary 270 passed, 1 既有不稳定用例 failed，单独复验 1 passed；详情见下 | 基线可复现互斥测试偶发零 click；两路径 live schema/扩展/跨平台/远端 CI/frozen 未验证 |
 | S08 | 未开始 | — | — | S07 |
 | S09 | 未开始 | — | — | S08 |
 
@@ -473,3 +473,60 @@ Ruff、userscript/Node harness 语法、锁定离线 dev sync、会话完整 dif
 有效产品 consent 不能绕过层级、具体批准拒绝、次数/ready timeout 与迟到 fencing、pending/reload、实际 panel 事件。
 真实 fixture 刷新、两路径 live 结果/adapter、Tampermonkey 扩展 sandbox、Windows 人工 ready、远端 CI、
 frozen/release 均未验证；POSIX TTY 是当前 Python ready 能力边界。未执行 S07–S09。
+
+### S07 会话证据（2026-10-01）
+
+只执行 S07；会话开始工作树干净，review 基线为 `c16601e`。S06 工具与 synthetic 证据可用；
+真实目标/profile/场景批准与现场 schema/adapter 仍缺，不把 UNKNOWN 当空号源或凭 cookie 断言有效。
+本地按依赖顺序提交，未 push，未读取/复制用户认证状态或执行真实预约：
+
+1. `7284c72`：session assessment、业务 schema 保守分类、Retry-After 解析；页面传输单次请求，
+   移除 transport/context.request fallback 与嵌套 global 重试。分类/Page API/限频 **26 passed**，
+   browser/session/schedule/canary 相关 **67 passed**。
+2. `6ee5743`：Python 单一只读预算（默认五次失败）、有效业务响应 reset、缺 key 低频诊断、
+   confirmed expired 人工恢复与 pending 重查、UNKNOWN 人工结果/安全告警。相关 **167 passed**。
+3. `eed7282`：JS 单次 transport/分类/连续失败预算、取消、人工恢复与 Start/reset fencing；
+   共享版本化 synthetic session 场景和 Chromium 请求计数/Retry-After regression；补齐既有 synthetic
+   fixture 的业务 code/必需排班分类字段。Python 缺 key 探测的低频窗口继续保留原瞬态分类，
+   200 业务限频同样保留 Retry-After。相关最终 **125 passed**。
+
+实现后的完整 **556 passed, 3 live skipped**；contract/integration/canary **267 passed**，
+包含实际本地 Chromium。锁定离线 dev sync、Ruff、userscript 与 Node harness 语法、会话完整 whitespace 通过；
+uv.lock 未改。上述修复前结果经完整复验再次得到 **556 passed, 3 live skipped**。
+最终修复后检查见下；不把修复前结果冒称最终状态。
+
+退避仅属于 schedule read owner，默认第 5 次连续失败退出/暂停（四次等待），
+base 1s/cap 30s/full jitter，加 poll >=3s、Retry-After 与限频冷却 floor；连续瞬态/限频混合亦不 reset。
+Python 新 generator 与 JS Start/reset 不清预算；有效业务 response 才 reset。Python 正常轮询不再 keepalive probe，
+缺 key 最多每 60s 一轮；只有显式失效 code/已知 login redirect 才进入 bounded 人工恢复。
+JS 停下交人工登录，Start 重新核对目标，booking 继续核对成员/授权/pending；不再自动刷新假定恢复。
+缺 key/未验证 schema 保守停下，已有只读 fetch 预算从不重新进入最终 submit/follow-up。
+
+已知验证限制：既有双页面提交 Chromium 测试偶发零 click/UNKNOWN。对比临时载入的
+`c16601e` 源码五次运行一次失败，当前源码五次全通过；未决阻断保持，不削弱断言或修改无关提交合同。
+后续联合 **125 passed** 与全套结果分别记录，不掩盖中间失败。未执行两路径 live、真实 schema/fixture 刷新、
+Tampermonkey 扩展 sandbox、Windows/Linux/远端 CI/frozen/release；仅临时 Chromium 与 synthetic route/transport 证据。
+S08/S09 未执行。
+
+S07 review：新鲜只读 subagent 按 delegated-change-review / review-agent 审查
+`c16601e..eed7282` 完整 diff 与两份证据草稿，独立相关 **128 passed**、whitespace 通过。
+发现 **3 P2**，主实现者逐项独立复现，全部接受，无拒绝项；每个新增 regression 先证明缺陷再验证修复：
+
+- `b52da53`：混合 normalized/sch payload 被分类为 VALID，空 normalized 分支却让 parser 消费未验证 sch。
+  没有现场优先级合同，两个表示同时存在时保守拒绝为 schema_drift；共享 JSON、Python parser 与 Chromium
+  controller 证明不打开预约页，相关 **31 passed**。
+- `69ad4ba`：Stop/Start 只保留次数预算，取消中的 cooldown 没有 deadline，导致 Retry-After60s 内立即请求。
+  保存 next-read 截止时间并在 controller 首次/每次请求前执行，Stop/Start/reset 保留剩余冷却；同 document
+  有单调 deadline，跨 document 存 epoch deadline。超长 server hint 分段计时避免 JS timer 溢出；相关 **32 passed**。
+- `4c81780`：缺 key 的 5xx probe 把服务端120s hint 丢成60s本地下限；5xx/429 probe 均保留 hint。
+  真实 SessionCaptureService→ScheduleService 调用链的 synthetic response 验证实际 sleep=120s 且 cancel 无第二次请求；
+  相关 **63 passed**。
+
+最终修复由主实现者验证；没有声称 reviewer 再审修复提交。
+最终完整 `uv run --locked --offline --no-sync pytest -q` 为 **563 passed, 3 live skipped**；
+Ruff、userscript 与 Node harness 语法、锁定离线 dev sync、完整会话 diff whitespace 通过，uv.lock 未改。
+最后单独 contract/integration/canary **270 passed, 1 failed**；唯一失败仍是基线可复现的双页面提交
+零 click/UNKNOWN 用例，随后单独复验 **1 passed**。修复前联合为 **267 passed**。
+明确保留这项测试不稳定性，未修改断言或用一次绿灯声称稳定；S07 新增分类/预算/cancel 与三项修复 regression 全部通过。
+两路径现场 schema/adapter、Tampermonkey 扩展 sandbox、Windows/Linux、远端 CI 与 CI 同参数命令、
+frozen/release 未验证。S08/S09 未执行；本地提交不 push。
