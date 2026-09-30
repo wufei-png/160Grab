@@ -1,7 +1,7 @@
 # 当前架构与核验证据
 
 核验日期：2026-10-01；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具/回归/review 修复至 `82a7788`（2026-10-01）；S07 分类/退避及 review 修复至 `4c81780`，最终证据见下。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具/回归/review 修复至 `82a7788`（2026-10-01）；S07 分类/退避及 review 修复至 `4c81780`；S08 时间/channel/收尾及 review 修复至 `d777208`，最终证据见下。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -29,7 +29,7 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 | 最终控件唯一且可操作；无安全证明的 checkIdInfo patch 已移除 | Python `fill_booking_form/_submit_control`；JS readiness/submit guard；未验证 follow-up 已交人工 |
 | 隐私 sink 已按 S02 收口；Windows 权限能力仍未实测 | `observability/privacy.py/safe_logging.py/reporter.py/notifications.py`；`utils/private_files.py/retention.py`；JS `appendLog/state` |
 | S07 session 分类、单 owner 只读预算已实现；真实 schema/失效语义仍需现场证据 | `services/session_state.py`、`ScheduleService.poll`、`BrowserPageApi`、runner recovery、JS doctor controller |
-| S05 本机/跨标签互斥已实现；时间 naive、无 channel 仍待 S08 | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
+| S05 本机/跨标签互斥已实现；S08 aware 时间及受控 channel 已实现 | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
 | S06 分层/ready/完整目标/预算/converter 已实现；现场输入与真实 fixture/adapter 仍缺 | `canary/`、`tests/e2e/`、JS canary panel；见 `docs/live-canary.md` |
 
 ## S01 已实现事实
@@ -288,3 +288,37 @@ Stop/Start 绕过冷却（`69ad4ba`，32 passed），5xx 诊断丢 Retry-After�
 不把一次全套绿灯当作测试稳定性证明。未执行真实登录/预约或刷新 live fixture；两路径现场 schema、
 Tampermonkey 扩展 sandbox、Windows/远端 CI/frozen/release 未验证。既有双页面提交用例偶发零 click/UNKNOWN，
 在会话基线 c16601e 的临时源码上同样复现（5 次 1 失败；当前源码 5 次通过）；不作为 S07 引入的缺陷。
+
+
+## S08 已实现事实（2026-10-01）
+
+- Python 新 schedule 配置默认 Asia/Shanghai/30s；启动时归 aware UTC，legacy naive 使用配置时区并提示。
+  round-trip 拒绝 DST fold/gap，带 offset ISO 允许消歧。未来时间等待、迟到边界 ≤30s 开始；
+  超时需要 TTY 明确确认，非交互或拒绝返回人工等待（CLI exit 2），不发 poll/booking。
+  等待保留亚秒精度，asyncio 单调 timer 且取消传播。默认查询日期按配置时区的当天计算。
+- JS settingsVersion=5、schedule.timezone/lateStartGraceSeconds；startAt 存规范带 Z ISO，旧 naive 按配置时区
+  迁移并固定提示，DST 歧义/不存在与非法时间拒绝；读取非法设置阻断自动启动，不把坏时间当立即开始。
+  面板显示指定时区并保留 offset 消歧和亚秒 instant。v4 已明确的真实字段不被重迁移清掉。
+  late autoStart/reload 停下，只有本 document 新 Start 可确认；等待走单调、可取消 timer；查询日期同指定时区。
+- browser.channel 只支持 chromium/chrome/msedge。两种 launch、CLI/create/warmup 与 live harness 同配置，
+  Chrome/Edge 启动失败报安全固定错误并关闭 driver，不尝试 fallback。Chromium 省略 channel 参数，保留原 bundled 行为。
+  marker v1 加 channel，旧 marker 缺字段视 Chromium，不移动目录或复制认证状态；配置指定跨 channel profile 拒绝，
+  自动选择只考虑同 channel，必要时在相同 root 新建独立目录。未知 marker/channel 拒绝。
+- 新增锁定 tzdata 数据库，既有依赖版本未升级；PyInstaller 收集数据，默认配置也验证 timezone。
+  冻结时钟和真实本地 Chromium 合同覆盖时区、迟到边界、DST、亚秒等待、Stop/cancel、无效设置零请求与跨日查询。
+  本机 Chromium/Chrome 各两种 launch 临时 profile smoke 通过；Edge 未安装，两项 smoke 跳过，参数合同仍执行。
+  macOS arm64 临时 frozen 构建与 bundled Chromium 默认 smoke exit 0，禁用 system TZPATH 时仍通过默认时区验证。
+  最新 binary 的默认配置 bootstrap exit 0，并验证生成配置 0600 与三个新默认值。
+  无 live/Windows/Linux/扩展 sandbox/远端 CI/release 证据。
+- 收尾 `d3e61c0` 将跨 document epoch 冷却 hint 仅导入一次，本 document 的 poll/backoff 使用单调 deadline，
+  不因系统时钟前后校正缩短或放大间隔；Stop/Start 仍保留预算/冷却。±3600s Chromium regression 通过。
+
+新鲜只读 review 初审两项问题全部独立复现接受，无拒绝项：真实 datetime-local 原生格式规范化导致 DST offset
+保存失败（`7b5c27f`，两条修复前失败/修复后时间相关 **27 passed**）；正常 CLI 内层吞专用 browser launch
+安装提示（`d777208`，两种 launch regression 修复前失败/修复后 CLI/browser/profile **78 passed**）。
+同一 reviewer 已复核完整 `acec545..d777208`、单调冷却和最终修复，结论 **No findings**；
+独立初始相关 **124 passed, 2 Edge skipped**、最终时间 **27 passed**、CLI/browser/profile **78 passed**。
+最终完整 **649 passed, 5 skipped**（3 live 未启用、2 Edge 未安装）；contract/integration/canary 在完整套件内
+**288 passed, 2 Edge skipped**；14 warnings 是固定 naive 迁移提示。Ruff/Node 两份语法/锁定离线 sync/whitespace 通过。
+最新代码再次 macOS arm64 frozen build/smoke/bootstrap 成功。uv.lock 仅新增 tzdata，原依赖未升级。
+S07 已记录的基线双页面用例本次全套通过，但不宣称其不稳定性已消除；S09 未执行。

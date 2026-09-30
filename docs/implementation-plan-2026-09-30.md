@@ -236,7 +236,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 | S05 | 已完成（2026-09-30） | `3cdadf4`, `96dea17`, `f0a010f`, `4385214`, `9ebb1dd`, `b13be72`, `f1545ca`；记录提交见历史 | 最终 477 passed, 2 live skipped；contract/integration 221（Chromium 116）；CI 同参数 477 passed, 2 deselected；Ruff/Node/锁定离线 sync/whitespace 通过；review 1 P1 + 3 P2 全接受并修复 | 无跨路径/profile/机器协调；live/跨平台/扩展/远端 CI/frozen 未验证 |
 | S06 | 工具/离线已完成（2026-10-01）；live blocked | `b9e110a`, `2a20e9a`, `222dbba`, `44f8c03`, `575ed2f`, `82a7788`；记录提交见历史 | 最终 513 passed, 3 live skipped；contract/integration/canary 257（Chromium 129）；Ruff/Node/锁定离线 sync/whitespace 通过；只读 review 2 P2 全接受并修复 | 缺具体目标/profile/场景批准；两路径 live、真实 fixture/adapter、扩展 sandbox/Windows/远端 CI/frozen 未验证 |
 | S07 | 已完成（2026-10-01） | `7284c72`, `6ee5743`, `eed7282`, `b52da53`, `69ad4ba`, `4c81780`；记录提交见历史 | 最终完整 563 passed, 3 live skipped；Ruff/Node/锁定离线 sync/whitespace 通过；review 3 P2 全接受修复；独立合同/集成/canary 270 passed, 1 既有不稳定用例 failed，单独复验 1 passed；详情见下 | 基线可复现互斥测试偶发零 click；两路径 live schema/扩展/跨平台/远端 CI/frozen 未验证 |
-| S08 | 未开始 | — | — | S07 |
+| S08 | 已完成（2026-10-01） | `1c461bb`, `4b17437`, `dc6af72`, `d3e61c0`, `7b5c27f`, `d777208`；记录提交见历史 | 最终 649 passed, 5 skipped（3 live / 2 Edge）；Ruff/Node/离线锁定 sync/whitespace 通过；review 两项问题接受修复、最终复核 No findings；Chromium/Chrome 两种 launch 及 macOS arm64 frozen smoke/bootstrap 通过 | Edge 未安装；Windows/Linux、真实登录/预约、扩展 sandbox、远端 CI 未验证；既有双页面用例不稳定性仍保留 |
 | S09 | 未开始 | — | — | S08 |
 
 完成时记录实际 commit、检查/review 结果、skip 原因及 live 层级/日期/覆盖；更新架构中的已实现事实。
@@ -530,3 +530,56 @@ Ruff、userscript 与 Node harness 语法、锁定离线 dev sync、完整会话
 明确保留这项测试不稳定性，未修改断言或用一次绿灯声称稳定；S07 新增分类/预算/cancel 与三项修复 regression 全部通过。
 两路径现场 schema/adapter、Tampermonkey 扩展 sandbox、Windows/Linux、远端 CI 与 CI 同参数命令、
 frozen/release 未验证。S08/S09 未执行；本地提交不 push。
+
+
+### S08 会话证据（2026-10-01）
+
+会话开始工作树干净，比较基线 `acec545`。已读计划/当前架构并核对 S07 完成成果；
+两路径现场 schema/adapter 的缺口持续保留。本会话仅执行 S08，使用 implement-in-stages 本地提交，不 push：
+
+1. `1c461bb`：Python `schedule.timezone=Asia/Shanghai`、`late_start_grace_seconds=30`，
+   appoint_time 归 aware UTC。旧 naive 按配置时区解释并发固定迁移提示；DST 重复/不存在的 local time 拒绝，
+   显式 offset ISO 可消歧。早到等待、迟到 ≤30s 开始，超时仅交互新确认可开始；拒绝/非交互 runner 返回人工等待，零 poll/booking。
+   保留亚秒 delay，asyncio 单调 timer、cancel 传播；查询日期按配置时区计算。相关 **60 passed**。
+   新增并锁定 `tzdata==2026.4` 及 frozen 数据收集，仅此新增依赖，未升级已有依赖；无系统 zoneinfo 回归通过。
+2. `4b17437`：JS settingsVersion=5、`schedule.timezone/lateStartGraceSeconds`，旧 startAt 转带 Z 的 ISO 并提示。
+   按配置时区显示面板及查询日期；明确配置的 v4 真实字段保留。DST ambiguous/gap 与非法时间拒绝，
+   读取非法旧配置停自动，面板保存后才能纠正；不将非法时间当立即开始。
+   超时仅本 document 新 Start 可弹确认，autoStart/reload 停下；等待使用可取消 performance.now timer。
+   共享 session/JS/时间相关 **91 passed**，补面板 offset DST/亚秒 round-trip 后定向 **23 passed**（Chromium 8）。
+3. `dc6af72`：`browser.channel=chromium|chrome|msedge` 默认 Chromium；后两者两种 launch 都传 channel，
+   失败只调用一次并关闭 driver，不降级。Chromium 省略 channel 参数，保留 bundled browser/headless-shell 行为。
+   marker v1 增加 channel，缺 channel 的旧 marker 只作 Chromium 且不重写；未知版本/channel 拒绝。
+   配置指定 profile 不匹配拒绝；未指定时只选择同 channel，必要时在原 root 新建不同目录，不移动/复制认证状态。
+   CLI/create/warmup/live harness 一致透传；不扩 flags、locale 或 stealth。
+   配置/参数/profile/CLI/真实浏览器相关 **92 passed, 2 skipped**（Edge 未安装）；
+   Chromium 与本机 Chrome 分别实际运行 transient/persistent 临时 profile smoke；不访问真实预约站点。
+
+macOS arm64 在 `/tmp/160grab-s08-frozen-dist` 独立 PyInstaller 构建，按既有 staging helper 收入本机已缓存的
+Chromium v1208/headless-shell/ffmpeg，不覆盖仓库原 build/dist。`PYTHONTZPATH='' PLAYWRIGHT_BROWSERS_PATH=0`
+运行新 binary `--smoke-browser` exit 0，证明确实使用 bundled Chromium，默认配置验证可读取 bundled tzdata。
+未读取/复制用户 profile，未执行真实登录、预约或 live fixture 刷新；Edge/Windows/Linux/扩展 sandbox/远端 CI/release 仍未验证。
+
+收尾合同检查：`d3e61c0` 修正 S07 当前 document 仍比较 epoch 的冷却路径；跨 document 只将 epoch hint
+导入一次单调截止时间。时钟 ±3600s regression 修复前负向失败、正向通过；修复后相关 **39 passed**。
+Stop/Start 仍保留冷却，wall-clock 校正不缩短/放大本 document 间隔。
+
+新鲜只读 reviewer 按 delegated-change-review / review-agent 审查本会话完整 diff 和文档草稿，
+初审两项问题均由主实现者独立复现、接受、逐项修复，无拒绝项：
+
+- `7b5c27f`：真实 datetime-local 把 `:00`/`.250` 规范化为无秒/`.25`，严格字符串比较不能保留原 DST offset。
+  使用中立 UTC wall value 语义比较；两个真实 Chromium regression 修复前均失败，修复后时间相关 **27 passed**。
+- `d777208`：正常 CLI 内层失败处理先转 SystemExit，吞掉外层 BrowserLaunchError 安全安装提示。
+  保持原安全 run_failed/run_finished 事件再传播特定异常；transient/persistent 两条 regression 修复前失败，
+  修复后 CLI/browser/profile **78 passed**。
+
+同一 reviewer 已复核最终 `acec545..d777208`（包含收尾单调修复）并给出 **No findings**；
+独立初始相关 **124 passed, 2 Edge skipped**，最终时间 **27 passed**、CLI/browser/profile **78 passed**，
+Node/whitespace 通过。最终代码完整 **649 passed, 5 skipped**（3 live 未启用、2 Edge 未安装）；
+其中 contract/integration/canary 共 290 个用例在完整套件实际执行，**288 passed, 2 Edge skipped**。
+14 warnings 均为 legacy naive 时间固定迁移提示。Ruff、userscript/Node harness 语法、锁定离线 dev sync、
+完整比较基线 whitespace 通过。新增 tzdata 后 uv.lock 只锁入该依赖，原依赖未升级。
+最新 `d777208` 的 macOS arm64 frozen 构建及 bundled Chromium smoke 再次 exit 0；
+默认 bootstrap exit 0，生成的 0600 配置验证 Chromium/Asia/Shanghai/30s 默认值。
+已知基线双页面互斥用例本次完整套件通过，但未修复或声称稳定。S09 未执行；本地提交不 push。
+完成记录/架构证据另作文档提交，hash 见本文件历史，避免自引用。
