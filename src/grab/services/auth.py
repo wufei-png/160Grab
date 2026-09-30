@@ -31,14 +31,7 @@ class AuthService:
             )
         return LoginResult(success=True, attempts=1)
 
-    async def auto_login(self, max_attempts: int = 3) -> LoginResult:
-        raise NotImplementedError(
-            "TODO: implement click-word verification flow for auto login"
-        )
-
     async def ensure_login(self, max_attempts: int = 3) -> LoginResult:
         if self.config.auth.strategy == "manual":
             return await self.manual_login()
-        if self.config.auth.strategy == "auto":
-            return await self.auto_login(max_attempts=max_attempts)
-        raise ValueError(f"Unsupported auth strategy: {self.config.auth.strategy}")
+        raise ValueError("auth.strategy only supports manual login")

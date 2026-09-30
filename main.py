@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TextIO
 
 from loguru import logger
+from pydantic import ValidationError
 
 from grab.browser.page_api import BrowserPageApi
 from grab.browser.playwright_client import PlaywrightClient
@@ -169,8 +170,13 @@ async def main(argv: list[str] | None = None) -> None:
         if ensure_frozen_default_config(config_path):
             raise SystemExit(0)
 
-    config = load_config(config_path)
-    headless = config.auth.strategy != "manual"
+    try:
+        config = load_config(config_path)
+    except ValidationError:
+        # Pydantic's default error rendering includes rejected input values.
+        logger.error("Invalid configuration; check the configured fields and types.")
+        raise SystemExit(1) from None
+    headless = False
     if args.create_profile:
         await run_create_profile_flow(
             config=config,

@@ -1,8 +1,11 @@
 import io
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from loguru import logger
 
 import main as main_module
 from main import (
@@ -11,6 +14,64 @@ from main import (
     parse_args,
     resolve_config_path,
 )
+
+
+@pytest.mark.parametrize("strategy", ["auto", "SYNTHETIC_INVALID_STRATEGY"])
+@pytest.mark.parametrize("profile_args", [[], ["--create-profile"]])
+async def test_invalid_auth_stops_before_browser_or_profile_creation(
+    tmp_path, monkeypatch, strategy, profile_args
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"auth:\n  strategy: {strategy}\n", encoding="utf-8")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid auth must stop before any browser/profile/reporting action")
+
+    monkeypatch.setattr(main_module, "PlaywrightClient", unexpected)
+    monkeypatch.setattr(main_module, "run_create_profile_flow", unexpected)
+    monkeypatch.setattr(main_module, "build_run_reporter", unexpected)
+    messages = []
+    sink = logger.add(lambda message: messages.append(str(message)))
+    try:
+        with pytest.raises(SystemExit) as error:
+            await main_module.main([str(config_path), *profile_args])
+    finally:
+        logger.remove(sink)
+    assert error.value.code == 1
+    assert "Invalid configuration" in "".join(messages)
+    assert "SYNTHETIC_INVALID_STRATEGY" not in "".join(messages)
+
+
+async def test_manual_cli_launches_visible_browser_and_runs(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "auth:\n  strategy: manual\nbrowser:\n  launch_persistent_context: false\n",
+        encoding="utf-8",
+    )
+    launch_options = {}
+
+    class Client:
+        def __init__(self, **kwargs):
+            launch_options.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=SimpleNamespace(success=True, booked_slot_id=None))
+    )
+    reporter = SimpleNamespace(jsonl_path=None, emit_event=AsyncMock())
+    monkeypatch.setattr(main_module, "PlaywrightClient", Client)
+    monkeypatch.setattr(main_module, "build_run_reporter", lambda config: reporter)
+    monkeypatch.setattr(main_module, "build_runner", lambda *args, **kwargs: runner)
+    with pytest.raises(SystemExit) as error:
+        await main_module.main([str(config_path)])
+    assert error.value.code == 0
+    assert launch_options["headless"] is False
+    runner.run.assert_awaited_once()
 
 
 def test_parse_args_supports_create_profile_mode():

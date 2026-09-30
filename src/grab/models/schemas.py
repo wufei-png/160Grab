@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -34,7 +35,7 @@ class OcrConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
-    strategy: str = "manual"
+    strategy: Literal["manual"] = "manual"
 
 
 class BrowserConfig(BaseModel):

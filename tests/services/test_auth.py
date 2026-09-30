@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from grab.models.schemas import GrabConfig, LoginResult
 from grab.services.auth import AuthService
@@ -31,17 +32,17 @@ async def test_manual_auth_strategy_opens_login_page_and_prints_guidance():
     assert "手动完成登录" in messages[0]
 
 
-@pytest.mark.asyncio
-async def test_auto_auth_strategy_is_todo_for_click_word_verification():
-    page = FakePage()
-    service = AuthService(
-        page=page,
-        config=GrabConfig(
-            auth={"strategy": "auto"},
-            username="13800138000",
-            password="secret",
-        ),
-    )
+@pytest.mark.parametrize("strategy", ["auto", "unknown", "", None])
+def test_unsupported_auth_strategy_is_a_configuration_error(strategy):
+    with pytest.raises(ValidationError):
+        GrabConfig(auth={"strategy": strategy})
 
-    with pytest.raises(NotImplementedError):
-        await service.ensure_login()
+
+@pytest.mark.asyncio
+async def test_mutated_unsupported_strategy_cannot_navigate():
+    page = FakePage()
+    config = GrabConfig()
+    config.auth.strategy = "auto"
+    with pytest.raises(ValueError, match="only supports manual"):
+        await AuthService(page, config).ensure_login()
+    assert page.visited_urls == []

@@ -1,7 +1,50 @@
 import pytest
+from loguru import logger
 from pydantic import ValidationError
 
 from grab.utils.config_loader import load_config
+
+
+@pytest.mark.parametrize("strategy", ["auto", "unknown"])
+def test_load_config_rejects_unsupported_auth_strategy(tmp_path, strategy):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"auth:\n  strategy: {strategy}\n", encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load_config(config_file)
+
+
+def test_legacy_login_fields_warn_without_values_and_remain_readable(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "username: SYNTHETIC_LOGIN\npassword: SYNTHETIC_SECRET\n"
+        "ocr:\n  base_url: https://ocr.invalid/SYNTHETIC_ENDPOINT\n",
+        encoding="utf-8",
+    )
+    messages = []
+    sink = logger.add(lambda message: messages.append(str(message)))
+    try:
+        config = load_config(config_file)
+    finally:
+        logger.remove(sink)
+    assert config.username == "SYNTHETIC_LOGIN"
+    assert config.password == "SYNTHETIC_SECRET"
+    assert config.ocr.base_url == "https://ocr.invalid/SYNTHETIC_ENDPOINT"
+    assert len(messages) == 3
+    assert all("Deprecated top-level config field" in message for message in messages)
+    assert all("SYNTHETIC" not in message for message in messages)
+    assert all("ocr.invalid" not in message for message in messages)
+
+
+def test_empty_legacy_fields_do_not_warn(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("username: ''\npassword: ''\nocr: null\n", encoding="utf-8")
+    messages = []
+    sink = logger.add(lambda message: messages.append(str(message)))
+    try:
+        load_config(config_file)
+    finally:
+        logger.remove(sink)
+    assert messages == []
 
 
 def test_load_config_supports_manual_mode_defaults_and_filters(tmp_path):

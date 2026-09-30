@@ -1,7 +1,7 @@
 [project]
 name = "160grab"
 version = "0.1.0"
-description = "健康160全自动挂号脚本 - Playwright headless browser automation"
+description = "健康160医生页预约辅助工具 - 人工登录与 Playwright/Tampermonkey 自动化"
 requires-python = ">=3.11"
 dependencies = [
     "playwright>=1.50.0",
