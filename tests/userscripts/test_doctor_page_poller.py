@@ -13,7 +13,7 @@ SCRIPT_PATH = REPO_ROOT / "userscripts" / "91160-doctor-page-poller.user.js"
 def _run_node_script(js_code: str) -> str:
     node_bin = shutil.which("node")
     if node_bin is None:
-        pytest.skip("node is required to validate the userscript helpers")
+        pytest.fail("node is required to validate the userscript helpers")
     with tempfile.TemporaryDirectory() as tmp_dir:
         script_path = Path(tmp_dir) / "userscript-hook-test.js"
         script_path.write_text(js_code, encoding="utf-8")
