@@ -1,8 +1,11 @@
 import asyncio
 import json
+import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from playwright.async_api import (
     Browser,
@@ -15,7 +18,13 @@ from playwright.async_api import (
 )
 from playwright_stealth.stealth import Stealth
 
+from grab.observability.privacy import safe_data
 from grab.observability.safe_logging import logger
+from grab.utils.private_files import (
+    absolute_path,
+    ensure_private_directory,
+    private_directory,
+)
 
 
 class PlaywrightClient:
@@ -23,12 +32,19 @@ class PlaywrightClient:
         self,
         headless: bool = True,
         debug_dir: str | Path | None = None,
+        include_sensitive_debug: bool = False,
         stealth_enabled: bool = True,
         persistent_context_enabled: bool = False,
         user_data_dir: str | Path | None = None,
     ):
         self.headless = headless
-        self.debug_dir = Path(debug_dir) if debug_dir is not None else None
+        self.debug_dir = absolute_path(debug_dir) if debug_dir is not None else None
+        env_debug = os.getenv("GRAB_DEBUG_DIR")
+        self.sensitive_debug_enabled = bool(
+            include_sensitive_debug
+            and env_debug
+            and self.debug_dir == absolute_path(env_debug)
+        )
         self.stealth_enabled = stealth_enabled
         self.persistent_context_enabled = persistent_context_enabled
         self.user_data_dir = (
@@ -49,8 +65,10 @@ class PlaywrightClient:
                 raise RuntimeError(
                     "user_data_dir is required when persistent_context_enabled is True"
                 )
+            self.user_data_dir = ensure_private_directory(self.user_data_dir)
             try:
-                self.context = await self.playwright.chromium.launch_persistent_context(
+                self.context = await self._private_launch(
+                    self.playwright.chromium.launch_persistent_context,
                     user_data_dir=str(self.user_data_dir),
                     headless=self.headless,
                 )
@@ -59,7 +77,9 @@ class PlaywrightClient:
             logger.info("Persistent browser context launched.")
             self.browser = getattr(self.context, "browser", None)
         else:
-            self.browser = await self.playwright.chromium.launch(headless=self.headless)
+            self.browser = await self._private_launch(
+                self.playwright.chromium.launch, headless=self.headless
+            )
             logger.info("Browser launched")
             self.context = await self.browser.new_context()
 
@@ -70,6 +90,14 @@ class PlaywrightClient:
         self.page = await self._select_or_create_page()
         logger.info("Browser page ready.")
 
+    async def _private_launch(self, launch, **kwargs):
+        # Chromium's own newly created profile files inherit this umask.
+        previous = os.umask(0o077)
+        try:
+            return await launch(**kwargs)
+        finally:
+            os.umask(previous)
+
     async def goto(self, url: str) -> None:
         if self.page is None:
             raise RuntimeError("Call launch() first")
@@ -79,8 +107,21 @@ class PlaywrightClient:
     async def screenshot(self, path: str) -> None:
         if self.page is None:
             raise RuntimeError("Call launch() first")
-        await self.page.screenshot(path=path)
-        logger.info("Diagnostic event.")
+        if (
+            not self.sensitive_debug_enabled
+            or self.debug_dir != absolute_path(path).parent
+        ):
+            raise RuntimeError("Sensitive screenshot requires the local debug opt-in")
+        if not re.fullmatch(
+            r"160grab-debug-v1-\d{8}-\d{6}-\d{6}-[a-f0-9]{32}\.png",
+            absolute_path(path).name,
+        ):
+            raise ValueError(
+                "Screenshot filename must use the application debug schema"
+            )
+        data = await self.page.screenshot()
+        with private_directory(self.debug_dir) as directory:
+            directory.create(absolute_path(path).name, data)
 
     async def run_in_page(self, script: str, arg: dict | None = None):
         if self.page is None:
@@ -94,123 +135,76 @@ class PlaywrightClient:
             logger.debug("Skipping diagnostic snapshot.")
             return None
 
-        self.debug_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
-        slug = self._slugify(label)
-        base = self.debug_dir / f"{stamp}-{slug}"
-
+        stem = f"160grab-debug-v1-{stamp}-{uuid4().hex}"
         metadata = await self.collect_debug_state()
-        metadata["label"] = label
+        metadata["schema"] = 1
         metadata["captured_at"] = datetime.now(UTC).isoformat()
-        metadata["html_path"] = None
-        metadata["screenshot_path"] = None
-
-        html_path = base.with_suffix(".html")
-        screenshot_path = base.with_suffix(".png")
-        metadata_path = base.with_suffix(".json")
-
-        try:
-            html_path.write_text(await self.page.content(), encoding="utf-8")
-            metadata["html_path"] = str(html_path)
-        except Exception as exc:  # pragma: no cover - diagnostic best effort
-            metadata["html_error"] = str(exc)
-
-        try:
-            await self.page.screenshot(path=str(screenshot_path), full_page=True)
-            metadata["screenshot_path"] = str(screenshot_path)
-        except Exception as exc:  # pragma: no cover - diagnostic best effort
-            metadata["screenshot_error"] = str(exc)
-
-        metadata_path.write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        metadata["sensitive_debug"] = self.sensitive_debug_enabled
+        with private_directory(self.debug_dir) as directory:
+            if self.sensitive_debug_enabled:
+                try:
+                    directory.create(
+                        stem + ".html", (await self.page.content()).encode("utf-8")
+                    )
+                    metadata["html_saved"] = True
+                except Exception:
+                    metadata["html_saved"] = False
+                try:
+                    image = await self.page.screenshot(full_page=True)
+                    directory.create(stem + ".png", image)
+                    metadata["screenshot_saved"] = True
+                except Exception:
+                    metadata["screenshot_saved"] = False
+            metadata_path = directory.create(
+                stem + ".json", json.dumps(metadata, ensure_ascii=False).encode("utf-8")
+            )
         logger.info("Diagnostic snapshot saved locally.")
         return metadata_path
 
     async def collect_debug_state(self) -> dict[str, Any]:
         if self.page is None:
             raise RuntimeError("Call launch() first")
-
         metadata = {
-            "url": self.page.url,
-            "title": None,
-            "events": self._page_events[-50:],
+            "events": [
+                self._safe_page_event(event) for event in self._page_events[-50:]
+            ],
             "cookies": [],
-            "login_form": None,
+            "login_form": {},
         }
-
-        try:
-            metadata["title"] = await self.page.title()
-        except Exception as exc:  # pragma: no cover - diagnostic best effort
-            metadata["title"] = f"<title unavailable: {exc}>"
-
         if self.context is not None:
             try:
                 cookies = await self.context.cookies()
+                metadata["cookie_count"] = len(cookies)
                 metadata["cookies"] = [
                     {
-                        "name": cookie.get("name"),
-                        "domain": cookie.get("domain"),
-                        "path": cookie.get("path"),
-                        "expires": cookie.get("expires"),
+                        "http_only": cookie.get("httpOnly") is True,
+                        "secure": cookie.get("secure") is True,
+                        "session": cookie.get("expires") == -1,
                     }
                     for cookie in cookies
                 ]
-            except Exception as exc:  # pragma: no cover - diagnostic best effort
-                metadata["cookies_error"] = str(exc)
-
+            except Exception:
+                metadata["cookies_available"] = False
         try:
-            metadata["login_form"] = await self.page.evaluate(
-                """() => {
-                    const readText = (selector) => {
-                        const node = document.querySelector(selector);
-                        return node ? (node.textContent || '').trim() : '';
-                    };
-                    const readValue = (selector) => {
-                        const node = document.querySelector(selector);
-                        return node ? (node.value || '') : '';
-                    };
-                    const collectTexts = (selectors) => {
-                        const items = [];
-                        selectors.forEach((selector) => {
-                            document.querySelectorAll(selector).forEach((node) => {
-                                const text = (node.textContent || '').trim();
-                                if (text && !items.includes(text)) {
-                                    items.push(text);
-                                }
-                            });
-                        });
-                        return items;
-                    };
-                    return {
-                        username_length: readValue('#_username').length,
-                        password_length: readValue('#_loginPass').length,
-                        username_error: readText('#_username_msg'),
-                        password_error: readText('#_loginPass_msg'),
-                        ticket_present: readValue('#ticket').length > 0,
-                        randstr_present: readValue('#randstr').length > 0,
-                        target_value: readValue('input[name="target"]'),
-                        error_num: readValue('#error_num'),
-                        captcha_iframe_count: document.querySelectorAll('iframe[src*="captcha"]').length,
-                        visible_messages: collectTexts([
-                            '#_username_msg',
-                            '#_loginPass_msg',
-                            '.wrong',
-                            '.warning',
-                            '.import',
-                            '.fine',
-                            '.tips_in_word',
-                            '.layui-layer-content',
-                            '.swal2-html-container',
-                        ]),
-                    };
-                }"""
-            )
-        except Exception as exc:  # pragma: no cover - diagnostic best effort
-            metadata["login_form_error"] = str(exc)
-
+            form = await self.page.evaluate("""() => ({
+                ticket_present: Boolean(document.querySelector('#ticket')?.value),
+                randstr_present: Boolean(document.querySelector('#randstr')?.value),
+                captcha_iframe_count: document.querySelectorAll('iframe[src*="captcha"]').length
+            })""")
+            metadata["login_form"] = safe_data(form)
+        except Exception:
+            metadata["login_form_available"] = False
         return metadata
+
+    @staticmethod
+    def _safe_page_event(event: dict[str, Any]) -> dict[str, Any]:
+        kinds = {"console", "pageerror", "response", "requestfailed"}
+        kind = event.get("kind")
+        return {
+            "kind": kind if isinstance(kind, str) and kind in kinds else "unknown",
+            **safe_data(event),
+        }
 
     async def close(self) -> None:
         for task in list(self._page_prepare_tasks):
@@ -279,8 +273,7 @@ class PlaywrightClient:
         )
 
     def _append_event(self, event: dict[str, Any]) -> None:
-        event["timestamp"] = datetime.now(UTC).isoformat()
-        self._page_events.append(event)
+        self._page_events.append(self._safe_page_event(event))
         if len(self._page_events) > 200:
             del self._page_events[:-200]
 

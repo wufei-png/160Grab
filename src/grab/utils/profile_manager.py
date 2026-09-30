@@ -5,6 +5,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from grab.utils.private_files import (
+    absolute_path,
+    ensure_private_directory,
+    private_directory,
+)
 from grab.utils.profile_name import validate_profile_name
 
 PROFILE_MARKER_FILENAME = ".160grab-profile.json"
@@ -27,13 +32,12 @@ class ResolvedBrowserProfile:
 
 
 def expand_profiles_root_dir(value: str | Path) -> Path:
-    return Path(value).expanduser()
+    return absolute_path(value)
 
 
 def ensure_profiles_root_dir(root_dir: str | Path) -> Path:
     resolved = expand_profiles_root_dir(root_dir)
-    resolved.mkdir(parents=True, exist_ok=True)
-    return resolved
+    return ensure_private_directory(resolved)
 
 
 def create_profile(
@@ -50,16 +54,21 @@ def create_profile(
     if profile_dir.exists():
         raise ValueError(f"Profile '{profile_name}' already exists.")
 
-    profile_dir.mkdir(parents=False)
+    with private_directory(resolved_root) as directory:
+        try:
+            directory.mkdir(profile_name)
+        except FileExistsError:
+            raise ValueError("Profile already exists") from None
     metadata = {
         "version": 1,
         "profile_name": profile_name,
         "created_at": datetime.now(UTC).isoformat(),
     }
-    (profile_dir / PROFILE_MARKER_FILENAME).write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    with private_directory(profile_dir, create=False) as directory:
+        directory.create(
+            PROFILE_MARKER_FILENAME,
+            json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
     return BrowserProfile(name=profile_name, path=profile_dir)
 
 
@@ -69,14 +78,23 @@ def list_profiles(root_dir: str | Path) -> list[BrowserProfile]:
         return []
 
     profiles: list[BrowserProfile] = []
-    for child in sorted(resolved_root.iterdir(), key=lambda item: item.name):
-        if not child.is_dir():
+    with private_directory(resolved_root, create=False) as directory:
+        names = directory.names()
+    for child in sorted(
+        (resolved_root / name for name in names), key=lambda item: item.name
+    ):
+        if child.is_symlink() or not child.is_dir():
+            continue
+        try:
+            validate_profile_name(child.name)
+        except ValueError:
             continue
         marker_path = child / PROFILE_MARKER_FILENAME
         if not marker_path.exists():
             continue
         try:
-            metadata = json.loads(marker_path.read_text(encoding="utf-8"))
+            with private_directory(child, create=False) as directory:
+                metadata = json.loads(directory.read(PROFILE_MARKER_FILENAME))
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(metadata, dict):
@@ -98,6 +116,8 @@ def load_profile(root_dir: str | Path, profile_name: str) -> BrowserProfile:
         raise ValueError(
             f"Profile '{validated_name}' does not exist under {resolved_root}.{suffix}"
         )
+    with private_directory(profile_dir, create=False):
+        pass
     if not profile_dir.is_dir():
         raise ValueError(f"Profile path is not a directory: {profile_dir}")
 
@@ -109,7 +129,8 @@ def load_profile(root_dir: str | Path, profile_name: str) -> BrowserProfile:
         )
 
     try:
-        metadata = json.loads(marker_path.read_text(encoding="utf-8"))
+        with private_directory(profile_dir, create=False) as directory:
+            metadata = json.loads(directory.read(PROFILE_MARKER_FILENAME))
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"Profile '{validated_name}' is not a valid 160Grab profile: "
@@ -145,18 +166,12 @@ def resolve_profile_for_run(
     profiles = list_profiles(resolved_root)
     if not profiles:
         profile = create_profile(resolved_root)
-        notify(
-            "ℹ️ 未检测到可用 profile，已自动创建: "
-            f"{profile.name} ({profile.path})"
-        )
+        notify(f"ℹ️ 未检测到可用 profile，已自动创建: {profile.name} ({profile.path})")
         return ResolvedBrowserProfile(profile=profile, source="auto-created")
 
     if len(profiles) == 1:
         profile = profiles[0]
-        notify(
-            "ℹ️ 自动检测到唯一 profile: "
-            f"{profile.name} ({profile.path})"
-        )
+        notify(f"ℹ️ 自动检测到唯一 profile: {profile.name} ({profile.path})")
         return ResolvedBrowserProfile(profile=profile, source="auto-detected")
 
     if not is_interactive:
@@ -165,7 +180,9 @@ def resolve_profile_for_run(
             "Set browser.profile_name in config.yaml."
         )
 
-    profile = _prompt_profile_selection(profiles, prompt_text=prompt_text, notify=notify)
+    profile = _prompt_profile_selection(
+        profiles, prompt_text=prompt_text, notify=notify
+    )
     _maybe_persist_selection(
         profile=profile,
         config_path=config_path,

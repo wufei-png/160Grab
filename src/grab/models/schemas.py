@@ -94,6 +94,7 @@ class BrowserConfig(BaseModel):
 
 
 class LoggingConfig(BaseModel):
+    include_sensitive_debug: bool = False
     jsonl_dir: str = "~/.160grab/logs"
     heartbeat_interval_seconds: int = 300
 

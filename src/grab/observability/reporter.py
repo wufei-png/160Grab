@@ -10,24 +10,32 @@ from grab.observability.notifications import NotificationManager
 from grab.observability.privacy import (
     event_message,
     notification_projection,
+    opaque_ref,
     project_event,
     safe_phase,
 )
 from grab.observability.safe_logging import logger
+from grab.utils.private_files import ensure_private_directory, private_directory
 
 
 class JsonlEventSink:
     def __init__(self, root_dir: str | Path, run_id: str):
-        self.root_dir = Path(root_dir).expanduser()
-        self.root_dir.mkdir(parents=True, exist_ok=True)
+        if opaque_ref(run_id) is None:
+            raise ValueError("Invalid opaque run reference")
+        self.root_dir = ensure_private_directory(root_dir)
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        self.path = self.root_dir / f"{stamp}-{run_id}.jsonl"
-        self.path.touch()
+        self.path = (
+            self.root_dir / f"160grab-log-v1-{stamp}-{run_id}-{uuid4().hex}.jsonl"
+        )
+        with private_directory(self.root_dir) as directory:
+            directory.create(self.path.name, b"")
 
     def write(self, payload: dict[str, Any]) -> None:
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(project_event(payload), ensure_ascii=False))
-            handle.write("\n")
+        data = (json.dumps(project_event(payload), ensure_ascii=False) + "\n").encode(
+            "utf-8"
+        )
+        with private_directory(self.root_dir, create=False) as directory:
+            directory.append(self.path.name, data)
 
 
 class RunReporter:

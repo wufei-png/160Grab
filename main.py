@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import os
-import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +21,7 @@ from grab.services.schedule import ScheduleService
 from grab.services.session import SessionCaptureService
 from grab.utils.config_loader import load_config
 from grab.utils.config_writer import write_browser_profile_name
+from grab.utils.private_files import private_directory
 from grab.utils.profile_manager import (
     BrowserProfile,
     create_profile,
@@ -138,8 +138,8 @@ def ensure_frozen_default_config(
     if not template.exists():
         raise FileNotFoundError(f"Config template was not found: {template}")
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(template, config_path)
+    with private_directory(config_path.parent) as directory:
+        directory.create(config_path.name, template.read_bytes())
     writer = output or emit_console_message
     writer(f"未找到 {CONFIG_FILENAME}，已在 {config_path} 生成配置模板。")
     writer("请先按需修改配置后重新运行。")
@@ -225,6 +225,7 @@ async def main(argv: list[str] | None = None) -> None:
         async with PlaywrightClient(
             headless=headless,
             debug_dir=debug_dir,
+            include_sensitive_debug=config.logging.include_sensitive_debug,
             stealth_enabled=config.browser.stealth,
             persistent_context_enabled=config.browser.launch_persistent_context,
             user_data_dir=selected_profile.path
@@ -358,6 +359,7 @@ async def run_create_profile_flow(
     async with PlaywrightClient(
         headless=False,
         debug_dir=debug_dir,
+        include_sensitive_debug=config.logging.include_sensitive_debug,
         stealth_enabled=config.browser.stealth,
         persistent_context_enabled=True,
         user_data_dir=profile.path,

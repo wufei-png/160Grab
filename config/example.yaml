@@ -16,6 +16,8 @@ browser:
   # 列表点进详情空白时可改为 false 试兼容性；默认 true 使用 playwright-stealth
   stealth: true
 logging:
+  # 原始 HTML/截图还须设置 GRAB_DEBUG_DIR；只在本机保留 24 小时
+  include_sensitive_debug: false
   jsonl_dir: "~/.160grab/logs"
   heartbeat_interval_seconds: 300
 notifications:

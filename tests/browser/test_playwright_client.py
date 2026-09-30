@@ -1,5 +1,5 @@
 import asyncio
-from pathlib import Path
+import os
 
 import pytest
 
@@ -20,9 +20,9 @@ class FakeSnapshotPage:
     async def content(self) -> str:
         return "<html><body>login</body></html>"
 
-    async def screenshot(self, path: str, full_page: bool = False):
+    async def screenshot(self, path: str | None = None, full_page: bool = False):
         self.screenshot_calls.append((path, full_page))
-        Path(path).write_bytes(b"png")
+        return b"png"
 
     async def evaluate(self, script: str):
         return {
@@ -106,7 +106,9 @@ class FakeChromium:
         self.launch_calls.append(headless)
         return self.browser
 
-    async def launch_persistent_context(self, user_data_dir: str, headless: bool = True):
+    async def launch_persistent_context(
+        self, user_data_dir: str, headless: bool = True
+    ):
         self.launch_persistent_calls.append((user_data_dir, headless))
         return self.persistent_context
 
@@ -129,8 +131,9 @@ class FakePlaywrightManager:
 
 
 @pytest.mark.asyncio
-async def test_capture_snapshot_writes_html_png_and_metadata(tmp_path):
-    client = PlaywrightClient(debug_dir=tmp_path)
+async def test_capture_snapshot_writes_html_png_and_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRAB_DEBUG_DIR", str(tmp_path))
+    client = PlaywrightClient(debug_dir=tmp_path, include_sensitive_debug=True)
     client.page = FakeSnapshotPage()
     client._page_events.append({"kind": "console", "text": "hello"})
 
@@ -145,15 +148,17 @@ async def test_capture_snapshot_writes_html_png_and_metadata(tmp_path):
     assert html_path.exists()
     assert png_path.exists()
     assert "login" in html_path.read_text(encoding="utf-8")
-    assert client.page.screenshot_calls == [(str(png_path), True)]
+    assert client.page.screenshot_calls == [(None, True)]
 
     metadata = metadata_path.read_text(encoding="utf-8")
-    assert "健康160登录" in metadata
+    assert "健康160登录" not in metadata
     assert "console" in metadata
 
 
 @pytest.mark.asyncio
-async def test_launch_transient_context_creates_new_page_and_closes_browser(monkeypatch):
+async def test_launch_transient_context_creates_new_page_and_closes_browser(
+    monkeypatch,
+):
     context = FakeContext()
     browser = FakeBrowser(context)
     chromium = FakeChromium(browser=browser)
@@ -262,3 +267,124 @@ async def test_prepare_page_ignores_closed_target_errors(monkeypatch):
 
     assert id(page) in client._prepared_pages
     assert page.listeners == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag,env", [(False, False), (False, True), (True, False)])
+async def test_ordinary_debug_never_captures_html_or_screenshot(
+    tmp_path, monkeypatch, flag, env
+):
+    import json
+    from types import SimpleNamespace
+
+    from tests.observability.test_privacy import POISON, assert_clean
+
+    if env:
+        monkeypatch.setenv("GRAB_DEBUG_DIR", str(tmp_path))
+    else:
+        monkeypatch.delenv("GRAB_DEBUG_DIR", raising=False)
+    client = PlaywrightClient(debug_dir=tmp_path, include_sensitive_debug=flag)
+
+    class PoisonPage(FakeSnapshotPage):
+        async def content(self):
+            pytest.fail("Ordinary debug must never read raw HTML/script")
+
+        async def evaluate(self, script):
+            return {
+                "visible_messages": [POISON],
+                "ticket_present": POISON,
+                "randstr_present": True,
+                "captcha_iframe_count": 1,
+            }
+
+        async def screenshot(self, **kwargs):
+            pytest.fail("Ordinary debug must never take a screenshot")
+
+    client.page = PoisonPage()
+    client.page.url += "?token=" + POISON
+
+    class Context:
+        async def cookies(self):
+            return [
+                {
+                    "name": POISON,
+                    "value": POISON,
+                    "domain": POISON,
+                    "path": POISON,
+                    "httpOnly": True,
+                    "secure": True,
+                    "expires": -1,
+                }
+            ]
+
+    client.context = Context()
+    client._record_console_message(
+        SimpleNamespace(text=POISON, type=POISON, location=POISON)
+    )
+    client._record_page_error(ValueError(POISON))
+    client._record_response(
+        SimpleNamespace(url=POISON, status=200, ok=True, request=None)
+    )
+    client._record_request_failed(SimpleNamespace(url=POISON, failure=POISON))
+    path = await client.capture_snapshot(POISON)
+    assert path is not None
+    assert [p.suffix for p in tmp_path.iterdir()] == [".json"]
+    assert_clean(path.name)
+    assert_clean(path.read_text())
+    assert_clean(await client.collect_debug_state())
+    state = json.loads(path.read_text())
+    assert state["cookie_count"] == 1
+    assert state["cookies"] == [{"http_only": True, "secure": True, "session": True}]
+    assert state["login_form"] == {"randstr_present": True, "captcha_iframe_count": 1}
+
+
+@pytest.mark.asyncio
+async def test_raw_snapshot_requires_matching_local_opt_in_and_private_permissions(
+    tmp_path, monkeypatch
+):
+    import json
+
+    from tests.observability.test_privacy import POISON, assert_clean
+
+    monkeypatch.setenv("GRAB_DEBUG_DIR", str(tmp_path / "debug"))
+    client = PlaywrightClient(
+        debug_dir=tmp_path / "debug", include_sensitive_debug=True
+    )
+
+    class RawPage(FakeSnapshotPage):
+        async def content(self):
+            return '<html><script>const token = "' + POISON + '";</script></html>'
+
+    client.page = RawPage()
+    path = await client.capture_snapshot(POISON)
+    assert POISON in path.with_suffix(".html").read_text()
+    assert path.with_suffix(".png").read_bytes() == b"png"
+    assert_clean(path.read_text())
+    assert json.loads(path.read_text())["sensitive_debug"] is True
+    if os.name == "posix":
+        for file in path.parent.iterdir():
+            assert file.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+    other = PlaywrightClient(debug_dir=tmp_path / "other", include_sensitive_debug=True)
+    assert other.sensitive_debug_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_snapshot_failure_does_not_record_exception_text(tmp_path, monkeypatch):
+    from tests.observability.test_privacy import POISON, assert_clean
+
+    monkeypatch.setenv("GRAB_DEBUG_DIR", str(tmp_path))
+    client = PlaywrightClient(debug_dir=tmp_path, include_sensitive_debug=True)
+
+    class Broken(FakeSnapshotPage):
+        async def content(self):
+            raise RuntimeError(POISON)
+
+        async def screenshot(self, **kwargs):
+            raise RuntimeError(POISON)
+
+        async def evaluate(self, script):
+            raise RuntimeError(POISON)
+
+    client.page = Broken()
+    assert_clean((await client.capture_snapshot("failure")).read_text())
