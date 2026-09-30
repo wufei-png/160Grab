@@ -316,7 +316,56 @@
   }
 
   const LOG_SCHEMA = 1;
-  const SAFE_LOG_MESSAGES = new Set(["Diagnostic event.", "Submitted booking form; runner paused to avoid duplicate submit.", "Booking form did not become ready before submit.", "Controller is already active; not starting another loop.", "Failed to load stored settings; using defaults.", "Installed checkIdInfo blank-response JSON patch.", "Page fetch schedule request failed.", "Page jQuery schedule request failed; trying fetch.", "Selected member blocked before submit.", "Selected member has page warning attributes; continuing to submit.", "Waited for booking page initialization before submit."]);
+  // Registered fixed workflow messages only; runtime text is never registered.
+  const SAFE_LOG_MESSAGES = new Set([
+    "Address selection failed.",
+    "Booking form did not become ready before submit.",
+    "Booking form preparation failed; manual action required.",
+    "Booking form prepared; waiting for manual submit.",
+    "Booking form invalid.",
+    "Booking page hit rate limiting.",
+    "Booking submit failed.",
+    "Booking page loaded while runner is stopped.",
+    "Booking submit failed; staying on page.",
+    "Booking succeeded.",
+    "Cannot return to doctor page; target is incomplete.",
+    "Controller is already active; not starting another loop.",
+    "Could not find a submit control on the booking page.",
+    "Diagnostic event.",
+    "Doctor target resolution failed.",
+    "Installed checkIdInfo blank-response JSON patch.",
+    "Login expired; manual login required.",
+    "Matched slot; opening booking page.",
+    "Member selection failed.",
+    "No bookable matching slot yet.",
+    "Page fetch schedule request failed.",
+    "Page jQuery schedule request failed; trying fetch.",
+    "Ready. Press Start to poll this doctor page.",
+    "Redirecting to canonical doctor page.",
+    "Schedule date fill failed.",
+    "Schedule polling hit rate limiting.",
+    "Schedule polling request failed.",
+    "Selected member blocked before submit.",
+    "Selected member cannot submit booking.",
+    "Selected member has page warning attributes; continuing to submit.",
+    "Session looks expired. Refreshing doctor page before retrying.",
+    "Session recovery disabled; manual login required.",
+    "Settings reset to defaults.",
+    "Settings saved.",
+    "Settings validation failed.",
+    "Started.",
+    "Stopped.",
+    "Submit attempts exhausted; manual action required.",
+    "Submitted booking form.",
+    "Submitted booking form; runner paused to avoid duplicate submit.",
+    "This userscript only supports 91160 doctor detail and ystep1 pages.",
+    "Triggered booking follow-up action.",
+    "Unsupported booking page URL.",
+    "Userscript failed; manual action required.",
+    "Waited for booking page initialization before submit.",
+    "Waiting for booking page initialization before submit.",
+    "Waiting for configured start time.",
+  ]);
   const SAFE_DETAIL_COUNTS = new Set(["attempt", "pollAttempt", "delayMs", "slotCount", "count", "status"]);
   const SAFE_DETAIL_FLAGS = new Set(["ready", "success", "ticketPresent", "randstrPresent"]);
 
@@ -2211,12 +2260,12 @@
 
   async function recoverSession(target, reason, settings) {
     if (!settings.session.recoveryEnabled) {
-      stopRun(`Session recovery disabled: ${reason}`);
+      stopRun("Session recovery disabled; manual login required.");
       return false;
     }
     const state = readState();
     if (state.sessionRecoveryAttempts >= settings.session.recoveryMaxAttempts) {
-      stopRun(`Login expired, manual login required: ${reason}`);
+      stopRun("Login expired; manual login required.");
       return false;
     }
     const delayMs = pickDelayMs(settings.session.recoveryCooldownMs);
@@ -2256,7 +2305,7 @@
       settings.target,
     );
     if (!resolved.ok) {
-      stopRun(`Doctor target resolution failed: ${resolved.reason}`);
+      stopRun("Doctor target resolution failed.");
       return;
     }
     const target = resolved.target;
@@ -2335,7 +2384,7 @@
         }));
         setSummary(
           "info",
-          `Matched slot ${nextSlot.scheduleId}; opening booking page.`,
+          "Matched slot; opening booking page.",
           compactText(`${nextSlot.date} ${nextSlot.dayPeriod} ${nextSlot.timeRange}`),
         );
         await sleepMs(pickDelayMs(activeSettings.pacing.pageActionMs));
@@ -2398,7 +2447,7 @@
     if (rateLimitOnLoad) {
       await returnToDoctorAfterCurrentAttempt(
         target,
-        `Booking page hit rate limiting: ${rateLimitOnLoad}`,
+        "Booking page hit rate limiting.",
         settings.pacing.rateLimitCooldownMs,
       );
       return;
@@ -2406,7 +2455,7 @@
 
     const memberSelection = resolveMemberSelection(settings.member);
     if (!memberSelection.ok) {
-      stopRun(`Member selection failed: ${memberSelection.reason}`);
+      stopRun("Member selection failed.");
       return;
     }
 
@@ -2414,7 +2463,7 @@
     if (!formState.isValid) {
       await returnToDoctorAfterCurrentAttempt(
         target,
-        `Booking form invalid: ${formState.invalidReason}`,
+        "Booking form invalid.",
         settings.pacing.bookingRetryMs,
       );
       return;
@@ -2423,7 +2472,7 @@
     const attempts = getSubmitAttempts(formState.scheduleId, formState.appointmentValue);
     if (attempts >= settings.booking.maxSubmitAttemptsPerAppointment) {
       stopRun(
-        `Submit attempts exhausted for ${formState.scheduleId}/${formState.appointmentValue}.`,
+        "Submit attempts exhausted; manual action required.",
       );
       return;
     }
@@ -2436,15 +2485,15 @@
     );
     const fillResult = preparation.fillResult;
     if (!fillResult.addressSelection.ok) {
-      stopRun(`Address selection failed: ${fillResult.addressSelection.reason}`);
+      stopRun("Address selection failed.");
       return;
     }
     if (!fillResult.scheduleDateSelection.ok) {
-      stopRun(`Schedule date fill failed: ${fillResult.scheduleDateSelection.reason}`);
+      stopRun("Schedule date fill failed.");
       return;
     }
     if (!preparation.ok) {
-      stopRun(preparation.reason);
+      stopRun("Booking form preparation failed; manual action required.");
       appendLog("warn", "Booking form did not become ready before submit.", {
         readiness: preparation.readiness,
         attempts: preparation.attempt,
@@ -2453,7 +2502,7 @@
     }
     const memberBlocker = readSelectedMemberBlocker(memberSelection);
     if (!memberBlocker.ok) {
-      stopRun(`Selected member cannot submit booking: ${memberBlocker.reason}`);
+      stopRun("Selected member cannot submit booking.");
       appendLog("warn", "Selected member blocked before submit.", memberBlocker.status);
       return;
     }
@@ -2478,6 +2527,9 @@
       setSummary(
         "info",
         "Booking form prepared; waiting for manual submit.",
+    "Booking form invalid.",
+    "Booking page hit rate limiting.",
+    "Booking submit failed.",
         {
           scheduleId: formState.scheduleId,
           appointmentValue: formState.appointmentValue,
@@ -2518,7 +2570,7 @@
     setSummary("info", "Submitted booking form.", { submitResult, attemptCount });
     const followupAction = await clickFollowupControl();
     if (followupAction) {
-      appendLog("info", `Triggered follow-up action ${followupAction}.`);
+      appendLog("info", "Triggered booking follow-up action.");
     }
 
     let inspection = inspectBookingPage(beforeUrl);
@@ -2537,7 +2589,7 @@
         pendingBooking: null,
         submittingBooking: null,
       }));
-      setSummary("info", `Booking succeeded for schedule ${formState.scheduleId}.`, {
+      setSummary("info", "Booking succeeded.", {
         appointmentLabel: formState.appointmentLabel,
         url: inspection.currentUrl,
       });
@@ -2558,7 +2610,7 @@
     patchState((next) => ({ ...next, running: true, submittingBooking: null }));
     await returnToDoctorAfterCurrentAttempt(
       target,
-      `Booking submit failed: ${reason}`,
+      "Booking submit failed.",
       inspection.rateLimitMessage
         ? settings.pacing.rateLimitCooldownMs
         : settings.pacing.bookingRetryMs,
@@ -3683,7 +3735,7 @@
         return;
       }
       void runDoctorPageController(claimedControllerId).catch((error) => {
-        stopRun(`Userscript crashed: ${error?.message || error}`);
+        stopRun("Userscript failed; manual action required.");
       });
       return;
     }
@@ -3694,7 +3746,7 @@
         return;
       }
       void runBookingPageController(claimedControllerId).catch((error) => {
-        stopRun(`Userscript crashed: ${error?.message || error}`);
+        stopRun("Userscript failed; manual action required.");
       });
       return;
     }
@@ -3707,6 +3759,8 @@
 
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
     appendLog,
+    setSummary,
+    panelPhase,
     readState,
     writeState,
     safeLogDetail,

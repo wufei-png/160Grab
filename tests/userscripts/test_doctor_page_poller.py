@@ -1395,3 +1395,48 @@ def test_logs_and_legacy_migration_drop_synthetic_sensitive_values():
     assert result["storedMigration"]["summary"] is None
     assert result["migrated"]["pendingBooking"]["scheduleId"] == "synthetic-slot"
     assert json.loads(result["entry"]["detail"]) == {"ready": True, "count": 2}
+
+
+def test_safe_workflow_summaries_preserve_manual_waiting_and_cooldown():
+    result = _run_hook(
+        """(() => {
+      const poison = 'SYN_NAME_Q|SYN_CERT_Q|SYN_PHONE_Q|SYN_MEMBER_Q|SYN_TOKEN_Q|SYN_CARD_Q|SYN_ADDRESS_Q';
+      hooks.writeState({ running: false, pendingBooking: null, submittingBooking: null });
+      hooks.setSummary('info', 'Booking form prepared; waiting for manual submit.', {
+        memberId: poison, address: { detail: poison }, appointmentLabel: poison,
+      });
+      const manual = hooks.readState();
+      hooks.writeState({ running: true });
+      hooks.setSummary('warn', 'Schedule polling hit rate limiting.', poison);
+      const cooldown = hooks.readState();
+      hooks.setSummary('info', 'Booking succeeded.', { url: poison });
+      const success = hooks.readState();
+      return {
+        manual, manualPhase: hooks.panelPhase(manual),
+        cooldown, cooldownPhase: hooks.panelPhase(cooldown), success,
+        bookingRateLimit: hooks.panelPhase({ summary: hooks.appendLog('warn', 'Booking page hit rate limiting.', poison) }),
+        invalid: hooks.panelPhase({ summary: hooks.appendLog('warn', 'Booking form invalid.', poison) }),
+        failed: hooks.panelPhase({ summary: hooks.appendLog('warn', 'Booking submit failed.', poison) }),
+      };
+    })()""",
+        extra_js="""
+    const fakeBody = { innerHTML: '', querySelector: () => null };
+    sandbox.document.getElementById = () => ({ querySelector: () => fakeBody });
+    sandbox.console.log = sandbox.console.warn = sandbox.console.error = () => {};
+    """,
+    )
+    assert result["manualPhase"] == "hit"
+    assert (
+        result["manual"]["summary"]["message"]
+        == "Booking form prepared; waiting for manual submit."
+    )
+    assert result["cooldownPhase"] == "cooldown"
+    assert result["bookingRateLimit"] == "cooldown"
+    assert result["invalid"] == "error"
+    assert result["failed"] == "error"
+    assert (
+        result["cooldown"]["summary"]["message"]
+        == "Schedule polling hit rate limiting."
+    )
+    assert result["success"]["summary"]["message"] == "Booking succeeded."
+    assert "SYN_" not in json.dumps(result)
