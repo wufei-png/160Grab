@@ -4,6 +4,8 @@ import re
 from datetime import date
 from html.parser import HTMLParser
 
+from grab.booking.serialized import schedule_record_dates
+
 FIELD_SELECTORS = {
     "card": '#hismemid, [name="hisMemId"], [name="hismemid"]',
     "date": '#sch_date, [name="sch_date"]',
@@ -295,15 +297,12 @@ def snapshot_html(html):
             "his_mem_id",
         }:
             result["other_required"].append(required_ready(n, tree.nodes))
-    # Only a single, unambiguous date in serialized schedule data is trusted.
+    # Dates must belong to the unique selected schedule record, not its siblings.
     for n in tree.nodes:
         if n.attrs.get("name") == "sch_data" and len(result["schedule_ids"]) == 1:
-            raw = n.value()
-            sid = result["schedule_ids"][0]
-            if re.search(r's:\d+:"' + re.escape(sid) + r'";', raw):
-                result["dates"].extend(
-                    re.findall(r's:7:"to_date";s:10:"(\d{4}-\d{2}-\d{2})"', raw)
-                )
+            result["dates"].extend(
+                schedule_record_dates(n.value(), result["schedule_ids"][0])
+            )
         if n.attrs.get("id") == "jzdate":
             result["dates"].extend(
                 "-".join(m)

@@ -38,6 +38,7 @@ const sandbox = {{
   crypto: require("node:crypto").webcrypto,
   Uint8Array,
   TextEncoder,
+  TextDecoder,
   URL,
   Math,
   JSON,

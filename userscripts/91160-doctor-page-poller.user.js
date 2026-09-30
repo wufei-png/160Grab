@@ -1513,6 +1513,58 @@
     return Boolean(node && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden' && !node.matches(':disabled') && !node.closest('[aria-disabled="true"]'));
   }
 
+  function scheduleRecordDates(raw, scheduleId) {
+    try {
+      const bytes = new TextEncoder().encode(raw);
+      if (bytes.length > 1000000) return [];
+      const decoder = new TextDecoder('utf-8', {fatal:true});
+      let pos = 0, remaining = 10000;
+      const expect = token => {
+        for (const char of token) if (bytes[pos++] !== char.charCodeAt(0)) throw new Error('Malformed array');
+      };
+      const until = delimiter => {
+        const start = pos;
+        while (pos < bytes.length && bytes[pos] !== delimiter.charCodeAt(0)) pos++;
+        if (pos === bytes.length) throw new Error('Malformed array');
+        const value = decoder.decode(bytes.slice(start,pos)); pos++;
+        return value;
+      };
+      const integer = text => {
+        if (!/^-?\d+$/.test(text) || !Number.isSafeInteger(Number(text))) throw new Error('Invalid integer');
+        return Number(text);
+      };
+      const read = (depth=0) => {
+        if (depth > 32 || --remaining < 0) throw new Error('Array budget exceeded');
+        const kind = String.fromCharCode(bytes[pos++]);
+        if (kind === 'N') {expect(';'); return null;}
+        expect(':');
+        if (kind === 's') {
+          const size = integer(until(':')); if (size < 0) throw new Error('Invalid string length');
+          expect('"'); const value = decoder.decode(bytes.slice(pos,pos+size)); pos += size; expect('";'); return value;
+        }
+        if (kind === 'a') {
+          const size = integer(until(':')); if (size < 0 || size > 10000) throw new Error('Invalid array length');
+          expect('{'); const pairs = [];
+          for (let i=0;i<size;i++) pairs.push([read(depth+1),read(depth+1)]);
+          expect('}'); return pairs;
+        }
+        if (kind === 'i' || kind === 'b') return integer(until(';'));
+        if (kind === 'd') {const number = Number(until(';')); if (!Number.isFinite(number)) throw new Error('Invalid number'); return number;}
+        throw new Error('Unsupported serialized type');
+      };
+      const root = read();
+      if (pos !== bytes.length || !Array.isArray(root)) return [];
+      const records = root.filter(([k]) => String(k) === scheduleId).map(([,v]) => v);
+      if (records.length !== 1 || !Array.isArray(records[0])) return [];
+      const dates = [];
+      const visit = pairs => pairs.forEach(([key,value]) => {
+        if (key === 'to_date' && typeof value === 'string') dates.push(value);
+        else if (Array.isArray(value)) visit(value);
+      });
+      visit(records[0]); return dates;
+    } catch (_error) {return [];}
+  }
+
   function readBookingSnapshot() {
     const all = selector => Array.from(document.querySelectorAll(selector));
     const snapshot = {version:1, schedule_ids:all('[name="schedule_id"]').map(n => n.value.trim()), members:[], hidden_members:[], times:[], dates:[], fields:{}, submit:all(SUBMIT_SELECTOR).map(formActionable), other_required:[]};
@@ -1538,8 +1590,8 @@
     });
     snapshot.other_required = all('[required]').filter(n => !known.has(n) && !['schedule_id','member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => n.validity ? n.validity.valid : Boolean(n.value?.trim()));
     all('[name="sch_data"]').forEach(n => {
-      if (snapshot.schedule_ids.length === 1 && n.value.includes(`"${snapshot.schedule_ids[0]}";`)) {
-        snapshot.dates.push(...Array.from(n.value.matchAll(/s:7:"to_date";s:10:"(\d{4}-\d{2}-\d{2})"/g), m => m[1]));
+      if (snapshot.schedule_ids.length === 1) {
+        snapshot.dates.push(...scheduleRecordDates(n.value, snapshot.schedule_ids[0]));
       }
     });
     all('#jzdate').forEach(n => snapshot.dates.push(...Array.from(n.parentElement.textContent.matchAll(/(20\d{2})年(\d{2})月(\d{2})日/g), m => `${m[1]}-${m[2]}-${m[3]}`)));
@@ -3304,7 +3356,7 @@
     chooseAppointmentOption,
     appointmentKey,
     parseBookingFormState,
-    readBookingSnapshot, decideBookingPreparation, applyBookingDecision, selectionReady,
+    scheduleRecordDates, readBookingSnapshot, decideBookingPreparation, applyBookingDecision, selectionReady,
     readBookingFormReadiness,
     prepareBookingFormForSubmit,
     resolveBookingSubmitSettleMs,
