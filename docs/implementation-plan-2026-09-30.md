@@ -233,7 +233,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 | S02 | 已完成（2026-09-30） | `8c167c9`, `f3d0a47`, `c9cd962`, `d81b350`, `040b911`；记录提交见文件历史 | 完整 222 passed, 2 live skipped；contract/integration 17 passed（Chromium 6）；Ruff/Node/锁定离线 sync 通过；只读 review 1 P2 接受并修复，相关 62 passed | Windows/远端 CI/live/frozen 未验证；后续授权/提交/互斥 gate 属于 S03–S05 |
 | S03 | 已完成（2026-09-30） | `9a8b33a`, `fcb4e18`, `c04ab7f`, `76bdc60`, `5c9e454`, `1e7dbeb`, `51e9f41`；记录提交见文件历史 | 最终 294 passed, 2 live skipped；contract/integration 39 passed（Chromium 19）；CI 同命令 294 passed, 2 deselected；Ruff/Node/离线锁定 sync 通过；review 2 P2 接受并修复 | 无 live adapter；S04/S05 发布 gate、Windows/远端 CI/frozen 未完成 |
 | S04 | 已完成（2026-09-30） | `d9cae53`, `519d83a`, `528f760`, `8199211`, `71afcd2`, `ad1489a`, `47804a5`；记录提交见文件历史 | 最终 449 passed, 2 live skipped；contract/integration 205 passed（Chromium 100）；CI 同命令 449 passed, 2 deselected；Ruff/Node/离线锁定 sync/whitespace 通过；review 1 P1 + 2 P2 接受并修复 | 无 live adapter；S05 发布 gate/跨平台/远端 CI/frozen 未验证 |
-| S05 | 未开始 | — | — | S04 |
+| S05 | 已完成（2026-09-30） | `3cdadf4`, `96dea17`, `f0a010f`, `4385214`, `9ebb1dd`, `b13be72`, `f1545ca`；记录提交见历史 | 最终 477 passed, 2 live skipped；contract/integration 221（Chromium 116）；CI 同参数 477 passed, 2 deselected；Ruff/Node/锁定离线 sync/whitespace 通过；review 1 P1 + 3 P2 全接受并修复 | 无跨路径/profile/机器协调；live/跨平台/扩展/远端 CI/frozen 未验证 |
 | S06 | 未开始 | — | — | S05 |
 | S07 | 未开始 | — | — | S06 工具与可用证据 |
 | S08 | 未开始 | — | — | S07 |
@@ -378,3 +378,56 @@ reviewer 独立审阅此修复及 Chromium 2 passed。其余三项修复由主�
 完成记录/架构及显式空值配置示例另作文档提交，hash 见文件历史，避免自引用。
 未执行真实登录/预约、未读取/复制用户认证状态；本地浏览器只用临时 synthetic context/local routes。
 无现场字段与成功 adapter；未知现场选择语义仍交人工，S05 互斥发布 gate 尚未完成。
+
+### S05 会话证据（2026-09-30）
+
+会话基线 `a717ba2338147682d9b0a6c293522fc457961902`；已核对 S04 完成记录及真实值 preparation、
+持久授权与 pending 合同。仅执行 S05，无 S06–S09 功能或真实预约。按 implement-in-stages 本地提交，不 push。
+用户补充授权提交整轮计划的既有 README、future-improvements 和 S01–S09 提示词，
+`5d7b87b` 为独立文档提交，并修正 README 的尚未实现表述。
+
+1. `3cdadf4`：Python OS 用户工具单实例、nonce/TTL/renew/release、runner/CLI/请求/写入 guards。
+   定向 **185 passed**（含既有真实 Chromium 提交/填表回归）。测试锁根均隔离为临时目录。
+2. `96dea17`：JS origin Web Lock controller、独立 journal mutex、导航接棒/后台失效及 pending 联动。
+   JS/合同/隐私/双页面相关 **74 passed**；既有提交/填表回归 **154 passed**。
+3. `f0a010f` 集成复核：click 后失锁保持 UNKNOWN；keepalive 每次请求前复核；POSIX 默认锁绑定 OS home，
+   路径替换失效；实际子进程使用 PageBookingStrategy 单次 click 并证明 crash 后仍 pending。
+   修复后 Python 相关 **74 passed**。
+
+完整检查 **471 passed, 2 skipped**（LIVE_E2E 未启用）；contract/integration **218 passed**，
+其中真实本地 Chromium **113**，均在全套实际执行。Ruff、userscript/Node harness 语法、
+锁定离线 dev sync、会话完整 diff whitespace 通过，uv.lock 未变化。修复前 CI 同参数本地命令为 **471 passed, 2 deselected**；修复后最终检查见下。
+
+验收覆盖真实两个 Python 子进程竞争、kill 后接管、TTL 不续活、换 profile 仍被拒绝、owner/inode/link 防护；
+双 Chromium 页面并发只一个 poll/submit leader、关闭页面接管、TTL/hidden/pagehide 旧 continuation 失效、
+这些失效后的 pending 恒在且仅可只读接管、ystep1 重新 acquire 且 duplicate controller 为 null、
+Web Locks 不可用零自动点击，以及撤销/journal 串行化和旧 pending 初始化竞争。
+
+未执行现场/live 登录或预约；未读取/复制认证状态；浏览器全部临时 synthetic context/local route。
+TTL 使用受控 clock、visibility/pagehide 使用受控事件，不宣称真实系统冻结/崩溃已实测。
+不承诺跨路径、browser profile 或多机器互斥；Windows 字节锁代码存在但未在 Windows 验证，
+Tampermonkey 扩展 sandbox、Linux、远端 CI、frozen/release 未执行。S06 canary/现场 adapter 仍待后续。
+
+review：一个新鲜只读 subagent 按 delegated-change-review / review-agent 检查
+`a717ba2..f0a010f` 的本会话完整 diff 与两份文档草稿；独立相关 **44 passed**，
+Ruff、Node 语法、完整 diff whitespace 通过。发现 **1 P1 + 3 P2**，主实现者逐项独立确认并全部接受；无拒绝项。
+
+- P1 legacy pending 未全局持久化：新 Chromium regression 先证明另一正常授权 controller 实际 click=1；
+  `4385214` 在旧标签的只读 blocker 检查立即排入 journal Web Lock 迁移，无需启动被阻断的 controller。
+  新 owner 的 journal 请求排在迁移之后，实际 click=0；相关 **78 passed**。
+- P2 同步人工输入阻塞续期：回归先证明真实授权 prompt 等待超 TTL 导致 LeaderLost。
+  `9ebb1dd` 用独立 heartbeat 线程及 RLock，正常人工等待继续续期，真实失锁/expired owner 不能复活；
+  同步 prompt 后单次提交通过，Python 相关 **70 passed**。
+- P2 旧恢复/限频返回任务借新 owner 导航：真实 Chromium 的 session 回归先证明旧任务卸载新 controller；
+  `b13be72` 两条延迟导航均捕获并传递原 owner，重新 Start 的新 owner 不能授权旧 continuation。
+  相关 **80 passed**，显式受控 3 秒恢复及 15 秒限频边界另 **2 passed**。
+- P2 Python 失锁后继续恢复登录：真实 LocalLeader.release 回归先证明再次 login goto，以及 cooldown 后未停止。
+  `f1545ca` 恢复入口与准备登录入口复核 owner，失锁返回人工等待且零新登录请求；Python 相关 **67 passed**。
+
+reviewer 还以真实 Chromium 确认正常导航事件顺序为 pagehide 后 visibilitychange(hidden)，
+原 handoff 保留；该路径无 finding，不作额外改动。四项修复由主实现者验证，未声称 reviewer 再审修复提交。
+最终修复后完整 **477 passed, 2 skipped**（LIVE_E2E 未启用）；CI 同参数本地命令
+`pytest -q -m "not live" --browser chromium` 为 **477 passed, 2 deselected**。
+contract/integration **221 passed**，其中真实本地 Chromium **116**，均在完整/CI 同参数检查实际执行。
+Ruff、userscript/Node harness 语法、锁定离线 dev sync、会话完整 diff whitespace 通过，uv.lock 未改。
+完成记录/架构及 README 进度另作文档提交，hash 见文件历史，避免自引用。

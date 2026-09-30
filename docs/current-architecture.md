@@ -1,7 +1,7 @@
 # 当前架构与核验证据
 
 核验日期：2026-09-30；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`，最终证据见下。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -29,7 +29,7 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 | 最终控件唯一且可操作；无安全证明的 checkIdInfo patch 已移除 | Python `fill_booking_form/_submit_control`；JS readiness/submit guard；未验证 follow-up 已交人工 |
 | 隐私 sink 已按 S02 收口；Windows 权限能力仍未实测 | `observability/privacy.py/safe_logging.py/reporter.py/notifications.py`；`utils/private_files.py/retention.py`；JS `appendLog/state` |
 | 缓存 key 失效判断不足、一般网络异常退出 | `ScheduleService._resolve_schedule_user_key/fetch_doctor_schedule/poll` |
-| 时间 naive；只有 profile 锁/页面 controller，无业务互斥；无 channel | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
+| S05 本机/跨标签互斥已实现；时间 naive、无 channel 仍待 S08 | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
 | live 缺 ready/完整目标解析/有限等待闭环 | `tests/e2e/conftest.py::LiveRunner`；待 S06 |
 
 ## S01 已实现事实
@@ -178,3 +178,43 @@ S04 新鲜只读 review 比较 `a1bfdf6..528f760` 及证据草稿，发现 **1 P
 主实现者另发现 requested schedule 在 fill 后才核对，`8199211` 提前绑定并证明零选择/零提交；相关 5 passed。
 reviewer 独立相关 **230 passed**、Ruff/Node/whitespace；独立审阅 `8199211` 并验证相关 Chromium **2 passed**。
 其余三项最终修复由主实现者验证，未声称 reviewer 再审。uv.lock 未变；远端 CI/live/Windows/Linux/frozen/release 未运行。
+
+## S05 已实现事实（2026-09-30）
+
+- Python 使用全工具单实例：本机 OS 用户默认共享 `~/.160grab/coordination/leader.lock`，
+  POSIX 按 passwd home 定位，profile、目标、配置与 HOME 改写不能改变默认锁位置。
+  POSIX `flock` / Windows `msvcrt` 字节锁作为原子所有权；持有的 fd 不删除、不用 lease 文件读写作 CAS。
+  owner 为随机 nonce，30 秒单调 TTL、独立线程每 10 秒复核续期（正常同步人工输入不阻塞），
+  RLock 串行化 fd/owner 的检查、续期、release；过期不能续活，heartbeat 使旧 owner 失效后释放。
+  kernel 在进程退出/crash 时释放；文件名/目录被替换或 owner 元数据失配时 fail closed。
+- CLI 从 profile/browser 创建前取得锁，journal 核对/解决/撤销命令亦受保护；竞争或互斥不可用退出 2。
+  runner 持有锁跨 scheduler、poll、booking 和恢复；独立 schedule fetch/keepalive 与 booking 入口也获取锁。
+  恢复入口与 cooldown 后的准备登录入口、轮询/keepalive 请求、填表写入、durable begin 和最终 click 前复核 owner；
+  click 后失锁仍返回 UNKNOWN，保留 unresolved SUBMITTING。锁过期/release/crash 不修改 attempt journal。
+- JS 同 browser profile、同 origin 采用 `grab160.automation.origin.v1` Web Lock，整个 doctor/booking
+  controller 持有；nonce 与 `performance.now()` 30 秒 TTL、5 秒续期用于旧 continuation fencing。
+  跨标签竞争立即停自动并提示人工；无 Web Locks 时禁自动，不降级到 localStorage/GM CAS。
+  后台 visibility hidden、过期、Stop/reset、pagehide 先使 owner 失效再 release。
+  导航只传 sessionStorage 的上下文，目标文档重新 acquire；旧文档包括 BFCache continuation 无操作权。
+  handoff 不预留锁，竞争时目标页停下交人工。
+- journal 独立短时 Web Lock 串行化初始化、授权、begin/finish、人工 resolve/revoke；UI 读取不在锁外创建盐。
+  未持久化的 legacy pending 立即排队在 journal 锁内迁移，不依赖被阻断的 controller 启动；
+  新 controller 的 journal 初始化/begin 排在旧 pending 迁移后，不能绕过未决提交。
+  所有准备/提交 guard 及 session 恢复/限频返回的延迟导航均捕获旧 owner；
+  同页 Start 的新 token 不能授权旧 continuation。AJAX 失败后的 fetch fallback 也复核，失锁不再发新请求。
+- 本地 evidence 使用真实 Python 子进程、临时 Chromium context 的双页面与 synthetic 内容；
+  实际网站请求均被 route 拦截，不读取/复制用户登录状态，不执行真实预约。
+  Windows/Linux、Tampermonkey 扩展 sandbox、真实 OS/browser suspension/crash、远端 CI/frozen/release 未实测；
+  页面关闭证明 document lock 自动释放，TTL/visibility/pagehide 用受控时钟/事件验证。
+  不提供 Python/userscript 两路径之间、不同 browser profile 或多机器互斥。
+
+最终修复后完整 **477 passed, 2 live skipped**；contract/integration **221 passed**（真实 Chromium **116**），
+均在全套执行；CI 同参数本地命令 **477 passed, 2 deselected**；Ruff、Node 两份语法、
+锁定离线 dev sync、完整 diff whitespace 通过，uv.lock 未改。
+
+S05 新鲜只读 review 比较 `a717ba2..f0a010f` 与文档草稿，发现 **1 P1 + 3 P2**，全部独立复核接受，
+无拒绝项：legacy pending 不全局迁移、同步 input 阻塞续期、旧 JS 延迟任务借用新 owner、
+Python 失锁后仍恢复登录。分别在 `4385214`、`9ebb1dd`、`b13be72`、`f1545ca` 修复。
+reviewer 独立相关 **44 passed**、Ruff/Node/whitespace；主实现者逐项 regression 先证明缺陷再验证修复，
+相关 **78/70/80/67 passed**，JS 两条延迟导航补充 **2 passed**。未声称 reviewer 再审修复提交。
+现场 canary 仍属 S06。
