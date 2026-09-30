@@ -1,19 +1,20 @@
+import asyncio
 import re
-from collections.abc import Awaitable, Callable
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from grab.models.schemas import BookingForm, BookingResult, DoctorPageTarget, GrabConfig
+from grab.models.schemas import (
+    BookingForm,
+    BookingResult,
+    BookingState,
+    DoctorPageTarget,
+    GrabConfig,
+)
 from grab.observability.safe_logging import logger
+from grab.transactions.store import AttemptStore, StoreBlocked
 from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
 from grab.utils.runtime import parse_sleep_time
-
-T = TypeVar("T")
-
-
-def _is_destroyed_context_error(exc: BaseException) -> bool:
-    return "Execution context was destroyed" in str(exc)
 
 
 class BookingStrategy(Protocol):
@@ -32,12 +33,19 @@ class PageBookingStrategy:
         sleep=None,
         debug_snapshot=None,
         reporter=None,
+        attempt_store=None,
+        authorization=None,
+        evidence_adapter=None,
     ):
         self.page = page
         self.config = config
         self._sleep = sleep
         self.debug_snapshot = debug_snapshot
         self.reporter = reporter
+        self.attempt_store = attempt_store or AttemptStore()
+        self.authorization = authorization
+        self.evidence_adapter = evidence_adapter
+        self._run_blocked = False
         self.member_id: str | None = None
         self.target: DoctorPageTarget | None = None
 
@@ -72,9 +80,7 @@ class PageBookingStrategy:
             if appointment_label is not None:
                 logger.info("Appointment time selected.")
             elif not appointment_options:
-                logger.info(
-                    "Booking page exposed no appointment time options."
-                )
+                logger.info("Booking page exposed no appointment time options.")
             else:
                 logger.info("No appointment time matched filters.")
         if not schedule_id:
@@ -299,360 +305,111 @@ class PageBookingStrategy:
         )
         logger.info("Booking form selection completed.")
 
-    async def _trigger_submit_control(self) -> dict:
-        return await self.page.evaluate(
-            """() => {
-                const isVisible = (element) => {
-                    if (!element) return false;
-                    const style = window.getComputedStyle(element);
-                    return style.display !== 'none' && style.visibility !== 'hidden';
-                };
-                const clickElement = (element) => {
-                    if (!element) return false;
-                    element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    return true;
-                };
-
-                const candidateSelectors = [
-                    '#suborder #submitbtn',
-                    '#submitbtn',
-                    '#submit_booking',
-                    '#submitBooking',
-                    '#sub',
-                    '#submit',
-                    '#suborder button[type="submit"]',
-                    '#suborder input[type="submit"]',
-                    'button[type="submit"]',
-                    'input[type="submit"]',
-                    'button.btn_submit',
-                    'button.sub-btn',
-                    'input.sub-btn',
-                ];
-                for (const selector of candidateSelectors) {
-                    const element = document.querySelector(selector);
-                    if (isVisible(element)) {
-                        clickElement(element);
-                        return { method: 'selector', target: selector };
-                    }
-                }
-
-                const textCandidates = Array.from(
-                    document.querySelectorAll('button, input[type="button"], input[type="submit"], a')
-                ).filter((element) => {
-                    const text = (element.textContent || element.value || '').trim();
-                    return isVisible(element) && /确认预约|提交预约|提交|预约|下一步/.test(text);
-                });
-                if (textCandidates.length > 0) {
-                    const element = textCandidates[0];
-                    clickElement(element);
-                    return {
-                        method: 'text-match',
-                        target: (element.textContent || element.value || '').trim(),
-                    };
-                }
-
-                const form = document.querySelector('form');
-                if (form) {
-                    if (typeof form.requestSubmit === 'function') {
-                        form.requestSubmit();
-                        return { method: 'requestSubmit', target: 'form' };
-                    }
-                    form.submit();
-                    return { method: 'submit', target: 'form' };
-                }
-
-                return { method: 'not-found', target: null };
-            }"""
-        )
-
-    async def _trigger_submit_control_tolerating_navigation(self) -> dict:
+    def blocked_result(self) -> BookingResult | None:
         try:
-            return await self._trigger_submit_control()
-        except Exception as exc:
-            if not _is_destroyed_context_error(exc):
-                raise
-            logger.info(
-                "Booking submit trigger raced with navigation; continuing with page state checks"
+            if self._run_blocked or self.attempt_store.pending():
+                return BookingResult(
+                    state=BookingState.OUTCOME_UNKNOWN, failure_class="unknown"
+                )
+        except StoreBlocked:
+            return BookingResult(
+                state=BookingState.OUTCOME_UNKNOWN, failure_class="storage"
             )
-            return {"method": "navigation", "target": None}
+        return None
 
-    async def _wait_for_submit_navigation_settle(self, timeout: int = 5000) -> None:
-        wait_for_load_state = getattr(self.page, "wait_for_load_state", None)
-        if not callable(wait_for_load_state):
-            return
-        try:
-            await wait_for_load_state("domcontentloaded", timeout=timeout)
-        except PlaywrightTimeoutError:
-            logger.info(
-                "Booking submit navigation timed out."
-            )
-
-    async def _call_after_possible_submit_navigation(
-        self,
-        label: str,
-        call: Callable[[], Awaitable[T]],
-    ) -> T:
-        last_error: BaseException | None = None
-        for attempt in range(3):
-            try:
-                return await call()
-            except Exception as exc:
-                last_error = exc
-                if _is_destroyed_context_error(exc) and attempt < 2:
-                    logger.info("Diagnostic event.")
-                    await self._wait_for_submit_navigation_settle()
-                    continue
-                raise
-        assert last_error is not None
-        raise last_error
-
-    async def _evaluate_after_possible_submit_navigation(self, label: str, script: str):
-        return await self._call_after_possible_submit_navigation(
-            label,
-            lambda: self.page.evaluate(script),
+    async def _submit_control(self):
+        # A unique actionable Locator; no broad text or form.submit fallback.
+        control = self.page.locator(
+            "#submitbtn, #submit_booking, #submitBooking, "
+            '#suborder button[type="submit"], #suborder input[type="submit"]'
         )
+        if (
+            await control.count() != 1
+            or not await control.is_visible()
+            or not await control.is_enabled()
+        ):
+            return None
+        return control
 
-    async def _collect_booking_page_diagnostics(self) -> dict:
-        return await self._evaluate_after_possible_submit_navigation(
-            "Collecting booking submit diagnostics",
-            """() => {
-                const textOf = (node) => (node?.textContent || node?.value || '').trim();
-                const isVisible = (element) => {
-                    if (!element) return false;
-                    const style = window.getComputedStyle(element);
-                    return style.display !== 'none' && style.visibility !== 'hidden';
-                };
-                const selectedTimes = Array.from(document.querySelectorAll('#delts li'))
-                    .filter((item) =>
-                        item.classList.contains('cur')
-                        || item.classList.contains('active')
-                        || item.classList.contains('selected')
-                        || item.querySelector('input:checked')
-                    )
-                    .map((item) => textOf(item));
-                const checkedMembers = Array.from(document.querySelectorAll('input[type="radio"]:checked'))
-                    .map((item) => ({
-                        name: item.getAttribute('name') || '',
-                        value: item.value || '',
-                    }));
-                const hiddenFieldSelectors = [
-                    'input[name="mid"]',
-                    'input[name="member_id"]',
-                    'input[name="his_mem_id"]',
-                    'input[name="detlid"]',
-                    '#detlid_realtime',
-                    '#level_code',
-                    'input[name="sch_data"]',
-                ];
-                const hiddenFields = hiddenFieldSelectors.map((selector) => {
-                    const node = document.querySelector(selector);
-                    return {
-                        selector,
-                        value: node ? (node.value || '') : '',
-                    };
-                });
-                const visibleMessages = Array.from(document.querySelectorAll(
-                    '.wrong,.warning,.import,.fine,.tips,.msg,.message,.error,.err,.layui-layer-content,.select-member-close,.select-vertifycode-close,.tip,.order-tit'
-                ))
-                    .filter((node) => isVisible(node))
-                    .map((node) => textOf(node))
-                    .filter(Boolean);
-                return {
-                    url: window.location.href,
-                    title: document.title,
-                    hasBookingForm: !!document.querySelector('#suborder'),
-                    hasSubmitButton: !!document.querySelector('#suborder #submitbtn, #suborder input[type="submit"], #suborder button[type="submit"]'),
-                    selectedTimes,
-                    checkedMembers,
-                    hiddenFields,
-                    visibleMessages,
-                };
-            }""",
-        )
-
-    async def _collect_booking_page_diagnostics_or_fallback(self) -> dict:
-        try:
-            return await self._collect_booking_page_diagnostics()
-        except Exception as exc:
-            if not _is_destroyed_context_error(exc):
-                raise
-            logger.info(
-                "Booking submit diagnostics were unavailable because the page kept navigating."
-            )
-            return {
-                "url": getattr(self.page, "url", ""),
-                "title": "",
-                "hasBookingForm": None,
-                "hasSubmitButton": None,
-                "selectedTimes": [],
-                "checkedMembers": [],
-                "hiddenFields": [],
-                "visibleMessages": [],
-            }
-
-    def _is_booking_success(
-        self,
-        before_url: str,
-        diagnostics: dict,
-    ) -> bool:
-        current_url = diagnostics.get("url") or before_url
-        navigated_away = (
-            bool(before_url)
-            and current_url != before_url
-            and "/guahao/ystep1/" not in current_url
-        )
-        form_disappeared = diagnostics.get("hasBookingForm") is False
-        submit_button_gone = diagnostics.get("hasSubmitButton") is False
-        return navigated_away or (form_disappeared and submit_button_gone)
-
-    async def submit_booking_via_page(self, form: BookingForm) -> bool:
+    async def submit_booking_via_page(self, form: BookingForm) -> BookingResult:
+        blocked = self.blocked_result()
+        if blocked:
+            return blocked
+        if not form.is_valid or form.member_id != self.member_id or not self.target:
+            return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
+        if not self.authorization or not self.authorization(
+            self.target, form.member_id
+        ):
+            return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         await self._sleep_page_action("submitting booking form")
-        if self.debug_snapshot is not None:
-            await self.debug_snapshot("booking-form-before-submit")
-
-        before_url = getattr(self.page, "url", "")
-
-        submit_result = None
-        submit_response = None
-        if hasattr(self.page, "expect_response"):
-            try:
-                async with self.page.expect_response(
-                    lambda response: (
-                        "ysubmit.html" in response.url
-                        and getattr(response.request, "method", "") == "POST"
-                    ),
-                    timeout=8000,
-                ) as response_info:
-                    submit_result = (
-                        await self._trigger_submit_control_tolerating_navigation()
-                    )
-                submit_response = await response_info.value
-            except PlaywrightTimeoutError:
-                if submit_result is None:
-                    submit_result = (
-                        await self._trigger_submit_control_tolerating_navigation()
-                    )
-        else:
-            submit_result = await self._trigger_submit_control_tolerating_navigation()
-
-        logger.info("Booking submit control triggered.")
-        await self._wait_for_submit_navigation_settle()
+        control = await self._submit_control()
+        if control is None:
+            return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         try:
-            followup_action = await self._evaluate_after_possible_submit_navigation(
-                "Checking booking submit follow-up controls",
-                """() => {
-                    const isVisible = (element) => {
-                        if (!element) return false;
-                        const style = window.getComputedStyle(element);
-                        return style.display !== 'none' && style.visibility !== 'hidden';
-                    };
-                    const click = (element) => {
-                        if (!element) return false;
-                        element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                        return true;
-                    };
-
-                    const sure = document.querySelector('#sure');
-                    if (isVisible(sure)) {
-                        click(sure);
-                        return 'paymethod-sure';
-                    }
-
-                    const okBtn = document.querySelector('#ok_btn');
-                    if (isVisible(okBtn)) {
-                        click(okBtn);
-                        return 'disease-ok';
-                    }
-
-                    return null;
-                }""",
+            booking_ref = self.attempt_store.reference(
+                self.target.unit_id,
+                self.target.dept_id,
+                self.target.doctor_id,
+                form.member_id,
+                form.schedule_id,
+                form.appointment_value,
             )
-        except Exception as exc:
-            if not _is_destroyed_context_error(exc):
-                raise
-            logger.info(
-                "Skipping booking submit follow-up checks because the page kept navigating."
+            attempt_id = self.attempt_store.begin(booking_ref)
+        except StoreBlocked:
+            self._run_blocked = True
+            return BookingResult(
+                state=BookingState.OUTCOME_UNKNOWN, failure_class="storage"
             )
-            followup_action = None
-        if followup_action:
-            logger.info("Booking submit follow-up action.")
-        if submit_result.get("method") == "not-found":
-            raise RuntimeError("Could not find a submit control on booking page")
-        if submit_response is not None:
-            logger.info("Booking submit network response received.")
-        if hasattr(self.page, "wait_for_function"):
+
+        # Everything beyond this boundary can have taken effect. Never retry click,
+        # including a timeout raised by Locator.click itself or cancelled navigation.
+        outcome = BookingState.OUTCOME_UNKNOWN
+        try:
+            await control.click(timeout=5000)
+            # No live evidence adapter has been verified yet. Page disappearance,
+            # HTTP status, redirects and follow-up/payment controls prove nothing.
+            if self.evidence_adapter is not None:
+                evidence = await self.evidence_adapter(self.page, self.target, form)
+                if evidence and evidence.matches(self.target, form):
+                    outcome = evidence.state
+        except asyncio.CancelledError:
+            self._run_blocked = True
             try:
-                await self.page.wait_for_function(
-                    """(beforeUrl) => {
-                        const leftBookingPage = window.location.href !== beforeUrl
-                            && !window.location.href.includes('/guahao/ystep1/');
-                        const bookingFormGone = !document.querySelector('#suborder');
-                        return leftBookingPage || bookingFormGone;
-                    }""",
-                    arg=before_url,
-                    timeout=5000,
-                )
-            except PlaywrightTimeoutError:
-                logger.info("Booking submit did not leave booking form within 5s")
-            except Exception as exc:
-                if not _is_destroyed_context_error(exc):
-                    raise
-                logger.info(
-                    "Booking submit completion wait raced with navigation; continuing"
-                )
-        await self._wait_for_submit_navigation_settle()
-        html = await self._call_after_possible_submit_navigation(
-            "Reading booking submit page",
-            self.page.content,
+                self.attempt_store.finish(attempt_id, BookingState.OUTCOME_UNKNOWN)
+            except StoreBlocked:
+                pass
+            raise
+        except Exception:
+            outcome = BookingState.OUTCOME_UNKNOWN
+        if outcome not in {
+            BookingState.CONFIRMED_SUCCESS,
+            BookingState.CONFIRMED_NO_EFFECT,
+        }:
+            outcome = BookingState.OUTCOME_UNKNOWN
+        try:
+            self.attempt_store.finish(attempt_id, outcome)
+        except StoreBlocked:
+            outcome = BookingState.OUTCOME_UNKNOWN
+        self._run_blocked = outcome == BookingState.OUTCOME_UNKNOWN
+        result = BookingResult(
+            state=outcome, attempts=1, slot_id=form.schedule_id, attempt_id=attempt_id
         )
-        raise_if_rate_limited(html, context="booking submit page")
         if self.reporter is not None:
-            self.reporter.reset_rate_limit_streak()
-        diagnostics = await self._collect_booking_page_diagnostics_or_fallback()
-        success = self._is_booking_success(before_url, diagnostics)
-        if success:
-            logger.info("Booking page indicates success.")
-            if self.reporter is not None:
+            try:
                 await self.reporter.emit_event(
-                    "booking_succeeded",
-                    level="info",
-                    message=(
-                        f"Booking succeeded for schedule {form.schedule_id}"
-                        + (
-                            f" at {form.appointment_label}"
-                            if form.appointment_label
-                            else ""
-                        )
-                        + "."
-                    ),
+                    "booking_succeeded" if result.success else "booking_submit_failed",
+                    level="info" if result.success else "warning",
                     data={
-                        "schedule_id": form.schedule_id,
-                        "appointment_label": form.appointment_label,
-                        "url": diagnostics.get("url"),
+                        "state": result.state,
+                        "attempt_id": attempt_id,
+                        "human_action_required": outcome
+                        == BookingState.OUTCOME_UNKNOWN,
                     },
-                    notify=True,
-                    notification_title="160Grab 挂号成功",
-                    notification_severity="info",
+                    notify=result.success,
                 )
-        else:
-            logger.info("Booking submit page diagnostics collected.")
-            if self.debug_snapshot is not None:
-                await self.debug_snapshot("booking-submit-not-success")
-            if self.reporter is not None:
-                await self.reporter.emit_event(
-                    "booking_submit_failed",
-                    level="warning",
-                    message=(
-                        f"Booking submit did not complete successfully for "
-                        f"schedule {form.schedule_id}."
-                    ),
-                    data={
-                        "schedule_id": form.schedule_id,
-                        "appointment_label": form.appointment_label,
-                        "diagnostics": diagnostics,
-                    },
-                )
-        return success
+            except Exception:
+                pass
+        return result
 
     async def open_booking_form(self, slot_id: str) -> BookingForm:
         form = await self.fetch_booking_form(slot_id)
@@ -671,95 +428,47 @@ class PageBookingStrategy:
         return form
 
     async def submit_open_form(self, form: BookingForm) -> BookingResult:
-        success = await self.submit_booking_via_page(form)
-        return BookingResult(success=success, attempts=1, slot_id=form.schedule_id)
+        return await self.submit_booking_via_page(form)
 
     async def submit_with_retry(
-        self,
-        slot_id: str,
-        max_attempts: int = 3,
+        self, slot_id: str, max_attempts: int = 3
     ) -> BookingResult:
-        attempts_made = 0
-        for attempt in range(1, max_attempts + 1):
-            attempts_made = attempt
+        blocked = self.blocked_result()
+        if blocked:
+            return blocked
+        # The budget belongs exclusively to read-only open/prepare failures.
+        budget = min(3, max(1, max_attempts))
+        for attempt in range(1, budget + 1):
             try:
                 form = await self.open_booking_form(slot_id)
-                if self.reporter is not None:
-                    self.reporter.reset_rate_limit_streak()
-                if not form.is_valid:
-                    message = self._build_invalid_form_message(
-                        slot_id=slot_id,
-                        attempt=attempt,
-                        form=form,
-                    )
-                    if self.reporter is not None:
-                        await self.reporter.emit_event(
-                            "booking_submit_failed",
-                            level="warning",
-                            message=message,
-                            data={
-                                "schedule_id": slot_id,
-                                "attempt": attempt,
-                                "invalid_reason": form.invalid_reason,
-                            },
-                        )
-                    if self._is_deterministic_invalid_form(form):
-                        logger.info("Skipping booking retries.")
-                        break
-                    if attempt < max_attempts:
+            except (
+                PlaywrightTimeoutError,
+                TimeoutError,
+                ConnectionError,
+                RateLimitError,
+            ) as exc:
+                if attempt < budget:
+                    if isinstance(exc, RateLimitError):
+                        await self._sleep_rate_limit_gap()
+                    else:
                         await self._sleep_retry_gap(attempt)
                     continue
-                if await self.submit_booking_via_page(form):
-                    return BookingResult(
-                        success=True, attempts=attempt, slot_id=slot_id
-                    )
-            except RateLimitError as exc:
-                logger.warning("Rate limit detected during booking attempt.")
+                return BookingResult(
+                    state=BookingState.AWAITING_MANUAL_CONFIRMATION,
+                    attempts=attempt,
+                    failure_class="network",
+                )
+            if not form.is_valid or form.schedule_id != slot_id:
                 if self.reporter is not None:
-                    await self.reporter.record_rate_limit(
-                        context="booking",
-                        message=exc.message,
-                        data={"attempt": attempt, "slot_id": slot_id},
+                    await self.reporter.emit_event(
+                        "booking_submit_failed",
+                        data={"invalid_reason": form.invalid_reason},
                     )
-                if attempt < max_attempts:
-                    await self._sleep_rate_limit_gap()
-                continue
-
-            if attempt < max_attempts:
-                await self._sleep_retry_gap(attempt)
-
-        return BookingResult(
-            success=False,
-            attempts=attempts_made,
-            slot_id=slot_id,
-        )
-
-    def _build_invalid_form_message(
-        self,
-        *,
-        slot_id: str,
-        attempt: int,
-        form: BookingForm,
-    ) -> str:
-        if form.invalid_reason == "no_appointment_options":
-            return (
-                f"Booking form for schedule {slot_id} exposed no appointment time "
-                f"options on attempt {attempt}."
-            )
-        if form.invalid_reason == "hour_filter_mismatch":
-            return (
-                f"Booking form for schedule {slot_id} had appointment times, but none "
-                f"matched filters {self.config.hours if self.config is not None else []} "
-                f"on attempt {attempt}."
-            )
-        return f"Booking form is invalid for schedule {slot_id} on attempt {attempt}."
-
-    @staticmethod
-    def _is_deterministic_invalid_form(form: BookingForm) -> bool:
-        return form.invalid_reason in {
-            "hour_filter_mismatch",
-            "no_appointment_options",
-        }
+                return BookingResult(
+                    state=BookingState.AWAITING_MANUAL_CONFIRMATION, attempts=attempt
+                )
+            return await self.submit_open_form(form)
+        raise AssertionError("Unreachable preparation budget")
 
     async def _sleep_page_action(self, action: str) -> None:
         if self.config is None:
@@ -799,19 +508,28 @@ class BookingService:
         self.strategy_name = strategy_name
         self.page_strategy = page_strategy
 
+    def blocked_result(self):
+        return self.page_strategy.blocked_result()
+
     def prepare(self, target: DoctorPageTarget, member_id: str) -> None:
         self.page_strategy.prepare(target, member_id)
 
     async def try_book_first_available(self, slots) -> BookingResult:
         if not slots:
-            return BookingResult(success=False, attempts=0, slot_id=None)
+            return BookingResult(
+                state=BookingState.DISCOVERED, attempts=0, slot_id=None
+            )
         total_attempts = 0
         for slot in slots:
             result = await self.page_strategy.submit_with_retry(slot.schedule_id)
             total_attempts += result.attempts
-            if result.success:
+            if result.state != BookingState.CONFIRMED_NO_EFFECT:
                 return result
-        return BookingResult(success=False, attempts=total_attempts, slot_id=None)
+        return BookingResult(
+            state=BookingState.CONFIRMED_NO_EFFECT,
+            attempts=total_attempts,
+            slot_id=None,
+        )
 
     async def open_booking_form(self, slot) -> BookingForm:
         return await self.page_strategy.open_booking_form(slot.schedule_id)

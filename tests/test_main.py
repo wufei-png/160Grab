@@ -8,6 +8,7 @@ import pytest
 from loguru import logger
 
 import main as main_module
+from grab.models.schemas import RunResult
 from main import (
     emit_console_message,
     ensure_frozen_default_config,
@@ -62,9 +63,7 @@ async def test_manual_cli_launches_visible_browser_and_runs(tmp_path, monkeypatc
         async def __aexit__(self, *args):
             pass
 
-    runner = SimpleNamespace(
-        run=AsyncMock(return_value=SimpleNamespace(success=True, booked_slot_id=None))
-    )
+    runner = SimpleNamespace(run=AsyncMock(return_value=RunResult(success=True)))
     reporter = SimpleNamespace(jsonl_path=None, emit_event=AsyncMock())
     monkeypatch.setattr(main_module, "PlaywrightClient", Client)
     monkeypatch.setattr(main_module, "build_run_reporter", lambda config: reporter)
@@ -231,3 +230,44 @@ def test_cleanup_flags_cannot_be_combined_with_browser_actions():
     ):
         with pytest.raises(SystemExit):
             parse_args(args)
+
+
+@pytest.mark.parametrize(
+    "state,code",
+    [
+        ("CONFIRMED_SUCCESS", 0),
+        ("CONFIRMED_NO_EFFECT", 1),
+        ("AWAITING_MANUAL_CONFIRMATION", 2),
+        ("OUTCOME_UNKNOWN", 3),
+    ],
+)
+async def test_cli_propagates_outcome_exit(tmp_path, monkeypatch, state, code):
+    config = tmp_path / "config.yaml"
+    config.write_text("browser:\n  launch_persistent_context: false\n")
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(main_module, "PlaywrightClient", Client)
+    monkeypatch.setattr(
+        main_module,
+        "build_runner",
+        lambda *_a, **_kw: SimpleNamespace(
+            run=AsyncMock(return_value=RunResult(state=state))
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "build_run_reporter",
+        lambda _: SimpleNamespace(jsonl_path=None, emit_event=AsyncMock()),
+    )
+    with pytest.raises(SystemExit) as exit:
+        await main_module.main([str(config)])
+    assert exit.value.code == code

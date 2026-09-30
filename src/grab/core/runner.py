@@ -1,7 +1,7 @@
 import asyncio
 
 from grab.errors import SessionExpiredError
-from grab.models.schemas import BookingResult, RunResult
+from grab.models.schemas import BookingResult, BookingState, RunResult
 from grab.observability.safe_logging import logger
 
 
@@ -85,12 +85,19 @@ class GrabRunner:
             result: BookingResult = await self.booking_service.try_book_first_available(
                 slots
             )
-            if result.success:
-                logger.info("Booking succeeded.")
-                return RunResult(success=True, booked_slot_id=result.slot_id)
+            if result.state not in {
+                BookingState.DISCOVERED,
+                BookingState.CONFIRMED_NO_EFFECT,
+            }:
+                logger.info("Run finished.")
+                return RunResult(
+                    state=result.state,
+                    booked_slot_id=result.slot_id,
+                    failure_class=result.failure_class,
+                )
             self._set_phase("schedule_polling")
 
-        return RunResult(success=False, booked_slot_id=None)
+        return RunResult(state=BookingState.CONFIRMED_NO_EFFECT, booked_slot_id=None)
 
     async def _recover_from_session_expiry(
         self,
@@ -126,6 +133,12 @@ class GrabRunner:
 
     async def run(self) -> RunResult:
         try:
+            check = getattr(self.booking_service, "blocked_result", None)
+            blocked = check() if check else None
+            if blocked:
+                return RunResult(
+                    state=blocked.state, failure_class=blocked.failure_class
+                )
             await self._ensure_login_and_prepare_target()
 
             self._set_phase("wait_until_ready")

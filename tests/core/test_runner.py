@@ -381,3 +381,27 @@ async def test_runner_stops_after_session_recovery_limit_and_applies_cooldown(
     assert session_service.capture_calls == 3
     assert session_service.member_calls == 3
     assert cooldown_calls == [7]
+
+
+@pytest.mark.parametrize("state", ["OUTCOME_UNKNOWN", "AWAITING_MANUAL_CONFIRMATION"])
+async def test_runner_stops_polling_on_manual_or_unknown(state):
+    from grab.models.schemas import BookingState
+
+    seen = []
+
+    class Schedule:
+        async def poll(self):
+            for _ in range(3):
+                seen.append(True)
+                yield [Slot(schedule_id="synthetic")]
+
+    runner = GrabRunner(
+        None,
+        None,
+        None,
+        Schedule(),
+        FakeBookingService(BookingResult(state=BookingState(state))),
+    )
+    result = await runner._poll_and_book()
+    assert result.state == state
+    assert len(seen) == 1

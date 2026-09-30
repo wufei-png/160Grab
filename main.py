@@ -19,6 +19,7 @@ from grab.services.auth import AuthService
 from grab.services.booking import BookingService, PageBookingStrategy
 from grab.services.schedule import ScheduleService
 from grab.services.session import SessionCaptureService
+from grab.transactions.store import AttemptStore, StoreBlocked
 from grab.utils.config_loader import load_config
 from grab.utils.config_writer import write_browser_profile_name
 from grab.utils.private_files import private_directory
@@ -90,6 +91,10 @@ def emit_console_message(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="160Grab CLI")
     parser.add_argument("config_path", nargs="?")
+    parser.add_argument("--pending-attempts", action="store_true")
+    parser.add_argument("--resolve-attempt", metavar="ATTEMPT_ID")
+    parser.add_argument("--resolution", choices=["booked", "not-booked"])
+    parser.add_argument("--revoke-consent", action="store_true")
     parser.add_argument(
         "--create-profile",
         action="store_true",
@@ -115,6 +120,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Preview cleanup counts without deleting files.",
     )
     args = parser.parse_args(argv)
+    if bool(args.resolve_attempt) != bool(args.resolution):
+        parser.error("--resolve-attempt and --resolution are required together")
     if args.dry_run and not args.cleanup_data:
         parser.error("--dry-run requires --cleanup-data")
     if args.cleanup_data and (args.create_profile or args.smoke_browser):
@@ -177,6 +184,27 @@ async def main(argv: list[str] | None = None) -> None:
     logger.info("160Grab started.")
     if args.smoke_browser:
         await run_smoke_browser(debug_dir=debug_dir)
+        raise SystemExit(0)
+
+    if args.pending_attempts or args.resolve_attempt or args.revoke_consent:
+        store = AttemptStore()
+        try:
+            if args.resolve_attempt:
+                if (
+                    not sys.stdin.isatty()
+                    or input("已在原站核对预约记录？输入 VERIFIED 确认：") != "VERIFIED"
+                ):
+                    raise SystemExit(2)
+                store.resolve(args.resolve_attempt, booked=args.resolution == "booked")
+            if args.revoke_consent:
+                store.revoke()
+            for record in store.pending():
+                emit_console_message(
+                    f"{record['attempt_id']}: OUTCOME_UNKNOWN — 请在原站核对预约记录"
+                )
+        except StoreBlocked:
+            emit_console_message("提交记录不可用；停止自动操作，请人工核对原站记录。")
+            raise SystemExit(3) from None
         raise SystemExit(0)
 
     config_path, config_path_explicit = resolve_config_path(args)
@@ -307,10 +335,10 @@ async def main(argv: list[str] | None = None) -> None:
         ),
         data={
             "success": result.success,
-            "booked_slot_id": result.booked_slot_id,
+            "state": result.state,
         },
     )
-    raise SystemExit(0 if result.success else 1)
+    raise SystemExit(result.exit_code)
 
 
 def build_runner(config, client: PlaywrightClient, reporter=None) -> GrabRunner:
