@@ -37,6 +37,7 @@ class ScheduleService:
         self._last_heartbeat_at: float | None = None
         self._last_session_refresh_at: float | None = None
         self._last_schedule_user_key: str | None = None
+        self._probe_failure: Exception | None = None
         self.target: DoctorPageTarget | None = None
         self._session_refresh = session_refresh
         self.retry_budget = retry_budget or ReadRetryBudget()
@@ -60,9 +61,27 @@ class ScheduleService:
                 or now - self._last_session_refresh_at >= 60
             ):
                 self._last_session_refresh_at = now
-                user_key = await self._refresh_session(
-                    aggressive=True, reason="missing_schedule_user_key"
+                self._probe_failure = None
+                try:
+                    user_key = await self._refresh_session(
+                        aggressive=True, reason="missing_schedule_user_key"
+                    )
+                except (
+                    TransientSessionRefreshError,
+                    RateLimitError,
+                    TimeoutError,
+                ) as exc:
+                    self._probe_failure = exc
+                    exc.retry_after = max(60, getattr(exc, "retry_after", 0))
+                    raise
+            elif self._probe_failure is not None:
+                # Preserve the last transient classification during the probe's
+                # low-frequency window, instead of reclassifying it as UNKNOWN.
+                self._probe_failure.retry_after = max(
+                    self._probe_failure.retry_after,
+                    60 - (now - self._last_session_refresh_at),
                 )
+                raise self._probe_failure
             if not user_key:
                 raise UnknownSessionError("missing_key")
         self._remember_schedule_user_key(user_key)

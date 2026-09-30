@@ -222,6 +222,7 @@ def test_empty_schedule_time_range_preserves_deferred_hour_filter():
     from grab.services.schedule import ScheduleService
 
     payload = {
+        "result_code": 1,
         "data": {
             "schedules": [
                 {
@@ -229,9 +230,11 @@ def test_empty_schedule_time_range_preserves_deferred_hour_filter():
                     "doctor_id": "doc",
                     "time_range": "",
                     "status": "available",
+                    "weekday": 3,
+                    "day_period": "am",
                 }
             ]
-        }
+        },
     }
     exported = convert_schedule(payload, **META)["payload"]
     assert exported["data"]["schedules"][0]["time_range"] == ""

@@ -52,7 +52,7 @@ def valid_schedule_tree(node, depth=0) -> bool:
         return False
     if "schedule_id" in node or "y_state" in node:
         return (
-            isinstance(node.get("schedule_id"), (str, int))
+            type(node.get("schedule_id")) in {str, int}
             and bool(str(node["schedule_id"]))
             and type(node.get("y_state")) is int
             and node["y_state"] in {-3, -2, -1, 0, 1}
@@ -75,6 +75,8 @@ def classify_schedule(payload) -> SessionAssessment:
     if isinstance(data, dict) and isinstance(data.get("schedules"), list):
         try:
             for item in data["schedules"]:
+                if not isinstance(item, dict) or type(item.get("weekday")) is not int:
+                    return SessionAssessment(SessionState.UNKNOWN, "schema_drift")
                 slot = Slot.model_validate(item)
                 if (
                     not slot.schedule_id

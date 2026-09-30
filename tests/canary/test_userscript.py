@@ -90,7 +90,7 @@ async def test_userscript_readonly_resolves_docid_and_never_changes_form(chromiu
     await page.evaluate("""() => {
         window.clicks=0; window.changes=0; window.requests=0; window._user_key='SYN_KEY';
         document.addEventListener('click',()=>clicks++);document.addEventListener('change',()=>changes++);
-        window.fetch=async()=>{requests++;return {status:200,text:async()=>JSON.stringify({data:{schedules:[{schedule_id:'slot',doctor_id:'doc',unit_id:'u',dep_id:'d',date:'2026-09-30',status:'available'}]}})}};
+        window.fetch=async()=>{requests++;return {status:200,text:async()=>JSON.stringify({result_code:1,data:{schedules:[{schedule_id:'slot',doctor_id:'doc',unit_id:'u',dep_id:'d',date:'2026-09-30',status:'available',weekday:3,day_period:'am'}]}})}};
     }""")
     result = await page.evaluate(
         """async () => __GRAB160_CANARY__.run('readonly',{target:{unitId:'u',depId:'d',doctorId:'doc'},date:'2026-09-30',ready:async()=>true})"""
@@ -125,7 +125,7 @@ async def test_userscript_empty_slots_stop_at_count_budget(chromium_page):
         "https://synthetic.invalid/doctors/index/docid-doc.html",
     )
     await page.evaluate("""() => { window._user_key='SYN_KEY'; window.requests=0;
-        window.fetch=async()=>{requests++;return {status:200,text:async()=>'{"data":{"schedules":[]}}'}}; }""")
+        window.fetch=async()=>{requests++;return {status:200,text:async()=>'{"result_code":1,"data":{"schedules":[]}}'}}; }""")
     result = await page.evaluate(
         """async () => __GRAB160_CANARY__.run('readonly',{target:{unitId:'u',depId:'d',doctorId:'doc'},date:'2026-09-30',maxPolls:1,ready:async()=>true})"""
     )
@@ -170,7 +170,7 @@ async def test_userscript_panel_canary_works_without_page_global_bridge(chromium
     await page.evaluate("""() => {
         const h=__GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
         h.writeSettings({target:{unitId:'u',depId:'d',doctorId:'doc'},filters:{startDate:'2026-09-30'}});
-        window._user_key='SYN_KEY';window.fetch=async()=>({status:200,text:async()=>'{"data":{"schedules":[]}}'});
+        window._user_key='SYN_KEY';window.fetch=async()=>({status:200,text:async()=>'{"result_code":1,"data":{"schedules":[]}}'});
     }""")
     assert await page.locator("[data-canary-level]").input_value() == "readonly"
     assert not await page.locator("[data-canary-e2e]").is_checked()

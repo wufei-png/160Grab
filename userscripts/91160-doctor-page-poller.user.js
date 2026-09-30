@@ -360,6 +360,8 @@
     "Schedule date fill failed.",
     "Schedule polling hit rate limiting.",
     "Schedule polling request failed.",
+    "Session requires manual inspection.",
+    "Read-only retry budget exhausted; continue manually.",
     "Selected member blocked before submit.",
     "Selected member cannot submit booking.",
     "Session looks expired. Refreshing doctor page before retrying.",
@@ -661,6 +663,7 @@
   const JOURNAL_LOCK = "grab160.journal.origin.v1";
   const LEADER_TTL_MS = 30000;
   let browserLeader = null;
+  const readCancellations = new Set();
   let journalWriteActive = false;
   const leaderNow = () => globalThis.performance.now();
 
@@ -672,6 +675,7 @@
   function releaseBrowserLeader() {
     const owner = browserLeader;
     if (!owner) return;
+    for (const cancel of [...readCancellations]) cancel();
     owner.valid = false; // Fence the old continuation before releasing the Web Lock.
     browserLeader = null;
     owner.release();
@@ -724,6 +728,7 @@
           ]);
         } finally {
           clearTimeout(timer);
+          for (const cancel of [...readCancellations]) cancel();
           owner.valid = false;
           if (browserLeader === owner) browserLeader = null;
         }
@@ -756,6 +761,9 @@
       submittingBooking: null,
       submitAttempts: {},
       sessionRecoveryAttempts: 0,
+      readFailures: 0,
+      readRateLimits: 0,
+      sessionState: "UNKNOWN",
       lastKeepAliveAt: 0,
       summary: null,
       logs: [],
@@ -805,6 +813,9 @@
     writeState({
       ...defaultState(),
       activeView: state.activeView,
+      readFailures: state.readFailures,
+      readRateLimits: state.readRateLimits,
+      sessionRecoveryAttempts: state.sessionRecoveryAttempts,
       submittingBooking: submissionBlocked() ? { state: "OUTCOME_UNKNOWN" } : null,
     });
     renderPanel();
@@ -858,7 +869,6 @@
       preSubmitFailures: 0,
       controllerId,
       pollAttempt: 0,
-      sessionRecoveryAttempts: 0,
       pendingBooking: null,
       submittingBooking: null,
     }));
@@ -1481,64 +1491,105 @@
     return requestUrl.toString();
   }
 
-  function parseJsonResponse(text, status, source) {
-    try {
-      return JSON.parse(text);
-    } catch (_error) {
-      throw new Error(
-        `${source} returned non-JSON status=${status} body=${compactText(text).slice(0, 200)}`,
-      );
+  function readError(state, failureClass = "unknown", retryAfterMs = 0) {
+    const error = new Error(`Read-only request: ${state} (${failureClass}).`);
+    Object.assign(error, {sessionState: state, failureClass, retryAfterMs});
+    return error;
+  }
+
+  function retryAfterMs(value, now = Date.now()) {
+    if (value === null || value === undefined || value === "") return 0;
+    const seconds = Number(value);
+    const delay = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(value) - now;
+    return Number.isFinite(delay) ? Math.max(0, delay) : 0;
+  }
+
+  function classifySchedule(payload) {
+    if (extractRateLimitMessage(payload)) return {state: "RATE_LIMITED", failureClass: "rate_limited"};
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {state: "UNKNOWN", failureClass: "schema_drift"};
+    if (String(payload.error_code ?? "") === "10021") return {state: "EXPIRED", failureClass: "session_expired"};
+    if (String(payload.result_code ?? payload.code) !== "1") return {state: "UNKNOWN", failureClass: "unknown"};
+    const schedules = payload.data?.schedules;
+    if (Array.isArray(schedules)) {
+      if (schedules.every(item => item && typeof item.schedule_id === 'string' && item.schedule_id && typeof item.doctor_id === 'string' && item.doctor_id && Number.isInteger(item.weekday) && item.weekday >= 1 && item.weekday <= 7 && ['am','pm','em'].includes(item.day_period) && ['available','full','expired','stopped','not_open','unavailable'].includes(item.status))) return {state: "VALID"};
+      return {state: "UNKNOWN", failureClass: "schema_drift"};
     }
+    const treeValid = (node, depth = 0) => {
+      if (!node || typeof node !== 'object' || Array.isArray(node) || depth > 16) return false;
+      if ('schedule_id' in node || 'y_state' in node) return ['string','number'].includes(typeof node.schedule_id) && String(node.schedule_id).length > 0 && Number.isInteger(node.y_state) && [-3,-2,-1,0,1].includes(node.y_state);
+      return Object.values(node).every(child => treeValid(child, depth + 1));
+    };
+    if (treeValid(payload.sch) && (payload.dates === undefined || (payload.dates && typeof payload.dates === 'object' && !Array.isArray(payload.dates)))) return {state: "VALID"};
+    return {state: "UNKNOWN", failureClass: "schema_drift"};
+  }
+
+  function readResponse(status, body, retryAfter = null, finalUrl = '', requestUrl = '') {
+    const hint = retryAfterMs(retryAfter);
+    if (status === 429) throw readError('RATE_LIMITED', 'rate_limited', hint);
+    if (status === 0 || status >= 500 && status < 600) throw readError('TRANSIENT_FAILURE', 'network', hint);
+    if (finalUrl) {
+      const final = new URL(finalUrl);
+      if (['www.91160.com','user.91160.com'].includes(final.hostname) && final.pathname === '/login.html') throw readError('EXPIRED', 'session_expired');
+      if (requestUrl && final.pathname !== new URL(requestUrl).pathname) throw readError('UNKNOWN');
+    }
+    if (status < 200 || status >= 300) throw readError('UNKNOWN');
+    if (body === null || body === undefined) throw readError('UNKNOWN', 'schema_drift');
+    if (extractRateLimitMessage(body)) throw readError('RATE_LIMITED', 'rate_limited', hint);
+    return body;
+  }
+
+  function parseJsonResponse(text, status, source, retryAfter = null, finalUrl = '', requestUrl = '') {
+    let body = null;
+    try { body = JSON.parse(text); } catch (_) { }
+    return readResponse(status, body, retryAfter, finalUrl, requestUrl);
   }
 
   async function fetchJsonInsidePage(url, params, guard = () => true) {
     const pageWindow = globalThis.unsafeWindow || globalThis;
-    let lastError = null;
-    if (pageWindow.jQuery?.ajax) {
-      if (!guard()) throw new Error("cancelled");
-      try {
-        return await new Promise((resolve, reject) => {
-          pageWindow.jQuery.ajax({
-            url,
-            type: "GET",
-            data: params,
-            dataType: "json",
-            timeout: 15000,
-            success: resolve,
-            error: (xhr, textStatus, errorThrown) => {
-              const body = compactText(xhr?.responseText).slice(0, 200);
-              reject(
-                new Error(
-                  `ajax error status=${xhr?.status ?? ""} textStatus=${textStatus ?? ""} error=${errorThrown ?? ""} body=${body}`,
-                ),
-              );
-            },
-          });
-        });
-      } catch (error) {
-        if (!guard()) throw new Error("cancelled");
-        lastError = error;
-        appendLog("debug", "Page jQuery schedule request failed; trying fetch.", error.message);
-      }
-    }
+    if (!guard()) throw readError('CANCELLED');
+    let timer, xhr, abort;
     const requestUrl = buildUrlWithParams(url, params);
-    const fetchImpl = pageWindow.fetch || globalThis.fetch;
-    if (typeof fetchImpl === "function") {
-      if (!guard()) throw new Error("cancelled");
-      try {
-        const response = await fetchImpl.call(pageWindow, requestUrl, {
-          credentials: "omit",
+    let cancel;
+    const cancelled = new Promise((_, reject) => { cancel = () => {
+      reject(readError('CANCELLED')); xhr?.abort?.(); abort?.abort();
+    }; });
+    readCancellations.add(cancel);
+    try {
+      const request = pageWindow.jQuery?.ajax ? new Promise((resolve, reject) => {
+        xhr = pageWindow.jQuery.ajax({
+          url, type: 'GET', data: params, dataType: 'json', timeout: 15000,
+          success: (data, _, response) => {
+            try { resolve(readResponse(response?.status || 200, data, response?.getResponseHeader?.('Retry-After'), response?.responseURL || '', url)); }
+            catch (error) { reject(error); }
+          },
+          error: (response) => {
+            try { readResponse(response?.status || 0, null, response?.getResponseHeader?.('Retry-After'), response?.responseURL || '', url); }
+            catch (error) { reject(error); }
+          },
         });
-        const text = await response.text();
-        return parseJsonResponse(text, response.status, "fetch");
-      } catch (error) {
-        lastError = error;
-        appendLog("debug", "Page fetch schedule request failed.", error.message);
-      }
+      }) : (async () => {
+        const fetchImpl = pageWindow.fetch || globalThis.fetch;
+        if (typeof fetchImpl !== 'function') throw readError('UNKNOWN');
+        abort = typeof globalThis.AbortController === 'function' ? new globalThis.AbortController() : null;
+        const response = await fetchImpl.call(pageWindow, requestUrl, {
+          credentials: "omit", ...(abort ? {signal: abort.signal} : {}),
+        });
+        return parseJsonResponse(await response.text(), response.status, 'fetch', response.headers?.get?.('Retry-After'), response.url || '', url);
+      })();
+      const timeout = new Promise((_, reject) => { timer = setTimeout(() => {
+        reject(readError('TRANSIENT_FAILURE', 'timeout')); xhr?.abort?.(); abort?.abort();
+      }, 15000); });
+      const payload = await Promise.race([request, cancelled, timeout]);
+      if (!guard()) throw readError('CANCELLED');
+      return payload;
+    } catch (error) {
+      if (!guard()) throw readError('CANCELLED');
+      if (error.sessionState) throw error;
+      throw readError('TRANSIENT_FAILURE', 'network');
+    } finally {
+      clearTimeout(timer);
+      readCancellations.delete(cancel);
     }
-    throw new Error(
-      `Page schedule request failed: ${lastError?.message || "no supported page transport"}`,
-    );
   }
 
   async function fetchDoctorSchedule(target, settings) {
@@ -1546,11 +1597,7 @@
     if (!ownsBrowserLeader(owner)) throw new Error("cancelled");
     const userKey = findCurrentUserKey();
     if (!userKey) {
-      return {
-        result_code: 0,
-        error_code: "10021",
-        error_msg: "请登录后查看医生号源",
-      };
+      throw readError('UNKNOWN', 'missing_key');
     }
     return await fetchJsonInsidePage(
       "https://gate.91160.com/guahao/v1/pc/sch/doctor",
@@ -1996,12 +2043,8 @@
   }
 
   function isLoginExpiredPage() {
-    const text = compactText(document.body?.innerText ?? "");
-    return (
-      location.href.includes("/login.html") ||
-      text.includes("请登录") ||
-      text.includes("登录后查看")
-    );
+    const current = new URL(location.href);
+    return ['www.91160.com','user.91160.com'].includes(current.hostname) && current.pathname === '/login.html';
   }
 
   function navigateToDoctorPage(target, owner) {
@@ -2054,31 +2097,56 @@
   }
 
   async function recoverSession(target, reason, settings) {
-    const owner = browserLeader;
-    if (!settings.session.recoveryEnabled) {
-      stopRun("Session recovery disabled; manual login required.");
-      return false;
-    }
+    lastResolvedUserKey = null;
+    lastResolvedUserKeySource = null;
+    consentRunNonce = null;
+    activeConsentBinding = null;
+    if (submissionBlocked()) { stopRun(); return false; }
     const state = readState();
-    if (state.sessionRecoveryAttempts >= settings.session.recoveryMaxAttempts) {
-      stopRun("Login expired; manual login required.");
+    if (!settings.session.recoveryEnabled || state.sessionRecoveryAttempts >= settings.session.recoveryMaxAttempts) {
+      stopRun('Session recovery disabled; manual login required.');
       return false;
     }
-    const delayMs = pickDelayMs(settings.session.recoveryCooldownMs);
-    patchState((next) => ({
-      ...next,
-      running: true,
-      pendingBooking: null,
-      submittingBooking: null,
-      sessionRecoveryAttempts: next.sessionRecoveryAttempts + 1,
-    }));
-    setSummary(
-      "warn",
-      "Session looks expired. Refreshing doctor page before retrying.",
-      `${reason}; attempt ${state.sessionRecoveryAttempts + 1}; delay ${delayMs} ms`,
-    );
-    await sleepMs(delayMs);
-    return navigateToDoctorPage(target, owner);
+    patchState(next => ({...next, sessionRecoveryAttempts: next.sessionRecoveryAttempts + 1, sessionState: 'EXPIRED'}));
+    // The operator logs in, returns to the target, and explicitly presses Start.
+    // Start re-resolves target; booking rechecks member, consent and pending.
+    stopRun('Login expired; manual login required.');
+    return false;
+  }
+
+  async function waitReadDelay(delayMs, guard) {
+    if (!guard()) return false;
+    let timer, cancel;
+    try {
+      return await new Promise(resolve => {
+        cancel = () => resolve(false);
+        readCancellations.add(cancel);
+        timer = setTimeout(() => resolve(guard()), Math.max(0, delayMs));
+      });
+    } finally { clearTimeout(timer); readCancellations.delete(cancel); }
+  }
+
+  async function handleReadFailure(error, target, settings, controllerId) {
+    if (!isControllerActive(controllerId) || error.sessionState === 'CANCELLED') return false;
+    const state = error.sessionState || 'UNKNOWN';
+    patchState(next => ({...next, sessionState: state}));
+    if (state === 'EXPIRED') return recoverSession(target, '', settings);
+    if (!['TRANSIENT_FAILURE', 'RATE_LIMITED'].includes(state)) {
+      stopRun('Session requires manual inspection.');
+      setSummary('error', 'Session requires manual inspection.', '');
+      return false;
+    }
+    const limited = state === 'RATE_LIMITED';
+    const next = patchState(value => ({...value, readFailures: Number(value.readFailures || 0) + 1, readRateLimits: Number(value.readRateLimits || 0) + (limited ? 1 : 0)}));
+    if (next.readFailures >= 5 || next.readRateLimits >= 5) {
+      stopRun('Read-only retry budget exhausted; continue manually.');
+      setSummary('error', 'Read-only retry budget exhausted; continue manually.', '');
+      return false;
+    }
+    const jitter = Math.random() * Math.min(30000, 1000 * 2 ** (next.readFailures - 1));
+    const delay = Math.max(3000, pickDelayMs(settings.pacing.pollMs), jitter, error.retryAfterMs || 0, limited ? pickDelayMs(settings.pacing.rateLimitCooldownMs) : 0);
+    setSummary('warn', limited ? 'Schedule polling hit rate limiting.' : 'Schedule polling request failed.', {attempt: next.readFailures, delayMs: delay});
+    return waitReadDelay(delay, () => isControllerActive(controllerId));
   }
 
   async function runDoctorPageController(controllerId) {
@@ -2121,49 +2189,24 @@
     await waitUntilStartAt(settings, controllerId);
 
     while (isControllerActive(controllerId)) {
-      if (!findCurrentUserKey()) {
-        await recoverSession(target, "missing _user_key/access_hash", readSettings());
+      const activeSettings = readSettings();
+      const budget = readState();
+      if (budget.readFailures >= 5 || budget.readRateLimits >= 5) {
+        stopRun('Read-only retry budget exhausted; continue manually.');
+        setSummary('error', 'Read-only retry budget exhausted; continue manually.', '');
         return;
       }
-
-      const activeSettings = readSettings();
       let payload;
       try {
         payload = await fetchDoctorSchedule(target, activeSettings);
+        if (!isControllerActive(controllerId)) return;
+        const assessment = classifySchedule(payload);
+        if (assessment.state !== 'VALID') throw readError(assessment.state, assessment.failureClass);
       } catch (error) {
-        if (!isControllerActive(controllerId)) {
-          return;
-        }
-        setSummary("warn", "Schedule polling request failed.", error.message);
-        await sleepMs(pickDelayMs(activeSettings.pacing.pollMs));
-        continue;
-      }
-      if (!isControllerActive(controllerId)) {
+        if (await handleReadFailure(error, target, activeSettings, controllerId)) continue;
         return;
       }
-
-      if (
-        String(payload?.error_code ?? "") === "10021" ||
-        compactText(payload?.error_msg).includes("请登录后查看医生号源")
-      ) {
-        await recoverSession(target, compactText(payload?.error_msg), activeSettings);
-        return;
-      }
-
-      patchState((next) => ({
-        ...next,
-        pollAttempt: next.pollAttempt + 1,
-        sessionRecoveryAttempts: 0,
-        lastKeepAliveAt: Date.now(),
-      }));
-
-      const rateLimitMessage = extractRateLimitMessage(payload);
-      if (rateLimitMessage) {
-        const cooldownMs = pickDelayMs(activeSettings.pacing.rateLimitCooldownMs);
-        setSummary("warn", "Schedule polling hit rate limiting.", `${cooldownMs} ms`);
-        await sleepMs(cooldownMs);
-        continue;
-      }
+      patchState(next => ({...next, pollAttempt: next.pollAttempt + 1, readFailures: 0, readRateLimits: 0, sessionRecoveryAttempts: 0, sessionState: 'VALID', lastKeepAliveAt: Date.now()}));
 
       const slots = filterSlots(
         parseDoctorSchedulePayload(payload, target),
@@ -2199,7 +2242,7 @@
         filters: activeSettings.filters,
       });
       refreshPanel();
-      await sleepMs(pickDelayMs(activeSettings.pacing.pollMs));
+      if (!await waitReadDelay(Math.max(3000, pickDelayMs(activeSettings.pacing.pollMs)), () => isControllerActive(controllerId))) return;
     }
   }
 
@@ -2410,8 +2453,9 @@
               policy.polls++;
               const payload = await fetchDoctorSchedule(resolved.target, {...settings, filters:{...settings.filters,startDate:options.date}});
               if (!guard()) return result('inconclusive_timeout');
-              if (extractRateLimitMessage(payload)) return result('rate_limited');
-              if (String(payload?.error_code ?? '') === '10021') return result('session_blocked');
+              const assessment = classifySchedule(payload);
+              if (assessment.state === 'RATE_LIMITED') return result('rate_limited');
+              if (assessment.state !== 'VALID') return result('session_blocked');
               const slots = filterSlots(parseDoctorSchedulePayload(payload, resolved.target), resolved.target, settings.filters).filter(s => s.date === options.date && s.unitId === resolved.target.unitId && s.depId === resolved.target.depId);
               if (slots.some(s => s.status === 'available')) return result('observed');
               if (i + 1 < maxPolls) await sleepMs(Math.max(3000, pickDelayMs(settings.pacing.pollMs)));
@@ -3622,7 +3666,7 @@
     resolveCurrentUserKey,
     findCurrentUserKey,
     buildUrlWithParams,
-    fetchJsonInsidePage,
+    fetchJsonInsidePage, classifySchedule, retryAfterMs, readResponse, waitReadDelay, handleReadFailure,
     makeControllerId,
     isControllerActive,
     claimPageController,

@@ -67,7 +67,11 @@ class BrowserPageApi:
             TransientSessionRefreshError,
             UnknownSessionError,
         )
-        from grab.utils.rate_limit import RateLimitError, parse_retry_after
+        from grab.utils.rate_limit import (
+            RateLimitError,
+            extract_rate_limit_message,
+            parse_retry_after,
+        )
 
         if (
             not isinstance(result, dict)
@@ -90,6 +94,10 @@ class BrowserPageApi:
             raise UnknownSessionError()
         if result.get("body") is None:
             raise UnknownSessionError("schema_drift")
+        if extract_rate_limit_message(result["body"]):
+            raise RateLimitError(
+                "Rate limited.", "schedule_polling", retry_after=retry_after
+            )
         return result["body"]
 
     async def get_cookie_value(

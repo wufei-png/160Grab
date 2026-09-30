@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "source": "synthetic",
+  "cases": [
+    {
+      "payload": {
+        "result_code": 1,
+        "data": {
+          "schedules": []
+        }
+      },
+      "state": "VALID",
+      "failure_class": null
+    },
+    {
+      "payload": {
+        "code": 1,
+        "sch": {},
+        "dates": {}
+      },
+      "state": "VALID",
+      "failure_class": null
+    },
+    {
+      "payload": {
+        "error_code": 10021
+      },
+      "state": "EXPIRED",
+      "failure_class": "session_expired"
+    },
+    {
+      "payload": {
+        "msg": "访问过于频繁"
+      },
+      "state": "RATE_LIMITED",
+      "failure_class": "rate_limited"
+    },
+    {
+      "payload": {
+        "code": 1
+      },
+      "state": "UNKNOWN",
+      "failure_class": "schema_drift"
+    },
+    {
+      "payload": {
+        "code": 1,
+        "sch": {
+          "new": "unknown"
+        }
+      },
+      "state": "UNKNOWN",
+      "failure_class": "schema_drift"
+    },
+    {
+      "payload": {
+        "code": 1,
+        "data": {
+          "schedules": [
+            {}
+          ]
+        }
+      },
+      "state": "UNKNOWN",
+      "failure_class": "schema_drift"
+    },
+    {
+      "payload": {
+        "code": 12345
+      },
+      "state": "UNKNOWN",
+      "failure_class": "unknown"
+    },
+    {
+      "payload": null,
+      "state": "UNKNOWN",
+      "failure_class": "schema_drift"
+    }
+  ]
+}

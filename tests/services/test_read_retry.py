@@ -146,7 +146,7 @@ async def test_missing_key_diagnostic_is_low_frequency_without_manual_login():
     reader.set_target(TARGET)
     with pytest.raises(TransientSessionRefreshError):
         await reader.fetch_doctor_schedule("2026-10-01")
-    with pytest.raises(UnknownSessionError, match="missing_key"):
+    with pytest.raises(TransientSessionRefreshError):
         await reader.fetch_doctor_schedule("2026-10-01")
     assert len(calls) == 1
     assert reader.page_api.ajax_calls == []

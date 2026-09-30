@@ -399,7 +399,7 @@ sandbox.fetch = () => Promise.reject(new Error("plain fetch should not be used")
     ]
 
 
-def test_fetch_json_inside_page_falls_back_to_page_fetch():
+def test_fetch_json_inside_page_uses_fetch_when_jquery_absent():
     result = _run_hook(
         """hooks.fetchJsonInsidePage("https://gate.91160.com/guahao/v1/pc/sch/doctor", {
   user_key: "cookie-user-key",
@@ -412,9 +412,6 @@ def test_fetch_json_inside_page_falls_back_to_page_fetch():
 }).then((payload) => ({ payload, fetchUrls: sandbox.fetchUrls }))""",
         extra_js="""
 sandbox.fetchUrls = [];
-sandbox.jQuery = {
-  ajax: (options) => options.error({ status: 0, responseText: "" }, "error", ""),
-};
 sandbox.fetch = async (url) => {
   sandbox.fetchUrls.push(url);
   return {
@@ -446,7 +443,7 @@ sandbox.fetch = () => Promise.reject(new Error("plain fetch failed"));
 """,
     )
 
-    assert result == "Page schedule request failed: plain fetch failed"
+    assert result == "Read-only request: TRANSIENT_FAILURE (network)."
 
 
 def test_resolve_target_from_dep_zero_snapshot_prefers_real_dep_from_dom():
