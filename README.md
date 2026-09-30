@@ -80,15 +80,16 @@
 
 ## 后续改进
 
-结合 `91160-cli` 的成熟能力、当前代码结构和已有 handoff 文档，下一阶段最值得做的并不是“把所有缺失功能一次补齐”，而是按下面的顺序推进：
+2026-09-30 已按当前代码重新核验 portfolio 报告。通知、JSONL、持久化会话和人工恢复已有实现；
+下一轮计划先统一两条路径的业务合同，处理数据安全、授权和单次提交、严格真实值填表、互斥及 canary，
+再完善 session/轮询、时间与 browser channel。科室 fallback 等待可复现漏号证据。
 
-- 先建立真实站点 smoke 基线，并把医生页、`member.html`、排班接口、预约页的真实变化固化回测试夹具
-- 在当前持久化 profile 路线之上补 `channel="chrome"` 一类 branded browser 支持，优先提升真实浏览器一致性
-- 借鉴 `91160-cli` 的 `init` 体验，但只做适配当前手动接管模型的轻量写回助手，而不是重做一整套 ID 初始化系统
-- 增加成功通知、结构化运行日志和更清晰的诊断输出，提升长时间刷号时的可用性
-- 仅在前面几项稳定后，再考虑把 `91160-cli` 的第二刷号通道思路作为 fallback 引回当前架构
+整体设计已于 2026-09-30 确认，S01–S04 已完成；各会话最新进度和验证边界以实施计划的完成记录为准。执行文档：
 
-更详细的优先级、原因和取舍见 [docs/future-improvements.md](/Users/wufei2/github.com/wufei-png/160Grab/docs/future-improvements.md)。
+- [当前架构与证据边界](docs/current-architecture.md)
+- [核心决策与 9 个实现会话](docs/implementation-plan-2026-09-30.md)
+- [逐会话启动提示词](docs/implementation-session-prompts-2026-09-30.md)
+- [历史改进建议及状态说明](docs/future-improvements.md)
 
 ## 环境要求
 
