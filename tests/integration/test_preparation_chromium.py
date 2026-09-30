@@ -295,3 +295,20 @@ async def test_js_controller_rechecks_form_after_settle_and_hashing(chromium_pag
     assert result == dict(
         submitClicks=0, pending=False, outcome="AWAITING_MANUAL_CONFIRMATION"
     )
+
+
+async def test_python_wrong_schedule_stops_before_any_selection(
+    chromium_page, tmp_path
+):
+    case = next(c for c in PREPARATION if c["id"] == "address-absent")
+    page = chromium_page
+    await load_case(page, case)
+    strategy = strategy_for(page, case, tmp_path)
+    form = await strategy.open_booking_form("synthetic-wrong-slot")
+    assert not form.is_valid
+    assert form.blockers == ["schedule.mismatch"]
+    assert (
+        await strategy.submit_open_form(form)
+    ).state == "AWAITING_MANUAL_CONFIRMATION"
+    assert await page.evaluate("window.selectionClicks") == 0
+    assert await page.evaluate("window.submitClicks") == 0

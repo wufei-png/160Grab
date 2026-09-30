@@ -197,7 +197,12 @@ class PageBookingStrategy:
         await self.page.goto(self.build_booking_url(slot_id))
         html = await self.page.content()
         raise_if_rate_limited(html, context="booking form page")
-        return self.parse_booking_form(html, member_id=self.member_id)
+        form = self.parse_booking_form(html, member_id=self.member_id)
+        if form.schedule_id != slot_id:
+            form.is_valid = False
+            form.invalid_reason = "schedule_mismatch"
+            form.blockers = ["schedule.mismatch"]
+        return form
 
     def build_booking_url(self, slot_id: str) -> str:
         if self.target is None or self.member_id is None:
