@@ -1,7 +1,7 @@
 import asyncio
 
 from grab.core.leader import LeaderLost, check_leader, exclusive_operation
-from grab.errors import SessionExpiredError
+from grab.errors import SessionExpiredError, UnknownSessionError
 from grab.models.schemas import BookingResult, BookingState, RunResult
 from grab.observability.safe_logging import logger
 
@@ -108,7 +108,7 @@ class GrabRunner:
         exc: SessionExpiredError,
         *,
         attempt: int,
-    ) -> None:
+    ) -> RunResult | None:
         check_leader()
         logger.warning("Session expired during schedule polling.")
         if self.reporter is not None:
@@ -127,8 +127,13 @@ class GrabRunner:
         if attempt > 1 and cooldown_seconds > 0:
             logger.warning("Rate limit cooldown started.")
             await self._sleep(cooldown_seconds)
+        check = getattr(self.booking_service, "blocked_result", None)
+        blocked = check() if check else None
+        if blocked:
+            return RunResult(state=blocked.state, failure_class=blocked.failure_class)
         await self._ensure_login_and_prepare_target()
         logger.info("Session recovered; resuming schedule polling.")
+        return None
 
     def _get_session_recovery_max_attempts(self) -> int:
         return self.session_service.config.browser.session_recovery_max_attempts
@@ -164,10 +169,27 @@ class GrabRunner:
                             "Session recovery attempts exceeded the configured limit "
                             f"({max_attempts})."
                         ) from exc
-                    await self._recover_from_session_expiry(
+                    recovered = await self._recover_from_session_expiry(
                         exc,
                         attempt=session_recovery_attempts,
                     )
+                    if recovered:
+                        return recovered
+        except UnknownSessionError as exc:
+            if self.reporter is not None:
+                await self.reporter.emit_event(
+                    "session_inspection_required",
+                    level="error",
+                    message="Session requires manual inspection.",
+                    data={"failure_class": exc.failure_class},
+                    notify=True,
+                    notification_title="160Grab 会话需要人工核对",
+                    notification_severity="error",
+                )
+            return RunResult(
+                state=BookingState.AWAITING_MANUAL_CONFIRMATION,
+                failure_class=exc.failure_class,
+            )
         except LeaderLost:
             return RunResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         except Exception as exc:

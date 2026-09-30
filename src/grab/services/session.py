@@ -8,10 +8,15 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from grab.browser.page_api import BrowserPageApi
 from grab.core.leader import check_active_leader
-from grab.errors import TransientSessionRefreshError
+from grab.errors import (
+    SessionExpiredError,
+    TransientSessionRefreshError,
+    UnknownSessionError,
+)
 from grab.models.schemas import DoctorPageTarget, GrabConfig, MemberProfile
 from grab.observability.privacy import safe_data
 from grab.observability.safe_logging import logger
+from grab.services.session_state import is_login_url
 
 
 def _strip_url_query_and_fragment(url: str) -> str:
@@ -575,10 +580,16 @@ class SessionCaptureService:
                     url,
                     capture_user_key=capture_user_key,
                 )
-            except (PlaywrightTimeoutError, PlaywrightError) as exc:
+            except (PlaywrightTimeoutError, PlaywrightError):
                 raise TransientSessionRefreshError(
-                    f"Could not refresh authenticated session via {url}: {exc}"
-                ) from exc
+                    "Read-only session probe failed."
+                ) from None
+            if is_login_url(final_url):
+                raise SessionExpiredError("Authenticated session expired.")
+            if _strip_url_query_and_fragment(
+                final_url
+            ) != _strip_url_query_and_fragment(url):
+                raise UnknownSessionError()
             if page_user_key and recovered_user_key is None:
                 recovered_user_key = page_user_key
             final_urls.append(
@@ -622,7 +633,21 @@ class SessionCaptureService:
 
         try:
             check_active_leader()
-            await probe_page.goto(url, wait_until="domcontentloaded")
+            response = await probe_page.goto(url, wait_until="domcontentloaded")
+            status = getattr(response, "status", 200)
+            if status == 429:
+                from grab.utils.rate_limit import RateLimitError, parse_retry_after
+
+                headers = await response.all_headers()
+                raise RateLimitError(
+                    "Rate limited.",
+                    "session_probe",
+                    retry_after=parse_retry_after(headers.get("retry-after")),
+                )
+            if status >= 500:
+                raise TransientSessionRefreshError("Read-only session probe failed.")
+            if status >= 400:
+                raise UnknownSessionError()
             page_user_key = await self._extract_page_user_key(probe_page)
             if not capture_user_key:
                 page_user_key = None

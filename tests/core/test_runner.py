@@ -5,7 +5,13 @@ import pytest
 from grab.core.runner import GrabRunner
 from grab.core.scheduler import Scheduler
 from grab.errors import SessionExpiredError
-from grab.models.schemas import BookingResult, DoctorPageTarget, GrabConfig, Slot
+from grab.models.schemas import (
+    BookingResult,
+    BookingState,
+    DoctorPageTarget,
+    GrabConfig,
+    Slot,
+)
 
 
 class FrozenClock:
@@ -405,3 +411,36 @@ async def test_runner_stops_polling_on_manual_or_unknown(state):
     result = await runner._poll_and_book()
     assert result.state == state
     assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_schema_stops_for_manual_inspection_without_relogin(runner):
+    from grab.errors import UnknownSessionError
+
+    async def poll():
+        raise UnknownSessionError("schema_drift")
+        yield []
+
+    runner.schedule_service.poll = poll
+    result = await runner.run()
+    assert result.state == BookingState.AWAITING_MANUAL_CONFIRMATION
+    assert result.failure_class == "schema_drift"
+    assert runner.auth_service.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_during_recovery_blocks_new_login(runner):
+    from grab.errors import SessionExpiredError
+    from grab.models.schemas import BookingResult
+
+    runner.booking_service.blocked_result = lambda: BookingResult(
+        state=BookingState.OUTCOME_UNKNOWN
+    )
+    from grab.core.leader import leader_scope
+
+    async with leader_scope():
+        result = await runner._recover_from_session_expiry(
+            SessionExpiredError(), attempt=1
+        )
+    assert result.state == BookingState.OUTCOME_UNKNOWN
+    assert runner.auth_service.calls == 0

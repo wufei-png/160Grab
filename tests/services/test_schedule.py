@@ -3,7 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from grab.errors import SessionExpiredError, TransientSessionRefreshError
+from grab.errors import (
+    TransientSessionRefreshError,
+    UnknownSessionError,
+)
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
 from grab.services.schedule import ScheduleService
 
@@ -332,7 +335,7 @@ async def test_fetch_doctor_schedule_recovers_user_key_after_aggressive_session_
 
 
 @pytest.mark.asyncio
-async def test_fetch_doctor_schedule_raises_session_expired_after_failed_refresh():
+async def test_missing_key_is_unknown_after_inconclusive_probe():
     refresh_calls: list[tuple[bool, str]] = []
     page_api = MissingKeyPageApi()
 
@@ -353,7 +356,7 @@ async def test_fetch_doctor_schedule_raises_session_expired_after_failed_refresh
         )
     )
 
-    with pytest.raises(SessionExpiredError):
+    with pytest.raises(UnknownSessionError):
         await service.fetch_doctor_schedule("2026-03-24")
 
     assert refresh_calls == [(True, "missing_schedule_user_key")]
@@ -403,7 +406,7 @@ async def test_fetch_doctor_schedule_uses_cached_user_key_when_live_sources_disa
 
 
 @pytest.mark.asyncio
-async def test_fetch_doctor_schedule_treats_transient_refresh_failure_as_session_expired():
+async def test_probe_timeout_stays_transient():
     page_api = MissingKeyPageApi()
 
     async def fake_refresh(target, *, aggressive: bool, reason: str):
@@ -423,12 +426,12 @@ async def test_fetch_doctor_schedule_treats_transient_refresh_failure_as_session
         )
     )
 
-    with pytest.raises(SessionExpiredError):
+    with pytest.raises(TransientSessionRefreshError):
         await service.fetch_doctor_schedule("2026-03-24")
 
 
 @pytest.mark.asyncio
-async def test_poll_triggers_periodic_session_keepalive_before_first_attempt():
+async def test_valid_poll_needs_no_periodic_probe():
     refresh_calls: list[tuple[bool, str]] = []
 
     async def fake_refresh(target, *, aggressive: bool, reason: str):
@@ -452,28 +455,19 @@ async def test_poll_triggers_periodic_session_keepalive_before_first_attempt():
     await anext(poller)
     await poller.aclose()
 
-    assert refresh_calls == [(False, "periodic_keepalive")]
+    assert refresh_calls == []
 
 
 @pytest.mark.asyncio
-async def test_poll_propagates_unexpected_periodic_keepalive_errors():
+async def test_missing_key_probe_propagates_wiring_errors():
     async def fake_refresh(target, *, aggressive: bool, reason: str):
-        raise ValueError("bug in keepalive wiring")
+        raise ValueError("bug in probe wiring")
 
     service = ScheduleService(
-        page_api=FakePageApi(),
-        config=GrabConfig(),
-        session_refresh=fake_refresh,
+        page_api=MissingKeyPageApi(), config=GrabConfig(), session_refresh=fake_refresh
     )
     service.set_target(
-        DoctorPageTarget(
-            unit_id="21",
-            dept_id="369",
-            doctor_id="14765",
-            source_url="https://www.91160.com/doctors/index/unit_id-21/dep_id-369/docid-14765.html",
-        )
+        DoctorPageTarget(unit_id="21", dept_id="369", doctor_id="14765", source_url="")
     )
-
-    poller = service.poll()
-    with pytest.raises(ValueError, match="bug in keepalive wiring"):
-        await anext(poller)
+    with pytest.raises(ValueError, match="bug in probe wiring"):
+        await anext(service.poll())

@@ -5,10 +5,16 @@ from typing import Any
 
 from grab.browser.page_api import _is_destroyed_context_error
 from grab.core.leader import check_leader, exclusive_operation
-from grab.errors import SessionExpiredError, TransientSessionRefreshError
+from grab.errors import (
+    SessionExpiredError,
+    TransientSessionRefreshError,
+    UnknownSessionError,
+)
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
 from grab.observability.safe_logging import logger
-from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
+from grab.services.session_state import classify_schedule
+from grab.utils.rate_limit import RateLimitError
+from grab.utils.read_retry import ReadRetryBudget
 from grab.utils.runtime import parse_sleep_time
 
 
@@ -21,10 +27,11 @@ class ScheduleService:
         reporter=None,
         monotonic=None,
         session_refresh=None,
+        retry_budget=None,
     ):
         self.page_api = page_api
         self.config = config
-        self._sleep = sleep
+        self._sleep = sleep or asyncio.sleep
         self.reporter = reporter
         self._monotonic = monotonic or time.monotonic
         self._last_heartbeat_at: float | None = None
@@ -32,8 +39,10 @@ class ScheduleService:
         self._last_schedule_user_key: str | None = None
         self.target: DoctorPageTarget | None = None
         self._session_refresh = session_refresh
+        self.retry_budget = retry_budget or ReadRetryBudget()
 
     def set_target(self, target: DoctorPageTarget) -> None:
+        self._last_schedule_user_key = None
         self.target = target
 
     @exclusive_operation
@@ -43,49 +52,49 @@ class ScheduleService:
         logger.info("Fetching doctor schedule.")
         user_key = await self._resolve_schedule_user_key()
         if not user_key:
-            logger.warning(
-                "Schedule polling could not resolve _user_key/access_hash. Attempting aggressive session refresh before failing."
-            )
-            refreshed_user_key = None
-            try:
-                refreshed_user_key = await self._refresh_session(
-                    aggressive=True,
-                    reason="missing_schedule_user_key",
+            # Missing credentials are ambiguous. One low-frequency diagnostic may
+            # confirm a login redirect or recover a key; timeout is never expiry.
+            now = self._monotonic()
+            if (
+                self._last_session_refresh_at is None
+                or now - self._last_session_refresh_at >= 60
+            ):
+                self._last_session_refresh_at = now
+                user_key = await self._refresh_session(
+                    aggressive=True, reason="missing_schedule_user_key"
                 )
-            except TransientSessionRefreshError:
-                logger.warning(
-                    "Aggressive session refresh failed while recovering missing _user_key/access_hash."
-                )
-            user_key = refreshed_user_key or await self._resolve_schedule_user_key()
-        if not user_key:
-            raise SessionExpiredError(
-                "Could not resolve _user_key/access_hash for doctor schedule polling"
-            )
+            if not user_key:
+                raise UnknownSessionError("missing_key")
         self._remember_schedule_user_key(user_key)
         fetch_json = getattr(
             self.page_api, "get_json_via_page_ajax", self.page_api.get_json
         )
         check_leader()
-        payload = await asyncio.wait_for(
-            fetch_json(
-                "https://gate.91160.com/guahao/v1/pc/sch/doctor",
-                params={
-                    "user_key": user_key,
-                    "docid": self.target.doctor_id,
-                    "doc_id": self.target.doctor_id,
-                    "unit_id": self.target.unit_id,
-                    "dep_id": self.target.dept_id,
-                    "date": date,
-                    "days": "6",
-                },
-            ),
-            timeout=20,
-        )
-        raise_if_rate_limited(payload, context="doctor schedule polling")
+        try:
+            payload = await asyncio.wait_for(
+                fetch_json(
+                    "https://gate.91160.com/guahao/v1/pc/sch/doctor",
+                    params={
+                        "user_key": user_key,
+                        "docid": self.target.doctor_id,
+                        "doc_id": self.target.doctor_id,
+                        "unit_id": self.target.unit_id,
+                        "dep_id": self.target.dept_id,
+                        "date": date,
+                        "days": "6",
+                    },
+                ),
+                timeout=20,
+            )
+            classify_schedule(payload).require_valid()
+        except SessionExpiredError:
+            self._last_schedule_user_key = None
+            raise
         logger.info("Doctor schedule response received.")
         return payload
 
     def parse_doctor_schedule(self, payload: dict) -> list[Slot]:
+        classify_schedule(payload).require_valid()
         return self._parse_slots(payload)
 
     def filter_slots(
@@ -252,28 +261,51 @@ class ScheduleService:
 
         attempt = 0
         while True:
+            if self.retry_budget.failures >= self.retry_budget.max_failures:
+                from grab.errors import ReadRetryExhausted
+
+                raise ReadRetryExhausted(
+                    "Read-only consecutive failure budget exhausted."
+                )
             attempt += 1
             delay_ms: int | None = None
             try:
-                await self._maybe_refresh_session()
                 slots = await self.poll_once()
-            except RateLimitError as exc:
-                delay_ms = parse_sleep_time(self.config.rate_limit_sleep_time)
-                logger.warning("Rate limit detected during schedule polling.")
+            except (RateLimitError, TransientSessionRefreshError, TimeoutError) as exc:
+                limited = isinstance(exc, RateLimitError)
+                delay_seconds = self.retry_budget.failed(
+                    rate_limited=limited,
+                    poll_floor=max(
+                        3.0, parse_sleep_time(self.config.sleep_time) / 1000
+                    ),
+                    cooldown=parse_sleep_time(self.config.rate_limit_sleep_time) / 1000,
+                    retry_after=getattr(exc, "retry_after", 0),
+                )
+                delay_ms = delay_seconds * 1000
                 if self.reporter is not None:
-                    await self.reporter.record_rate_limit(
-                        context="schedule_polling",
-                        message=exc.message,
-                        data={
-                            "attempt": attempt,
-                            "cooldown_ms": delay_ms,
-                        },
-                    )
+                    if limited:
+                        await self.reporter.record_rate_limit(
+                            context="schedule_polling",
+                            message="Rate limited.",
+                            data={"attempt": attempt, "cooldown_ms": delay_ms},
+                        )
+                    else:
+                        await self.reporter.emit_event(
+                            "session_read_retry",
+                            level="warning",
+                            message="Read-only retry scheduled.",
+                            data={
+                                "attempt": self.retry_budget.failures,
+                                "delay_ms": delay_ms,
+                                "failure_class": "network",
+                            },
+                        )
             else:
+                self.retry_budget.valid_response()
                 if self.reporter is not None:
                     self.reporter.reset_rate_limit_streak()
                 yield slots
-                delay_ms = parse_sleep_time(self.config.sleep_time)
+                delay_ms = max(3000, parse_sleep_time(self.config.sleep_time))
                 logger.info("Polling attempt.")
                 if self.reporter is not None:
                     await self.reporter.emit_event(
@@ -370,27 +402,6 @@ class ScheduleService:
             self._remember_schedule_user_key(user_key)
             return user_key
         return self._last_schedule_user_key
-
-    async def _maybe_refresh_session(self) -> None:
-        if self.config is None:
-            return
-        interval_seconds = self.config.browser.session_refresh_interval_seconds
-        if interval_seconds <= 0:
-            return
-        now = self._monotonic()
-        if (
-            self._last_session_refresh_at is not None
-            and now - self._last_session_refresh_at < interval_seconds
-        ):
-            return
-        try:
-            await self._refresh_session(
-                aggressive=False,
-                reason="periodic_keepalive",
-                refreshed_at=now,
-            )
-        except TransientSessionRefreshError:
-            logger.warning("Session keepalive failed but polling will continue.")
 
     @exclusive_operation
     async def _refresh_session(

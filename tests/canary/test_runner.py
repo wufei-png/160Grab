@@ -174,6 +174,7 @@ async def test_real_browser_runner_resolves_target_and_guards_auto(
 
     page = chromium_page
     payload = {
+        "result_code": 1,
         "data": {
             "schedules": [
                 {
@@ -183,9 +184,11 @@ async def test_real_browser_runner_resolves_target_and_guards_auto(
                     "dep_id": "d",
                     "date": "2026-09-30",
                     "status": "available",
+                    "weekday": 3,
+                    "day_period": "am",
                 }
             ]
-        }
+        },
     }
     doctor_html = '<a id="addMark" unit_id="u" dep_id="d" doctor_id="doc"></a>'
     booking_html = '<input name="schedule_id" value="slot"><input type="hidden" name="mid" value="member"><ul id="delts"><li val="time" class="selected">09:00-09:30</li></ul><button id="submitbtn">预约</button>'

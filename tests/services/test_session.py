@@ -194,7 +194,9 @@ async def test_capture_target_from_current_page_reads_url_once_after_enter(
 async def test_capture_target_from_second_tab_when_primary_is_login(member_page_html):
     """Doctor listing often opens in a new tab; Playwright's page may still be login."""
     ctx = SimpleNamespace(pages=[])
-    login_p = FakePage("https://user.91160.com/login.html", member_page_html, context=ctx)
+    login_p = FakePage(
+        "https://user.91160.com/login.html", member_page_html, context=ctx
+    )
     doctor_p = FakePage(
         "https://www.91160.com/doctors/index/docid-200595747.html",
         member_page_html,
@@ -563,7 +565,9 @@ async def test_resolve_member_id_auto_selects_only_member():
 
 
 @pytest.mark.asyncio
-async def test_fetch_member_profiles_uses_temporary_page_when_available(member_page_html):
+async def test_fetch_member_profiles_uses_temporary_page_when_available(
+    member_page_html,
+):
     original_page = FakePage(
         url="https://www.91160.com/doctors/index/docid-201100706.html",
         member_html=member_page_html,
@@ -663,3 +667,20 @@ async def test_resolve_member_id_reprompts_until_valid(member_page_html, capsys)
     assert member_id == "m2"
     assert len(prompts) == 2
     assert "输入无效" in output
+
+
+@pytest.mark.asyncio
+async def test_polling_probe_login_redirect_is_confirmed_expired(member_page_html):
+    from grab.errors import SessionExpiredError
+
+    page = FakePage(url="about:blank", member_html=member_page_html)
+
+    async def goto(*args, **kwargs):
+        page.url = "https://user.91160.com/login.html?ignored=1"
+
+    page.goto = goto
+    service = SessionCaptureService(page, GrabConfig())
+    with pytest.raises(SessionExpiredError):
+        await service.refresh_session_for_polling(
+            DoctorPageTarget(unit_id="u", dept_id="d", doctor_id="doc", source_url="")
+        )
