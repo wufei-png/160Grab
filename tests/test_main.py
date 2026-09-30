@@ -271,3 +271,50 @@ async def test_cli_propagates_outcome_exit(tmp_path, monkeypatch, state, code):
     with pytest.raises(SystemExit) as exit:
         await main_module.main([str(config)])
     assert exit.value.code == code
+
+
+async def test_interactive_manual_handoff_waits_before_browser_closes(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "browser:\n  launch_persistent_context: false\nbooking:\n  submit_mode: manual_confirm\n"
+    )
+    events = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            events.append("open")
+            return self
+
+        async def __aexit__(self, *args):
+            events.append("closed")
+
+    def handoff(message):
+        assert events == ["open"]
+        assert "人工" in message and "关闭浏览器" in message
+        events.append("handoff")
+        return ""
+
+    monkeypatch.setattr(main_module, "PlaywrightClient", Client)
+    monkeypatch.setattr(main_module, "input", handoff, raising=False)
+    monkeypatch.setattr(main_module.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setattr(
+        main_module,
+        "build_runner",
+        lambda *_a, **_kw: SimpleNamespace(
+            run=AsyncMock(return_value=RunResult(state="AWAITING_MANUAL_CONFIRMATION"))
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "build_run_reporter",
+        lambda _: SimpleNamespace(jsonl_path=None, emit_event=AsyncMock()),
+    )
+    with pytest.raises(SystemExit) as exit:
+        await main_module.main([str(config)])
+    assert exit.value.code == 2
+    assert events == ["open", "handoff", "closed"]

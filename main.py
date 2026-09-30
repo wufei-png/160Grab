@@ -12,7 +12,7 @@ from grab.browser.page_api import BrowserPageApi
 from grab.browser.playwright_client import PlaywrightClient
 from grab.core.runner import GrabRunner
 from grab.core.scheduler import Scheduler
-from grab.models.schemas import GrabConfig
+from grab.models.schemas import BookingState, GrabConfig
 from grab.observability import build_run_reporter
 from grab.observability.safe_logging import logger
 from grab.services.auth import AuthService
@@ -298,6 +298,18 @@ async def main(argv: list[str] | None = None) -> None:
             runner = build_runner(config, client, reporter=reporter)
             runner_started = True
             result = await runner.run()
+            if (
+                result.state == BookingState.AWAITING_MANUAL_CONFIRMATION
+                and sys.stdin.isatty()
+            ):
+                # Keep the prepared page available for manual interaction before
+                # the browser context closes; this never triggers automation.
+                try:
+                    input(
+                        "表单已准备，自动操作已停止。请在浏览器中人工处理并核对原站记录；完成后按 Enter 关闭浏览器："
+                    )
+                except EOFError:
+                    pass
     except Exception as exc:
         if not runner_started:
             await reporter.emit_event(
