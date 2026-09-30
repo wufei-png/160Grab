@@ -150,3 +150,37 @@ async def test_missing_key_diagnostic_is_low_frequency_without_manual_login():
         await reader.fetch_doctor_schedule("2026-10-01")
     assert len(calls) == 1
     assert reader.page_api.ajax_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 503])
+async def test_transient_diagnostic_probe_keeps_server_retry_after(status):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from grab.services.session import SessionCaptureService
+    from tests.services.test_schedule import MissingKeyPageApi
+
+    response = SimpleNamespace(
+        status=status, all_headers=AsyncMock(return_value={"retry-after": "120"})
+    )
+    page = SimpleNamespace(context=None, goto=AsyncMock(return_value=response))
+    config = GrabConfig()
+    session = SessionCaptureService(page, config)
+    delays = []
+
+    async def sleep(seconds):
+        delays.append(seconds)
+        raise asyncio.CancelledError
+
+    reader = ScheduleService(
+        MissingKeyPageApi(),
+        config,
+        session_refresh=session.refresh_session_for_polling,
+        sleep=sleep,
+    )
+    reader.set_target(TARGET)
+    with pytest.raises(asyncio.CancelledError):
+        await anext(reader.poll())
+    assert delays == [120]
+    assert page.goto.await_count == 1

@@ -17,6 +17,7 @@ from grab.models.schemas import DoctorPageTarget, GrabConfig, MemberProfile
 from grab.observability.privacy import safe_data
 from grab.observability.safe_logging import logger
 from grab.services.session_state import is_login_url
+from grab.utils.rate_limit import RateLimitError, parse_retry_after
 
 
 def _strip_url_query_and_fragment(url: str) -> str:
@@ -636,16 +637,17 @@ class SessionCaptureService:
             response = await probe_page.goto(url, wait_until="domcontentloaded")
             status = getattr(response, "status", 200)
             if status == 429:
-                from grab.utils.rate_limit import RateLimitError, parse_retry_after
-
                 headers = await response.all_headers()
                 raise RateLimitError(
                     "Rate limited.",
                     "session_probe",
                     retry_after=parse_retry_after(headers.get("retry-after")),
                 )
-            if status >= 500:
-                raise TransientSessionRefreshError("Read-only session probe failed.")
+            if 500 <= status < 600:
+                headers = await response.all_headers()
+                error = TransientSessionRefreshError("Read-only session probe failed.")
+                error.retry_after = parse_retry_after(headers.get("retry-after"))
+                raise error
             if status >= 400:
                 raise UnknownSessionError()
             page_user_key = await self._extract_page_user_key(probe_page)
