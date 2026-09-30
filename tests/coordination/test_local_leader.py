@@ -261,3 +261,53 @@ async def test_synchronous_consent_wait_keeps_leader_and_single_click(tmp_path):
         assert result.state == "OUTCOME_UNKNOWN"
         assert obj.page.clicks == 1
         check_leader()
+
+
+@pytest.mark.parametrize("loss", ["poll", "cooldown"])
+async def test_runner_loss_never_reenters_manual_login(tmp_path, loss):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from grab.core.runner import GrabRunner
+    from grab.errors import SessionExpiredError
+    from grab.models.schemas import BookingResult, GrabConfig
+    from grab.services.auth import AuthService
+    from tests.core.test_runner import FakeBookingService, FakeSessionService
+
+    owner = LocalLeader(tmp_path / "locks")
+    navigations = []
+
+    async def goto(url):
+        navigations.append(url)
+
+    class Schedule:
+        def set_target(self, target):
+            pass
+
+        async def poll(self):
+            owner.release()
+            raise SessionExpiredError("synthetic expired response after loss")
+            yield []
+
+    async def cooldown(_seconds):
+        owner.release()
+
+    config = GrabConfig()
+    config.browser.session_recovery_cooldown_seconds = 1
+    runner = GrabRunner(
+        AuthService(SimpleNamespace(goto=goto), config),
+        FakeSessionService(config=config),
+        SimpleNamespace(wait_until_ready=AsyncMock()),
+        Schedule(),
+        FakeBookingService(BookingResult(state="AWAITING_MANUAL_CONFIRMATION")),
+        sleep=cooldown,
+    )
+    async with leader_scope(owner):
+        if loss == "poll":
+            assert (await runner.run()).state == "AWAITING_MANUAL_CONFIRMATION"
+        else:
+            with pytest.raises(LeaderLost):
+                await runner._recover_from_session_expiry(
+                    SessionExpiredError("synthetic"), attempt=2
+                )
+    assert len(navigations) == (1 if loss == "poll" else 0)

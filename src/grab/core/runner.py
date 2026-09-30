@@ -32,6 +32,7 @@ class GrabRunner:
             self.reporter.set_phase(phase)
 
     async def _ensure_login_and_prepare_target(self) -> None:
+        check_leader()
         self._set_phase("manual_login")
         await self.auth_service.ensure_login()
 
@@ -108,6 +109,7 @@ class GrabRunner:
         *,
         attempt: int,
     ) -> None:
+        check_leader()
         logger.warning("Session expired during schedule polling.")
         if self.reporter is not None:
             await self.reporter.emit_event(
