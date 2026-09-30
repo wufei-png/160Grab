@@ -95,3 +95,25 @@ async def test_userscript_invalid_config_never_polls(chromium_page):
     )
     await page.wait_for_function("finished")
     assert await page.evaluate("requests") == 0
+
+
+@pytest.mark.parametrize("jump_seconds", [-3600, 3600])
+async def test_read_interval_uses_monotonic_clock_during_wall_clock_jump(
+    chromium_page, jump_seconds
+):
+    page = chromium_page
+    await setup(page)
+    await page.evaluate(
+        """() => {window.fetch=async()=>{requests++;return {status:429,text:async()=>'',headers:{get:()=> '60'}};};start();}"""
+    )
+    await page.wait_for_function(f"{HOOKS}.readState().readFailures === 1")
+    current = await page.evaluate("Date.now()")
+    await page.clock.set_system_time(
+        datetime.fromtimestamp(current / 1000 + jump_seconds, UTC)
+    )
+    await page.clock.run_for(59000)
+    assert await page.evaluate("requests") == 1
+    await page.clock.run_for(1000)
+    await page.wait_for_function("requests === 2", timeout=1000)
+    await page.evaluate(f"{HOOKS}.stopRun()")
+    await page.wait_for_function("finished")

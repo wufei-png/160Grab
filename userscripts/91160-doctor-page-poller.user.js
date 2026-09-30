@@ -720,7 +720,7 @@
   const LEADER_TTL_MS = 30000;
   let browserLeader = null;
   const readCancellations = new Set();
-  let readMonotonicDeadline = 0;
+  let readMonotonicDeadline = null;
   let journalWriteActive = false;
   const leaderNow = () => globalThis.performance.now();
 
@@ -2187,12 +2187,17 @@
   }
 
   function deferRead(delayMs) {
-    readMonotonicDeadline = Math.max(readMonotonicDeadline, leaderNow() + delayMs);
+    readMonotonicDeadline = Math.max(readMonotonicDeadline ?? 0, leaderNow() + delayMs);
     patchState(next => ({...next, readNotBeforeAt: Math.max(Number(next.readNotBeforeAt) || 0, Date.now() + delayMs)}));
   }
 
   function remainingReadDelay() {
-    return Math.max(0, readMonotonicDeadline - leaderNow(), Number(readState().readNotBeforeAt || 0) - Date.now());
+    // Import a cross-document epoch hint once, then use only the monotonic
+    // deadline. Wall-clock corrections must not stretch or shorten intervals.
+    if (readMonotonicDeadline === null) {
+      readMonotonicDeadline = leaderNow() + Math.max(0, Number(readState().readNotBeforeAt || 0) - Date.now());
+    }
+    return Math.max(0, readMonotonicDeadline - leaderNow());
   }
 
   async function waitReadDelay(delayMs, guard) {
