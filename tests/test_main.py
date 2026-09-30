@@ -25,7 +25,9 @@ async def test_invalid_auth_stops_before_browser_or_profile_creation(
     config_path.write_text(f"auth:\n  strategy: {strategy}\n", encoding="utf-8")
 
     def unexpected(*args, **kwargs):
-        pytest.fail("Invalid auth must stop before any browser/profile/reporting action")
+        pytest.fail(
+            "Invalid auth must stop before any browser/profile/reporting action"
+        )
 
     monkeypatch.setattr(main_module, "PlaywrightClient", unexpected)
     monkeypatch.setattr(main_module, "run_create_profile_flow", unexpected)
@@ -194,3 +196,38 @@ def test_ensure_frozen_default_config_default_output_handles_cp1252_stdout(
     assert config_path.exists()
     assert "config.yaml" in rendered
     assert "\\u8bf7\\u5148\\u6309\\u9700\\u4fee\\u6539" in rendered
+
+
+async def test_cleanup_cli_dry_run_never_launches_or_resolves_profile(
+    tmp_path, monkeypatch, capsys
+):
+    from tests.utils.test_retention import log_name
+
+    root = tmp_path / "logs"
+    root.mkdir()
+    old = root / log_name(8)
+    old.write_text("{}")
+    config = tmp_path / "config.yaml"
+    config.write_text(f"logging:\n  jsonl_dir: {root}\n")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Cleanup must not launch a browser or read a profile")
+
+    monkeypatch.setattr(main_module, "PlaywrightClient", unexpected)
+    monkeypatch.setattr(main_module, "resolve_profile_for_run", unexpected)
+    monkeypatch.setattr(main_module, "build_run_reporter", unexpected)
+    with pytest.raises(SystemExit) as result:
+        await main_module.main([str(config), "--cleanup-data", "--dry-run"])
+    assert result.value.code == 0
+    assert old.exists()
+    assert "deleted=0" in capsys.readouterr().out
+
+
+def test_cleanup_flags_cannot_be_combined_with_browser_actions():
+    for args in (
+        ["--dry-run"],
+        ["--cleanup-data", "--create-profile"],
+        ["--cleanup-data", "--smoke-browser"],
+    ):
+        with pytest.raises(SystemExit):
+            parse_args(args)

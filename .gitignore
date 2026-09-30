@@ -15,3 +15,6 @@ dist/
 /config.yaml
 packaging/_embedded_version.txt
 /artifacts/
+# Application diagnostics may contain local session/medical data.
+160grab-debug-v1-*
+160grab-log-v1-*

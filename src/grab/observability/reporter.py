@@ -16,6 +16,7 @@ from grab.observability.privacy import (
 )
 from grab.observability.safe_logging import logger
 from grab.utils.private_files import ensure_private_directory, private_directory
+from grab.utils.retention import cleanup_outputs
 
 
 class JsonlEventSink:
@@ -237,6 +238,12 @@ def build_run_reporter(config) -> RunReporter:
     run_id = uuid4().hex[:12]
     sink = None
     try:
+        cleanup_outputs(
+            config.logging.jsonl_dir,
+            kind="logs",
+            dry_run=False,
+            protected_paths=(config.browser.profiles_root_dir,),
+        )
         sink = JsonlEventSink(config.logging.jsonl_dir, run_id=run_id)
     except Exception:
         logger.warning("Structured event sink initialization failed; JSONL disabled.")

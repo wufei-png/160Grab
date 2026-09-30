@@ -519,9 +519,9 @@
       message: SAFE_LOG_MESSAGES.has(message) ? message : "Diagnostic event.",
       detail: safeLogDetail(detail),
     };
-    if (shouldLog(level, settings)) {
-      const method = level === "error" ? "error" : level === "warn" ? "warn" : "log";
-      console[method](`[160Grab ${level}] ${entry.message}`, entry.detail);
+    if (shouldLog(entry.level, settings)) {
+      const method = entry.level === "error" ? "error" : entry.level === "warn" ? "warn" : "log";
+      console[method](`[160Grab ${entry.level}] ${entry.message}`, entry.detail);
     }
     patchState((state) => ({
       ...state,

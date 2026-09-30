@@ -25,6 +25,7 @@ from grab.utils.private_files import (
     ensure_private_directory,
     private_directory,
 )
+from grab.utils.retention import cleanup_outputs
 
 
 class PlaywrightClient:
@@ -59,6 +60,13 @@ class PlaywrightClient:
         self._page_prepare_tasks: set[asyncio.Task] = set()
 
     async def launch(self) -> None:
+        if self.debug_dir is not None:
+            cleanup_outputs(
+                self.debug_dir,
+                kind="debug",
+                dry_run=False,
+                protected_paths=(self.user_data_dir,) if self.user_data_dir else (),
+            )
         self.playwright = await async_playwright().start()
         if self.persistent_context_enabled:
             if self.user_data_dir is None:
@@ -135,6 +143,12 @@ class PlaywrightClient:
             logger.debug("Skipping diagnostic snapshot.")
             return None
 
+        cleanup_outputs(
+            self.debug_dir,
+            kind="debug",
+            dry_run=False,
+            protected_paths=(self.user_data_dir,) if self.user_data_dir else (),
+        )
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         stem = f"160grab-debug-v1-{stamp}-{uuid4().hex}"
         metadata = await self.collect_debug_state()

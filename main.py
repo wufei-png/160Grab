@@ -27,6 +27,7 @@ from grab.utils.profile_manager import (
     create_profile,
     resolve_profile_for_run,
 )
+from grab.utils.retention import cleanup_outputs
 
 APP_NAME = "160Grab"
 CONFIG_FILENAME = "config.yaml"
@@ -103,7 +104,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--cleanup-data",
+        action="store_true",
+        help="Clean expired application logs/debug output without launching a browser.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview cleanup counts without deleting files.",
+    )
     args = parser.parse_args(argv)
+    if args.dry_run and not args.cleanup_data:
+        parser.error("--dry-run requires --cleanup-data")
+    if args.cleanup_data and (args.create_profile or args.smoke_browser):
+        parser.error("--cleanup-data cannot launch a browser")
     if args.profile_name and not args.create_profile:
         parser.error("--profile-name can only be used together with --create-profile")
     return args
@@ -175,6 +190,25 @@ async def main(argv: list[str] | None = None) -> None:
         # Pydantic's default error rendering includes rejected input values.
         logger.error("Invalid configuration; check the configured fields and types.")
         raise SystemExit(1) from None
+    if args.cleanup_data:
+        roots = [(config.logging.jsonl_dir, "logs")]
+        if debug_dir is not None:
+            roots.append((debug_dir, "debug"))
+        for root, kind in roots:
+            try:
+                result = cleanup_outputs(
+                    root,
+                    kind=kind,
+                    dry_run=args.dry_run,
+                    protected_paths=(config.browser.profiles_root_dir,),
+                )
+            except OSError:
+                logger.error("Run failed")
+                raise SystemExit(1) from None
+            emit_console_message(
+                f"{kind}: eligible={result['eligible']}, deleted={result['deleted']}, skipped={result['skipped']}, dry_run={args.dry_run}"
+            )
+        raise SystemExit(0)
     headless = False
     if args.create_profile:
         await run_create_profile_flow(
