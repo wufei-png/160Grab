@@ -356,6 +356,8 @@ async def _exclusive_main(argv: list[str] | None = None) -> None:
             },
         )
         logger.error("Run failed")
+        if isinstance(exc, BrowserLaunchError):
+            raise
         raise SystemExit(1) from exc
 
     await reporter.emit_event(

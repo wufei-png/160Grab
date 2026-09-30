@@ -433,3 +433,46 @@ async def test_invalid_browser_channel_stops_before_any_browser_or_profile(
     with pytest.raises(SystemExit) as caught:
         await main_module.main([str(config)])
     assert caught.value.code == 1
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+async def test_normal_cli_browser_failure_keeps_install_guidance(
+    tmp_path, monkeypatch, persistent
+):
+    from grab.errors import BrowserLaunchError
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f"browser:\n  channel: chrome\n  launch_persistent_context: {str(persistent).lower()}\n  profiles_root_dir: {tmp_path}/profiles\n"
+    )
+    messages = []
+    events = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["channel"] == "chrome"
+
+        async def __aenter__(self):
+            raise BrowserLaunchError("SYN_SECRET")
+
+        async def __aexit__(self, *args):
+            pass
+
+    async def emit_event(*args, **kwargs):
+        events.append(args[0])
+
+    monkeypatch.setattr(main_module, "PlaywrightClient", Client)
+    monkeypatch.setattr(
+        main_module,
+        "build_run_reporter",
+        lambda _: SimpleNamespace(
+            jsonl_path=None, current_phase="startup", emit_event=emit_event
+        ),
+    )
+    monkeypatch.setattr(main_module, "emit_console_message", messages.append)
+    with pytest.raises(SystemExit) as caught:
+        await main_module.main([str(config)])
+    assert caught.value.code == 1
+    assert "browser.channel" in "\n".join(messages)
+    assert "SYN_SECRET" not in "\n".join(messages)
+    assert "run_finished" in events
