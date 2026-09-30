@@ -232,7 +232,7 @@ reviewer 独立相关 **44 passed**、Ruff/Node/whitespace；主实现者逐项 
   无自动换号/导航/follow-up；每次检查 owner 与单调 deadline。sessionStorage 只存固定 canary latch，
   当前标签导航/reload/Start/reset 不能恢复产品自动运行；批准内存有效，退出后不清 pending。
   原生 dialog 暂停 timer 时，恢复后仍以 deadline 拒绝超时动作。
-- converter 只重建已知 booking DOM/snapshot、normalized schedule JSON；未知字段/schema 拒绝，
+- converter 只重建已知 booking DOM/snapshot、normalized schedule JSON；非法来源日期/未知字段/schema 拒绝，
   去除 script/嵌入 JSON、URL、事件正文，敏感值转 synthetic token；保留空值、关联、日期冲突与静态状态。
   输出含版本/日期/层级/路径/source/覆盖及只依赖结构的 fingerprint。no-follow/private 创建、不覆盖文件、
   错误不带原文；已有 synthetic fixture CLI 转换样例用于 Chromium 两适配 parity。

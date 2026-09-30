@@ -193,3 +193,26 @@ async def test_exported_sample_parity_in_both_browser_adapters(chromium_page):
     )
     assert python_decision == js_decision
     assert sample["metadata"]["source"] == "synthetic"
+
+
+@pytest.mark.parametrize(
+    "date_source",
+    [
+        '<div><span id="jzdate">2026年99月99日</span></div>',
+        '<input name="sch_data" value=\'a:1:{s:4:"slot";a:1:{s:7:"to_date";s:3:"bad";}}\'>',
+    ],
+)
+def test_invalid_source_dates_reject_export_instead_of_losing_blockers(date_source):
+    raw = (
+        '<input name="schedule_id" value="slot"><input type="hidden" name="mid" value="member">'
+        + date_source
+        + '<button id="submitbtn">预约</button>'
+    )
+    assert (
+        "date.conflict"
+        in decide(snapshot_html(raw), dict(member_id="member", schedule_id="slot"))[
+            "blockers"
+        ]
+    )
+    with pytest.raises(FixtureRejected, match="unsupported schema"):
+        convert_booking_html(raw, **META)

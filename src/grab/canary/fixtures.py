@@ -109,6 +109,10 @@ def convert_booking_html(raw, **meta):
             ):
                 raise FixtureRejected()
     snapshot = snapshot_html(raw)
+    # A static jzdate DOM cannot represent every unsupported source date.
+    # Reject rather than exporting an HTML version that loses date.conflict.
+    if any(value and not valid_date(value) for value in snapshot["dates"]):
+        raise FixtureRejected()
     tokens = Tokens()
     snapshot["schedule_ids"] = [
         tokens.replace("schedule", v) for v in snapshot["schedule_ids"]
