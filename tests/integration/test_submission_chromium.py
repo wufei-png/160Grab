@@ -210,3 +210,46 @@ async def test_userscript_rechecks_revoke_after_async_prepare(chromium_page):
         "state": "AWAITING_MANUAL_CONFIRMATION",
         "pending": False,
     }
+
+
+async def test_userscript_pending_survives_real_browser_restart(tmp_path):
+    from playwright.async_api import async_playwright
+
+    from tests.contracts.booking.scenarios import USERSCRIPT
+
+    source = USERSCRIPT.read_text()
+    profile = tmp_path / "synthetic-browser-profile"
+    async with async_playwright() as pw:
+        for restarted in (False, True):
+            context = await pw.chromium.launch_persistent_context(
+                str(profile), headless=True, service_workers="block"
+            )
+            try:
+                await context.route(
+                    "**/*",
+                    lambda route: route.fulfill(
+                        content_type="text/html",
+                        body='<button id="submitbtn">预约</button>',
+                    ),
+                )
+                page = context.pages[0]
+                await page.goto("https://synthetic.invalid/booking")
+                await page.evaluate(
+                    "window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;"
+                )
+                await page.evaluate(source)
+                result = await page.evaluate("""async () => {
+                    const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+                    document.querySelector('#submitbtn').onclick = () => {
+                        localStorage.setItem('clicks', String(Number(localStorage.getItem('clicks') || 0)+1));
+                    };
+                    const state = await h.submitTransaction(h.findSubmitControl(), {scheduleId:'slot'}, {memberId:'member'}, {unitId:'u',depId:'d',doctorId:'doc'}, true);
+                    return {state, clicks:localStorage.getItem('clicks')};
+                }""")
+                assert result == {"state": "OUTCOME_UNKNOWN", "clicks": "1"}
+                if restarted:
+                    assert await page.evaluate(
+                        "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.submissionBlocked()"
+                    )
+            finally:
+                await context.close()
