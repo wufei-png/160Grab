@@ -158,3 +158,92 @@ async def test_policy_guards_direct_product_calls(chromium_page, tmp_path):
             assert result.state == "AWAITING_MANUAL_CONFIRMATION"
     assert await page.evaluate("clicks") == 0
     assert not strategy.attempt_store.pending()
+
+
+@pytest.mark.parametrize("level", ["readonly", "prepare"])
+async def test_real_browser_runner_resolves_target_and_guards_auto(
+    chromium_page, tmp_path, level
+):
+    from grab.browser.page_api import BrowserPageApi
+    from grab.core.leader import leader_scope
+    from grab.services.booking import BookingService, PageBookingStrategy
+    from grab.services.schedule import ScheduleService
+    from grab.services.session import SessionCaptureService
+    from grab.transactions.consent import ConsentManager
+    from grab.transactions.store import AttemptStore
+
+    page = chromium_page
+    payload = {
+        "data": {
+            "schedules": [
+                {
+                    "schedule_id": "slot",
+                    "doctor_id": "doc",
+                    "unit_id": "u",
+                    "dep_id": "d",
+                    "date": "2026-09-30",
+                    "status": "available",
+                }
+            ]
+        }
+    }
+    doctor_html = '<a id="addMark" unit_id="u" dep_id="d" doctor_id="doc"></a>'
+    booking_html = '<input name="schedule_id" value="slot"><input type="hidden" name="mid" value="member"><ul id="delts"><li val="time" class="selected">09:00-09:30</li></ul><button id="submitbtn">预约</button>'
+
+    async def route(request):
+        if request.request.url.startswith("https://gate.91160.com/"):
+            await request.fulfill(json=payload)
+        else:
+            await request.fulfill(
+                body=booking_html if "/ystep1/" in request.request.url else doctor_html,
+                content_type="text/html",
+            )
+
+    await page.context.route("**/*", route)
+    await page.add_init_script("""(() => {
+        window._user_key='SYN_KEY';
+        document.addEventListener('click',e=>{if(e.target.id==='submitbtn') localStorage.setItem('submitClicks',String(Number(localStorage.getItem('submitClicks')||0)+1));});
+    })();""")
+    await page.goto("https://www.91160.com/doctors/index/docid-doc.html")
+    config = GrabConfig(
+        doctor_ids=["doc"],
+        member_id="member",
+        hours=["9-10"],
+        brush_start_date="2026-09-30",
+        page_action_sleep_time="0",
+    )
+    store = AttemptStore(tmp_path)
+    consent = ConsentManager(store, interactive=True, prompt=lambda _: "AUTHORIZE")
+    strategy = PageBookingStrategy(
+        page,
+        config,
+        attempt_store=store,
+        authorization=consent.ensure,
+        consent_manager=consent,
+    )
+    runner = CanaryRunner(
+        SessionCaptureService(page, config),
+        ScheduleService(BrowserPageApi(page), config),
+        BookingService(strategy),
+        config,
+        ready=AsyncMock(return_value=True),
+        live_e2e=True,
+        live_booking=True,
+    )
+    result = await runner.run(level)
+    assert result.status == ("observed" if level == "readonly" else "prepared")
+    assert await page.evaluate("localStorage.getItem('submitClicks')") is None
+    assert not store.pending()
+    if level == "readonly":
+        assert "/doctors/" in page.url
+    else:
+        # Even a valid product grant cannot override the canary submit gate.
+        async with leader_scope():
+            assert consent.ensure(strategy.target, "member")
+        with canary_scope(CanaryPolicy("prepare", True, True, True)):
+            assert (
+                await strategy.submit_open_form(
+                    BookingForm(member_id="member", schedule_id="slot")
+                )
+            ).state == "AWAITING_MANUAL_CONFIRMATION"
+        assert await page.evaluate("localStorage.getItem('submitClicks')") is None

@@ -1,0 +1,76 @@
+{
+  "metadata": {
+    "schema_version": 1,
+    "captured_on": "2026-10-01",
+    "level": "prepare",
+    "path": "python",
+    "source": "synthetic",
+    "coverage": {
+      "members": 1,
+      "times": 2,
+      "fields": [
+        "date"
+      ],
+      "submit_controls": 1,
+      "scripts_removed": 0,
+      "raw_behavior_preserved": false
+    },
+    "schema_fingerprint": "80d096b5191227baca44f045525a919d98af354bb3c16bee5f9a98f4700a98de"
+  },
+  "snapshot": {
+    "version": 1,
+    "schedule_ids": [
+      "synthetic-schedule-1"
+    ],
+    "members": [
+      {
+        "ids": [
+          "synthetic-member-1"
+        ],
+        "label": "synthetic-label-1",
+        "index": 0,
+        "actionable": true,
+        "checked": false,
+        "blocked": false,
+        "address": {
+          "province": "",
+          "city": "",
+          "area": "",
+          "detail": ""
+        }
+      }
+    ],
+    "hidden_members": [],
+    "times": [
+      {
+        "value": "synthetic-time-1",
+        "label": "08:00-08:30",
+        "actionable": true,
+        "selected": false
+      },
+      {
+        "value": "synthetic-time-2",
+        "label": "09:00-09:30",
+        "actionable": true,
+        "selected": false
+      }
+    ],
+    "dates": [],
+    "fields": {
+      "date": [
+        {
+          "value": "2030-01-01",
+          "checked": false,
+          "actionable": true,
+          "kind": "input",
+          "options": []
+        }
+      ]
+    },
+    "submit": [
+      true
+    ],
+    "other_required": []
+  },
+  "html": "<form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-schedule-1\"><label>synthetic-label-1<input type=\"radio\" name=\"mid\" value=\"synthetic-member-1\" province_id=\"\" city_id=\"\" area_id=\"\" address=\"\"></label><ul id=\"delts\"><li val=\"synthetic-time-1\">08:00-08:30</li><li val=\"synthetic-time-2\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-01\"><button type=\"button\" id=\"submitbtn\">预约</button></form>"
+}

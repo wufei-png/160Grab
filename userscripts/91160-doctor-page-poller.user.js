@@ -1563,7 +1563,7 @@
         date: settings.filters.startDate || new Date().toISOString().slice(0, 10),
         days: "6",
       },
-      () => ownsBrowserLeader(owner),
+      () => ownsBrowserLeader(owner) && (!canaryLatched() || canaryAlive()),
     );
   }
 
@@ -1817,7 +1817,7 @@
   }
 
   function applyBookingDecision(snapshot, decision, guard = () => true) {
-    if (!decision.can_prepare) return;
+    if (!canaryMayPrepare() || !decision.can_prepare) return;
     if (decision.member_index !== null) {
       const matches = Array.from(document.querySelectorAll('input[type="radio"]')).filter(n => n.value === decision.member_id);
       if (matches.length !== 1 || !formActionable(matches[0])) return;
@@ -1909,6 +1909,7 @@
   }
 
   function triggerSubmitControl(control = findSubmitControl()) {
+    if (canaryLatched() && !(canaryAlive() && activeCanary.approvedSubmission)) return { method: "not-found", target: null };
     if (control.method !== "selector") return { method: "not-found", target: null };
     return { method: control.method, target: control.target, activation: activateSubmitElement(control.element) };
   }
@@ -1943,9 +1944,9 @@
   async function submitTransactionOwned(control, formState, memberSelection, target, authorized = false, evidenceAdapter = null, guard = () => true) {
     const owner = browserLeader;
     if (submissionBlocked()) return "OUTCOME_UNKNOWN";
-    if (!authorized || control.method !== "selector") return "AWAITING_MANUAL_CONFIRMATION";
+    if (!canaryMaySubmit(target, formState, memberSelection) || !authorized || control.method !== "selector") return "AWAITING_MANUAL_CONFIRMATION";
     let record;
-    try { record = await markSubmitInProgress(formState, memberSelection, null, 1, target, guard); }
+    try { record = await markSubmitInProgress(formState, memberSelection, null, 1, target, () => guard() && canaryMaySubmit(target, formState, memberSelection)); }
     catch (error) { return error.message === "cancelled" ? "AWAITING_MANUAL_CONFIRMATION" : "OUTCOME_UNKNOWN"; }
     let outcome = "OUTCOME_UNKNOWN";
     try {
@@ -2081,6 +2082,7 @@
   }
 
   async function runDoctorPageController(controllerId) {
+    if (canaryLatched()) return;
     return withBrowserLeader(() => runDoctorPageControllerOwned(controllerId));
   }
 
@@ -2210,6 +2212,7 @@
   }
 
   async function runBookingPageController(controllerId) {
+    if (canaryLatched()) return;
     return withBrowserLeader(() => runBookingPageControllerOwned(controllerId));
   }
 
@@ -2335,6 +2338,113 @@
     patchState((next) => ({ ...next, running: false, outcome }));
     setSummary("warn", outcome === "OUTCOME_UNKNOWN" ? "Submission outcome unknown; verify original site records." : "Booking form prepared; waiting for manual submit.");
     renderPanel();
+  }
+
+  // A canary latch survives navigation/reload, but approvals are memory-only.
+  // Start/reset/valid product consent cannot turn a low-level canary into auto.
+  const CANARY_KEY = 'grab160.canary.v1';
+  let activeCanary = null;
+  function canaryLatched() {
+    try { return globalThis.sessionStorage?.getItem(CANARY_KEY) !== null && globalThis.sessionStorage?.getItem(CANARY_KEY) !== undefined; }
+    catch (_error) { return true; }
+  }
+  function canaryAlive(policy = activeCanary) {
+    return Boolean(policy && policy === activeCanary && policy.valid && leaderNow() < policy.deadline);
+  }
+  function canaryMayPrepare() {
+    return !canaryLatched() || (canaryAlive() && activeCanary.level !== 'readonly' && activeCanary.prepareApproved);
+  }
+  function canaryScenario(target, form, member) {
+    return JSON.stringify([target.unitId, target.depId, target.doctorId, member.memberId, form.scheduleId, form.expectedDate, form.appointmentValue ?? null]);
+  }
+  function canaryMaySubmit(target, form, member) {
+    return !canaryLatched() || (canaryAlive() && activeCanary.level === 'submit' && activeCanary.liveE2e && activeCanary.liveBooking && activeCanary.approvedSubmission === canaryScenario(target, form, member));
+  }
+
+  function armCanary() {
+    globalThis.sessionStorage.setItem(CANARY_KEY, 'locked');
+    stopRun();
+  }
+
+  async function runCanaryFromPanel(body) {
+    const settings = readSettings();
+    const level = body.querySelector('[data-canary-level]').value;
+    const booking = parseBookingUrl(location.href);
+    const resolved = booking ? {target:settings.target} : resolveTargetFromSnapshot(snapshotCurrentDoctorPage(), settings.target);
+    const options = {target:resolved.target, date:settings.filters.startDate, memberId:settings.member.memberId,
+      scheduleId:booking?.scheduleId, LIVE_E2E:body.querySelector('[data-canary-e2e]').checked ? 1 : 0,
+      LIVE_BOOKING:body.querySelector('[data-canary-booking]').checked ? 1 : 0};
+    armCanary();
+    const result = await runCanary(level, options);
+    globalThis.alert(JSON.stringify(result)); // Safe status/counts only, local UI.
+  }
+
+  async function runCanary(level, options = {}) {
+    if (!['readonly', 'prepare', 'submit'].includes(level)) throw new Error('Explicit canary level required');
+    if (activeCanary || browserLeader) return {status:'leader_blocked', level};
+    globalThis.sessionStorage.setItem(CANARY_KEY, 'locked');
+    stopRun();
+    const maxPolls = options.maxPolls ?? 3;
+    const timeoutMs = options.timeoutMs ?? 120000;
+    if (!Number.isInteger(maxPolls) || maxPolls < 1 || maxPolls > 10 || !Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) throw new Error('Invalid canary budget');
+    if (level === 'submit' && !(options.LIVE_E2E === 1 && options.LIVE_BOOKING === 1)) return {status:'submit_gate_blocked', level};
+    const settings = readSettings();
+    if (!validFormDate(options.date) || (!isResolvedTarget(options.target) || options.target.unitId === '0')) return {status:'missing_target', level};
+    if (level !== 'readonly' && (!options.memberId || !settings.filters.hours.length)) return {status:'missing_scenario', level};
+    const policy = {level, valid:true, deadline:leaderNow()+timeoutMs, prepareApproved:false, approvedSubmission:null, liveE2e:options.LIVE_E2E === 1, liveBooking:options.LIVE_BOOKING === 1, polls:0, submitCalls:0};
+    activeCanary = policy;
+    const approve = options.ready ?? (async (phase, message) => globalThis.confirm(`${phase}: ${message}\nConfirm this specific local canary. No mixed runners. Unknown outcome requires original-site verification.`));
+    let timer;
+    const result = (status, state = null) => ({status, level, polls:policy.polls, submitCalls:policy.submitCalls, state});
+    try {
+      return await withBrowserLeader(async (owner) => {
+        const guard = () => canaryAlive(policy) && ownsBrowserLeader(owner);
+        const work = async () => {
+          if (!await approve('ready', 'Log in manually and verify the current target page.') || !guard()) return result('not_ready');
+          if (submissionBlocked()) return result('pending_blocked', 'OUTCOME_UNKNOWN');
+          if (level === 'readonly') {
+            const pageTarget = parseDoctorPageUrl(location.href);
+            const resolved = resolveTargetFromSnapshot(snapshotCurrentDoctorPage(), {});
+            if (!pageTarget || pageTarget.doctorId !== options.target.doctorId || !resolved.ok || JSON.stringify([resolved.target.unitId,resolved.target.depId,resolved.target.doctorId]) !== JSON.stringify([options.target.unitId,options.target.depId,options.target.doctorId])) return result('target_unresolved');
+            for (let i = 0; i < maxPolls && guard(); i++) {
+              policy.polls++;
+              const payload = await fetchDoctorSchedule(resolved.target, {...settings, filters:{...settings.filters,startDate:options.date}});
+              if (!guard()) return result('inconclusive_timeout');
+              if (extractRateLimitMessage(payload)) return result('rate_limited');
+              if (String(payload?.error_code ?? '') === '10021') return result('session_blocked');
+              const slots = filterSlots(parseDoctorSchedulePayload(payload, resolved.target), resolved.target, settings.filters).filter(s => s.date === options.date && s.unitId === resolved.target.unitId && s.depId === resolved.target.depId);
+              if (slots.some(s => s.status === 'available')) return result('observed');
+              if (i + 1 < maxPolls) await sleepMs(Math.max(3000, pickDelayMs(settings.pacing.pollMs)));
+            }
+            return result('inconclusive_no_slots');
+          }
+          // Operator opens the exact booking link manually; canary never navigates
+          // to another slot, retries a submission, or follows an unknown control.
+          const pageTarget = parseBookingUrl(location.href);
+          if (!pageTarget || pageTarget.unitId !== options.target.unitId || pageTarget.depId !== options.target.depId || pageTarget.scheduleId !== options.scheduleId) return result('target_unresolved');
+          const member = resolveMemberSelection({memberId:options.memberId});
+          const form = parseBookingFormState(settings.filters, options.scheduleId);
+          form.expectedDate = options.date;
+          if (!member.ok || !form.isValid || form.scheduleId !== options.scheduleId) return result('readiness_blocked');
+          const description = `${options.target.unitId}/${options.target.depId}/${options.target.doctorId}; member ${member.memberId}; ${options.date}; schedule ${form.scheduleId}; time ${form.appointmentValue ?? ''}; fields from existing page/explicit settings`;
+          if (!await approve('prepare', description) || !guard()) return result('prepare_not_approved');
+          policy.prepareApproved = true;
+          const preparation = await prepareBookingFormForSubmit(form, member, settings.address, settings.booking, {guard});
+          if (!preparation.ok || !guard()) return result('readiness_blocked');
+          if (level === 'prepare') return result('prepared', 'PREPARED');
+          if (!await approve('submit', description + '; ONE FINAL CLICK') || !guard()) return result('submit_not_approved');
+          policy.approvedSubmission = canaryScenario(options.target, form, member);
+          const authorized = settings.booking.submitMode === 'auto' && await ensureSubmissionConsent(options.target, member, {interactive:true});
+          if (!guard()) return result('inconclusive_timeout');
+          const control = findSubmitControl();
+          policy.submitCalls = 1;
+          const state = await submitTransaction(control, form, member, options.target, authorized, null, () => guard() && consentStillValid() && readSettings().booking.submitMode === 'auto' && readBookingFormReadiness(form, member, settings.address, settings.booking).ok && findSubmitControl().element === control.element);
+          return result('submit_observed', state);
+        };
+        return await Promise.race([work(), new Promise(resolve => { timer = setTimeout(() => { policy.valid = false; resolve(result('inconclusive_timeout', policy.submitCalls ? 'OUTCOME_UNKNOWN' : null)); }, Math.max(0, policy.deadline-leaderNow())); })]);
+      });
+    } catch (_error) { return result('stopped', policy.submitCalls ? 'OUTCOME_UNKNOWN' : null); }
+    finally { policy.valid = false; clearTimeout(timer); activeCanary = null; }
   }
 
   function normalizePanelPosition(position) {
@@ -3056,9 +3166,20 @@
         <button type="button" data-action="resolve-booked">核对：已预约</button>
         <button type="button" data-action="resolve-not-booked">核对：未预约</button>
       </div>
+      <details><summary>本机人工 canary</summary>
+        <div>先保存具体目标、日期/时段、就诊人及字段；readonly 停留医生页，prepare/submit 手动打开对应预约页。</div>
+        <button type="button" data-canary-arm>启用 canary 限制</button>
+        <select data-canary-level><option value="readonly">readonly</option><option value="prepare">prepare</option><option value="submit">submit</option></select>
+        <label><input type="checkbox" data-canary-e2e>LIVE_E2E=1</label>
+        <label><input type="checkbox" data-canary-booking>LIVE_BOOKING=1</label>
+        <button type="button" data-canary-run>运行并人工确认</button>
+        <div>默认最多 3 次查询、120 秒；无号源返回 inconclusive。限制跨刷新保留；结束后关闭此标签页。</div>
+      </details>
       ${state.activeView === "settings" ? renderSettingsView(settings) : ""}
       ${state.activeView === "logs" ? renderLogsView(state, settings) : ""}
     `;
+    body.querySelector('[data-canary-arm]')?.addEventListener("click", armCanary);
+    body.querySelector('[data-canary-run]')?.addEventListener("click", () => { void runCanaryFromPanel(body).catch(() => globalThis.alert('Canary stopped; inspect original site manually.')); });
     body.querySelector('[data-action="revoke-consent"]')?.addEventListener("click", revokeConsent);
     body.querySelector('[data-action="resolve-booked"]')?.addEventListener("click", () => resolvePending(true));
     body.querySelector('[data-action="resolve-not-booked"]')?.addEventListener("click", () => resolvePending(false));
@@ -3447,6 +3568,7 @@
 
   function bootstrapController(controllerId = null) {
     renderPanel();
+    if (canaryLatched()) return;
     const doctorTarget = parseDoctorPageUrl(location.href);
     if (doctorTarget) {
       const claimedControllerId = controllerId || claimPageController("doctor");
@@ -3476,7 +3598,10 @@
     );
   }
 
+  globalThis.__GRAB160_CANARY__ = { run: runCanary };
+
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
+    runCanary, armCanary, runCanaryFromPanel, CANARY_KEY,
     LEADER_LOCK, JOURNAL_LOCK, ownsBrowserLeader, withBrowserLeader, releaseBrowserLeader, pauseForLeaderLoss,
     runDoctorPageController, runBookingPageController, ensureSubmissionConsent, revokeConsent, writeSettings, readSettings,
     JOURNAL_KEY, readJournal, writeJournal: (journal) => withJournalLock(() => writeJournal(journal)), submissionBlocked, beginAttempt, finishAttempt, submitTransaction, resolvePending, startRun, stopRun, resetRuntimeState,
