@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.2.16
+// @version      0.3.0
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -21,7 +21,7 @@
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
   const PANEL_TOOLTIP_ID = "grab160-doctor-page-poller-tooltip";
-  const SCRIPT_VERSION = "0.2.16";
+  const SCRIPT_VERSION = "0.3.0";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -72,8 +72,9 @@
       rateLimitCooldownMs: [15000, 25000],
     },
     booking: {
-      autoSubmit: false,
-      maxSubmitAttemptsPerAppointment: 3,
+      submitMode: "auto",
+      autoSubmit: true,
+      maxPreSubmitAttempts: 3,
       autoReturnAfterSubmitFailure: false,
       diseaseDescription: DEFAULT_DISEASE_DESCRIPTION,
     },
@@ -213,7 +214,13 @@
 
   function normalizeSettings(rawSettings) {
     const merged = mergeConfig(CONFIG_DEFAULTS, rawSettings);
+    const sourceBooking = rawSettings?.booking ?? {};
+    const submitMode = sourceBooking.submitMode === undefined
+      ? (sourceBooking.autoSubmit === false ? "manual_confirm" : "auto")
+      : sourceBooking.submitMode;
+    if (!["auto", "manual_confirm"].includes(submitMode)) throw new Error("Invalid submission mode");
     return {
+      settingsVersion: 3,
       runtime: {
         autoStart: normalizeBoolean(merged.runtime.autoStart, false),
         startAt: normalizeStartAtValue(merged.runtime.startAt),
@@ -272,12 +279,13 @@
         ),
       },
       booking: {
-        autoSubmit: normalizeBoolean(merged.booking.autoSubmit, false),
-        maxSubmitAttemptsPerAppointment: normalizeInteger(
-          merged.booking.maxSubmitAttemptsPerAppointment,
-          CONFIG_DEFAULTS.booking.maxSubmitAttemptsPerAppointment,
+        submitMode,
+        autoSubmit: submitMode === "auto",
+        maxPreSubmitAttempts: Math.min(3, normalizeInteger(
+          sourceBooking.maxPreSubmitAttempts ?? sourceBooking.maxSubmitAttemptsPerAppointment,
+          CONFIG_DEFAULTS.booking.maxPreSubmitAttempts,
           { min: 1, max: 20 },
-        ),
+        )),
         autoReturnAfterSubmitFailure: normalizeBoolean(
           merged.booking.autoReturnAfterSubmitFailure,
           false,
@@ -431,10 +439,13 @@
 
   function readSettings() {
     try {
-      return normalizeSettings(readStoredValue(SETTINGS_KEY, null));
+      const raw = readStoredValue(SETTINGS_KEY, null);
+      const settings = normalizeSettings(raw);
+      if (raw && raw.settingsVersion !== 3) writeStoredValue(SETTINGS_KEY, settings);
+      return settings;
     } catch (error) {
       console.error("[160Grab error] Failed to load stored settings; using defaults.");
-      return normalizeSettings(null);
+      return normalizeSettings({booking:{submitMode:"manual_confirm"}});
     }
   }
 
@@ -468,10 +479,10 @@
           !(UNRESOLVED.has(r.state) || TERMINAL.has(r.state)) ||
           !Number.isFinite(Date.parse(r.created_at)) || !Number.isFinite(Date.parse(r.updated_at)) ||
           !["none", "matched_business", "human_verified"].includes(r.evidence_type) ||
-          ![null, "post_submit", "business_rejected", "interrupted"].includes(r.failure_class) || typeof r.human_action_required !== "boolean") throw new Error("storage");
+          ![null, "post_submit", "business_rejected", "interrupted"].includes(r.failure_class) || typeof r.human_action_required !== "boolean" || r.human_action_required !== UNRESOLVED.has(r.state) || TERMINAL.has(r.state) !== (r.evidence_type !== "none")) throw new Error("storage");
     }
     for (const r of journal.consents) {
-      if (!keys(r, ["binding_ref", "policy_version"]) || !/^[a-f0-9]{64}$/.test(r.binding_ref) || r.policy_version !== POLICY_VERSION) throw new Error("storage");
+      if (!keys(r, ["binding_ref", "policy_version"]) || !/^[a-f0-9]{64}$/.test(r.binding_ref) || !["submit-v0", POLICY_VERSION].includes(r.policy_version)) throw new Error("storage");
     }
     for (const r of journal.audit) {
       if (!keys(r, ["attempt_id", "state", "at"]) || !/^[a-f0-9]{32}$/.test(r.attempt_id) || !TERMINAL.has(r.state) || !Number.isFinite(Date.parse(r.at))) throw new Error("storage");
@@ -520,9 +531,10 @@
     return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
   }
 
-  async function beginAttempt(parts) {
+  async function beginAttempt(parts, guard = () => true) {
     const bookingRef = await journalReference(parts);
     const journal = readJournal();
+    if (!guard()) throw new Error("cancelled");
     if (journal.attempts.some((r) => UNRESOLVED.has(r.state) || r.booking_ref === bookingRef)) throw new Error("blocked");
     const now = new Date().toISOString();
     const record = { attempt_id: randomRef(), booking_ref: bookingRef, state: "SUBMITTING", created_at: now, updated_at: now, evidence_type: "none", failure_class: null, human_action_required: true };
@@ -548,6 +560,48 @@
     renderPanel();
   }
 
+  let consentRunNonce = null;
+  let consentDenied = false;
+
+  async function ensureSubmissionConsent(target, memberSelection, { accountRef = null, interactive = false } = {}) {
+    if (consentDenied || submissionBlocked()) return false;
+    if (!isCompleteTarget(target) || !memberSelection.memberId) return false;
+    consentRunNonce ??= randomRef();
+    const bindingRef = await journalReference([accountRef || consentRunNonce, memberSelection.memberId, target.unitId, target.depId, target.doctorId, POLICY_VERSION]);
+    const journal = readJournal();
+    if (journal.consents.some((c) => c.binding_ref === bindingRef && c.policy_version === POLICY_VERSION)) return true;
+    if (!interactive || typeof globalThis.confirm !== "function") return false;
+    const accepted = globalThis.confirm(
+      `医生目标：${target.unitId}/${target.depId}/${target.doctorId}；就诊人：${memberSelection.memberId}。\n` +
+      "自动模式会点击最终预约提交；未知结果必须在原站核对预约记录。\n" +
+      "禁止与 Python、其他浏览器或多机器混跑同一目标。\n" +
+      "此授权不替代站点协议、验证码或支付确认。\n" +
+      (accountRef ? "授权保存于本机。" : "账号不能可靠区分，授权仅本次页面运行有效，刷新/重启需再确认。")
+    );
+    if (!accepted) {
+      consentDenied = true;
+      const settings = readSettings();
+      settings.booking.submitMode = "manual_confirm";
+      writeSettings(settings);
+      return false;
+    }
+    if (submissionBlocked()) return false;
+    const latest = readJournal();
+    latest.consents.push({ binding_ref: bindingRef, policy_version: POLICY_VERSION });
+    writeJournal(latest);
+    return true;
+  }
+
+  function revokeConsent() {
+    const journal = readJournal();
+    journal.consents = [];
+    writeJournal(journal);
+    consentRunNonce = null;
+    consentDenied = true;
+    stopRun();
+    renderPanel();
+  }
+
   function defaultState() {
     return {
       version: 2,
@@ -555,6 +609,7 @@
       controllerId: null,
       activeView: "main",
       pollAttempt: 0,
+      preSubmitFailures: 0,
       lastTarget: null,
       pendingBooking: null,
       submittingBooking: null,
@@ -573,7 +628,7 @@
       const blocked = submissionBlocked();
       let latest = null;
       try { latest = readJournal().attempts.at(-1); } catch (_error) { /* fail closed */ }
-      state.outcome = blocked ? "OUTCOME_UNKNOWN" : latest?.state ?? "DISCOVERED";
+      state.outcome = blocked ? "OUTCOME_UNKNOWN" : UNRESOLVED.has(state.outcome) ? latest?.state ?? "DISCOVERED" : state.outcome ?? latest?.state ?? "DISCOVERED";
       if (blocked) { state.running = false; state.submittingBooking = { state: "OUTCOME_UNKNOWN" }; }
       else { state.submittingBooking = null; }
       state.logs = Array.isArray(state.logs) ? state.logs.map(safeLogEntry).filter(Boolean) : [];
@@ -646,11 +701,16 @@
 
   function prepareManualControllerStart(kind) {
     if (submissionBlocked()) return null;
+    consentRunNonce = null;
+    consentDenied = false;
     const controllerId = makeControllerId(kind);
     activeControllerId = controllerId;
     patchState((next) => ({
       ...next,
       running: true,
+      outcome: "DISCOVERED",
+      interactiveConsent: true,
+      preSubmitFailures: 0,
       controllerId,
       pollAttempt: 0,
       sessionRecoveryAttempts: 0,
@@ -795,7 +855,7 @@
     }
     const running = body.querySelector("[data-panel-running]");
     if (running) {
-      running.textContent = state.running ? "运行中" : "已停止";
+      running.textContent = state.outcome ?? "DISCOVERED";
     }
     const autoSubmit = body.querySelector("[data-panel-auto-submit]");
     if (autoSubmit) {
@@ -1358,21 +1418,6 @@
 
   function appointmentKey(scheduleId, appointmentValue) {
     return `${compactText(scheduleId)}::${compactText(appointmentValue) || "<none>"}`;
-  }
-
-  function getSubmitAttempts(scheduleId, appointmentValue) {
-    return Number(readState().submitAttempts[appointmentKey(scheduleId, appointmentValue)] ?? 0);
-  }
-
-  function recordSubmitAttempt(scheduleId, appointmentValue) {
-    const key = appointmentKey(scheduleId, appointmentValue);
-    return patchState((state) => ({
-      ...state,
-      submitAttempts: {
-        ...(state.submitAttempts ?? {}),
-        [key]: Number(state.submitAttempts?.[key] ?? 0) + 1,
-      },
-    })).submitAttempts[key];
   }
 
   function parseAppointmentOptions() {
@@ -2042,7 +2087,7 @@
     bookingConfig = CONFIG_DEFAULTS.booking,
     options = {},
   ) {
-    const attempts = Math.max(1, Number(options.attempts ?? 10));
+    const attempts = Math.min(3, Math.max(1, Number(options.attempts ?? bookingConfig.maxPreSubmitAttempts ?? 3)));
     const delayMs = Math.max(0, Number(options.delayMs ?? 250));
     let fillResult = null;
     let readiness = { ok: false, missing: ["not_checked"] };
@@ -2180,18 +2225,18 @@
     throw new Error("manual control required");
   }
 
-  async function markSubmitInProgress(formState, memberSelection, _fillResult, _attemptCount, target = readState().lastTarget) {
-    const record = await beginAttempt([target?.unitId, target?.depId, target?.doctorId, memberSelection.memberId, formState.scheduleId, formState.appointmentValue]);
+  async function markSubmitInProgress(formState, memberSelection, _fillResult, _attemptCount, target = readState().lastTarget, guard = () => true) {
+    const record = await beginAttempt([target?.unitId, target?.depId, target?.doctorId, memberSelection.memberId, formState.scheduleId, formState.appointmentValue], guard);
     activeControllerId = null;
     patchState((next) => ({ ...next, running: false, controllerId: null, pendingBooking: null, submittingBooking: record }));
     return record;
   }
 
-  async function submitTransaction(control, formState, memberSelection, target, authorized = false, evidenceAdapter = null) {
+  async function submitTransaction(control, formState, memberSelection, target, authorized = false, evidenceAdapter = null, guard = () => true) {
     if (submissionBlocked()) return "OUTCOME_UNKNOWN";
     if (!authorized || control.method !== "selector") return "AWAITING_MANUAL_CONFIRMATION";
     let record;
-    try { record = await markSubmitInProgress(formState, memberSelection, null, 1, target); }
+    try { record = await markSubmitInProgress(formState, memberSelection, null, 1, target, guard); }
     catch (_error) { return "OUTCOME_UNKNOWN"; }
     let outcome = "OUTCOME_UNKNOWN";
     try {
@@ -2274,6 +2319,7 @@
       controllerId: null,
       pendingBooking: null,
       submittingBooking: null,
+      outcome: submissionBlocked() ? "OUTCOME_UNKNOWN" : reason === "Stopped." ? state.outcome : "AWAITING_MANUAL_CONFIRMATION",
     }));
     setSummary("info", reason, "");
   }
@@ -2480,6 +2526,12 @@
       document.documentElement?.outerHTML ?? "",
     ]);
     if (rateLimitOnLoad) {
+      const failures = Number(state.preSubmitFailures ?? 0) + 1;
+      patchState((next) => ({ ...next, preSubmitFailures: failures }));
+      if (failures >= settings.booking.maxPreSubmitAttempts) {
+        stopRun("Booking form preparation failed; manual action required.");
+        return;
+      }
       await returnToDoctorAfterCurrentAttempt(
         target,
         "Booking page hit rate limiting.",
@@ -2496,19 +2548,7 @@
 
     const formState = parseBookingFormState(settings.filters, bookingTarget.scheduleId);
     if (!formState.isValid) {
-      await returnToDoctorAfterCurrentAttempt(
-        target,
-        "Booking form invalid.",
-        settings.pacing.bookingRetryMs,
-      );
-      return;
-    }
-
-    const attempts = getSubmitAttempts(formState.scheduleId, formState.appointmentValue);
-    if (attempts >= settings.booking.maxSubmitAttemptsPerAppointment) {
-      stopRun(
-        "Submit attempts exhausted; manual action required.",
-      );
+      stopRun("Booking form invalid.");
       return;
     }
 
@@ -2552,19 +2592,24 @@
     if (checkIdInfoPatch.installed) {
       appendLog("debug", "Installed checkIdInfo blank-response JSON patch.");
     }
-    if (!settings.booking.autoSubmit) {
+    let authorized = false;
+    try {
+      authorized = settings.booking.submitMode === "auto" && await ensureSubmissionConsent(target, memberSelection, { interactive: readState().interactiveConsent === true });
+    } catch (_error) {
+      stopRun("Submission outcome unknown; verify original site records.");
+      return;
+    }
+    if (!authorized) {
       patchState((next) => ({
         ...next,
         running: false,
         pendingBooking: null,
         submittingBooking: null,
+        outcome: "AWAITING_MANUAL_CONFIRMATION",
       }));
       setSummary(
         "info",
         "Booking form prepared; waiting for manual submit.",
-    "Booking form invalid.",
-    "Booking page hit rate limiting.",
-    "Booking submit failed.",
         {
           scheduleId: formState.scheduleId,
           appointmentValue: formState.appointmentValue,
@@ -2585,14 +2630,15 @@
       appendLog("debug", "Waited for booking page initialization before submit.", settle);
     }
     await sleepMs(pickDelayMs(settings.pacing.pageActionMs));
-    const beforeUrl = location.href;
+    // Stop/restart during an awaited prepare/settle revokes this controller.
+    if (!isControllerActive(controllerId)) return;
     const submitControl = findSubmitControl();
     if (submitControl.method === "not-found") {
       stopRun("Could not find a submit control on the booking page.");
       return;
     }
-    const outcome = await submitTransaction(submitControl, formState, memberSelection, target);
-    patchState((next) => ({ ...next, running: false }));
+    const outcome = await submitTransaction(submitControl, formState, memberSelection, target, authorized, null, () => isControllerActive(controllerId));
+    patchState((next) => ({ ...next, running: false, outcome }));
     setSummary("warn", outcome === "OUTCOME_UNKNOWN" ? "Submission outcome unknown; verify original site records." : "Booking form prepared; waiting for manual submit.");
     renderPanel();
   }
@@ -3312,12 +3358,14 @@
         <button type="button" data-action="settings">Settings</button>
         <button type="button" data-action="logs">Logs</button>
         <button type="button" data-action="reset-state">Reset State</button>
+        <button type="button" data-action="revoke-consent">撤销授权</button>
         <button type="button" data-action="resolve-booked">核对：已预约</button>
         <button type="button" data-action="resolve-not-booked">核对：未预约</button>
       </div>
       ${state.activeView === "settings" ? renderSettingsView(settings) : ""}
       ${state.activeView === "logs" ? renderLogsView(state, settings) : ""}
     `;
+    body.querySelector('[data-action="revoke-consent"]')?.addEventListener("click", revokeConsent);
     body.querySelector('[data-action="resolve-booked"]')?.addEventListener("click", () => resolvePending(true));
     body.querySelector('[data-action="resolve-not-booked"]')?.addEventListener("click", () => resolvePending(false));
     body.querySelector('[data-action="start"]')?.addEventListener("click", startRun);
@@ -3469,17 +3517,12 @@
           <summary><span>自动提交</span><span class="grab160-field-note">提交前最后一道开关</span></summary>
           <div class="grab160-section-body">
             <div class="grab160-warning-box">Auto Submit 开启后，脚本会在预约页准备完成时点击最终提交按钮；首次 smoke 建议保持关闭。</div>
-            ${renderCheck(
-              "booking.autoSubmit",
-              "Auto Submit",
-              settings.booking.autoSubmit,
-              "开启后会自动点击最终预约提交按钮；关闭时只准备表单，停在提交前等你手动确认。",
-            )}
+            ${renderField("Submit mode", "自动模式仍须明确授权；人工模式只准备表单。", `<select data-setting="booking.submitMode"><option value="auto" ${settings.booking.submitMode === "auto" ? "selected" : ""}>Auto</option><option value="manual_confirm" ${settings.booking.submitMode === "manual_confirm" ? "selected" : ""}>Manual confirm</option></select>`)}
             ${renderCheck(
               "booking.autoReturnAfterSubmitFailure",
               "Auto return after submit failure",
               settings.booking.autoReturnAfterSubmitFailure,
-              "提交失败后是否自动回到医生页继续刷；关闭时会停在失败页面方便你检查原因。",
+              "未知结果始终停下；此选项不能解除未决提交。",
             )}
             ${renderField(
               "Disease description",
@@ -3489,9 +3532,9 @@
               )}">`,
             )}
             ${renderField(
-              "Max submit attempts",
-              "同一个号源最多自动提交尝试次数，超过后停止，避免短时间重复提交。",
-              `<input data-setting="booking.maxSubmitAttemptsPerAppointment" type="number" min="1" max="20" value="${settings.booking.maxSubmitAttemptsPerAppointment}">`,
+              "Max pre-submit attempts",
+              "仅提交前准备重试，最多三次；进入提交边界后不再重试。",
+              `<input data-setting="booking.maxPreSubmitAttempts" type="number" min="1" max="3" value="${settings.booking.maxPreSubmitAttempts}">`,
             )}
           </div>
         </details>
@@ -3631,10 +3674,10 @@
       "address.detail",
       "filters.startDate",
       "runtime.startAt",
-      "booking.autoSubmit",
+      "booking.submitMode",
       "booking.autoReturnAfterSubmitFailure",
       "booking.diseaseDescription",
-      "booking.maxSubmitAttemptsPerAppointment",
+      "booking.maxPreSubmitAttempts",
       "session.recoveryEnabled",
       "session.keepAliveIntervalSeconds",
       "session.recoveryMaxAttempts",
@@ -3690,14 +3733,6 @@
     body.querySelector("[data-save-settings]")?.addEventListener("click", () => {
       try {
         const next = collectSettingsFromPanel(body, settings);
-        if (next.booking.autoSubmit && !settings.booking.autoSubmit) {
-          const confirmed = globalThis.confirm?.(
-            "autoSubmit will click the final booking submit control automatically. Continue?",
-          );
-          if (!confirmed) {
-            return;
-          }
-        }
         writeSettings(next);
         setSummary("info", "Settings saved.", "", { force: true });
       } catch (error) {
@@ -3742,6 +3777,7 @@
   }
 
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
+    runBookingPageController, ensureSubmissionConsent, revokeConsent, writeSettings, readSettings,
     JOURNAL_KEY, readJournal, writeJournal, submissionBlocked, beginAttempt, finishAttempt, submitTransaction, resolvePending, startRun, stopRun, resetRuntimeState,
     appendLog,
     setSummary,

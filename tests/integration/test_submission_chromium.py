@@ -3,14 +3,13 @@ import pytest
 from grab.models.schemas import BookingForm, DoctorPageTarget
 from grab.services.booking import PageBookingStrategy
 from grab.transactions.store import AttemptStore
-from tests.integration.test_booking_chromium import chromium_page  # noqa: F401, F811
 
 
 @pytest.mark.parametrize("effect", ["weak-success", "rate-limit", "lost-response"])
 async def test_real_locator_click_is_durable_and_never_repeated(
     chromium_page,
     tmp_path,
-    effect,  # noqa: F811
+    effect,
 ):
     page = chromium_page
     await page.context.route(
@@ -52,7 +51,7 @@ async def test_real_locator_click_is_durable_and_never_repeated(
 )
 async def test_userscript_reload_and_restart_never_clear_unknown(
     chromium_page,
-    effect,  # noqa: F811
+    effect,
 ):
     from tests.contracts.booking.scenarios import USERSCRIPT
 
@@ -102,3 +101,60 @@ async def test_userscript_reload_and_restart_never_clear_unknown(
         "clicks": "1",
         "state": "OUTCOME_UNKNOWN",
     }
+
+
+@pytest.mark.parametrize("mode", ["accept", "reject", "noninteractive", "manual"])
+async def test_userscript_real_controller_enforces_new_consent(chromium_page, mode):
+    from tests.contracts.booking.scenarios import USERSCRIPT
+
+    page = chromium_page
+    await page.context.route(
+        "**/*",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body="""<form id="suborder">
+        <input name="schedule_id" value="slot"><input name="member_id" value="SYN_MEMBER">
+        <button id="submitbtn" type="button">预约</button></form>""",
+        ),
+    )
+    await page.goto(
+        "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
+    )
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
+    await page.evaluate(USERSCRIPT.read_text())
+    prompts = []
+
+    async def respond(dialog):
+        prompts.append(dialog.message)
+        if mode == "accept":
+            await dialog.accept()
+        else:
+            await dialog.dismiss()
+
+    page.on("dialog", respond)
+    result = await page.evaluate(
+        """async (mode) => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        h.writeSettings({booking:{autoSubmit:mode !== 'manual', autoReturnAfterSubmitFailure:true},target:{unitId:'u',depId:'d',doctorId:'doc'}, member:{memberId:'SYN_MEMBER'},pacing:{pageActionMs:[0,0]}});
+        window.clicks = 0;
+        document.querySelector('#submitbtn').onclick = () => { clicks++; };
+        let id;
+        if (mode === 'noninteractive') { id = 'booking:synthetic'; h.writeState({running:true,controllerId:id}); }
+        else id = h.prepareManualControllerStart('booking');
+        await h.runBookingPageController(id);
+        return {clicks, outcome:h.readState().outcome, settings:h.readSettings(), journal:h.readJournal()};
+    }""",
+        mode,
+    )
+    assert result["clicks"] == (1 if mode == "accept" else 0)
+    assert result["outcome"] == (
+        "OUTCOME_UNKNOWN" if mode == "accept" else "AWAITING_MANUAL_CONFIRMATION"
+    )
+    assert len(prompts) == (1 if mode in {"accept", "reject"} else 0)
+    if prompts:
+        assert (
+            "SYN_MEMBER" in prompts[0] and "未知" in prompts[0] and "禁止" in prompts[0]
+        )
+    assert "SYN_MEMBER" not in str(result["journal"])
+    if mode == "reject":
+        assert result["settings"]["booking"]["submitMode"] == "manual_confirm"

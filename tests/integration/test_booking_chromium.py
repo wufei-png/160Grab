@@ -1,22 +1,8 @@
 import pytest
-from playwright.async_api import async_playwright
 
 from grab.models.schemas import GrabConfig
 from grab.services.booking import PageBookingStrategy
 from tests.contracts.booking.scenarios import SCENARIOS, USERSCRIPT, read_html
-
-
-@pytest.fixture
-async def chromium_page():
-    # A fresh transient context: no local profile, authentication or live network.
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(service_workers="block")
-        try:
-            yield await context.new_page()
-        finally:
-            await context.close()
-            await browser.close()
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda scenario: scenario["id"])
@@ -75,16 +61,19 @@ async def test_booking_parsers_share_real_chromium_dom(chromium_page, scenario):
         scenario["filters"]["hours"],
     )
     assert js_result == expected
-    assert await page.locator('[name="sch_date"]').input_value() == scenario[
-        "selection"
-    ]["date"]
+    assert (
+        await page.locator('[name="sch_date"]').input_value()
+        == scenario["selection"]["date"]
+    )
     assert await page.locator('[name="member_id"]').input_value() == parsed.member_id
     assert not await page.locator('[name="member_id"]').is_checked()
-    assert await page.locator('[type="submit"]').count() == scenario[
-        "submit_candidate_count"
-    ]
-    assert await page.evaluate("globalThis.__syntheticClicks") == scenario["expected"][
-        "click_count"
-    ]
+    assert (
+        await page.locator('[type="submit"]').count()
+        == scenario["submit_candidate_count"]
+    )
+    assert (
+        await page.evaluate("globalThis.__syntheticClicks")
+        == scenario["expected"]["click_count"]
+    )
     assert await page.evaluate("globalThis.__syntheticSubmits") == 0
     assert unexpected_requests == []

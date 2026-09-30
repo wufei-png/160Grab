@@ -36,6 +36,7 @@ class PageBookingStrategy:
         attempt_store=None,
         authorization=None,
         evidence_adapter=None,
+        consent_manager=None,
     ):
         self.page = page
         self.config = config
@@ -45,6 +46,7 @@ class PageBookingStrategy:
         self.attempt_store = attempt_store or AttemptStore()
         self.authorization = authorization
         self.evidence_adapter = evidence_adapter
+        self.consent_manager = consent_manager
         self._run_blocked = False
         self.member_id: str | None = None
         self.target: DoctorPageTarget | None = None
@@ -59,6 +61,8 @@ class PageBookingStrategy:
         self.member_id = member_id
 
     def prepare(self, target: DoctorPageTarget, member_id: str) -> None:
+        if self.consent_manager:
+            self.consent_manager.new_identity_session()
         self.target = target
         self.member_id = member_id
 
@@ -337,9 +341,15 @@ class PageBookingStrategy:
             return blocked
         if not form.is_valid or form.member_id != self.member_id or not self.target:
             return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
-        if not self.authorization or not self.authorization(
-            self.target, form.member_id
-        ):
+        try:
+            authorized = self.authorization and self.authorization(
+                self.target, form.member_id
+            )
+        except StoreBlocked:
+            return BookingResult(
+                state=BookingState.OUTCOME_UNKNOWN, failure_class="storage"
+            )
+        if not authorized:
             return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         await self._sleep_page_action("submitting booking form")
         control = await self._submit_control()

@@ -19,6 +19,7 @@ from grab.services.auth import AuthService
 from grab.services.booking import BookingService, PageBookingStrategy
 from grab.services.schedule import ScheduleService
 from grab.services.session import SessionCaptureService
+from grab.transactions.consent import ConsentManager
 from grab.transactions.store import AttemptStore, StoreBlocked
 from grab.utils.config_loader import load_config
 from grab.utils.config_writer import write_browser_profile_name
@@ -353,12 +354,21 @@ def build_runner(config, client: PlaywrightClient, reporter=None) -> GrabRunner:
             await reporter.record_snapshot(label=label, path=path)
         return path
 
+    attempt_store = AttemptStore()
+    consent = ConsentManager(
+        attempt_store, prompt=input, interactive=sys.stdin.isatty()
+    )
     page_strategy = PageBookingStrategy(
         client.page,
         config=config,
         sleep=asyncio.sleep,
         debug_snapshot=capture_snapshot,
         reporter=reporter,
+        attempt_store=attempt_store,
+        authorization=lambda target, member: (
+            config.booking.submit_mode == "auto" and consent.ensure(target, member)
+        ),
+        consent_manager=consent,
     )
 
     def sync_active_page(page) -> None:

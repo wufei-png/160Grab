@@ -86,7 +86,9 @@ class AttemptStore:
                 raise ValueError
             if record["state"] not in UNRESOLVED | TERMINAL:
                 raise ValueError
-            if not isinstance(record["human_action_required"], bool):
+            if type(record["human_action_required"]) is not bool or record[
+                "human_action_required"
+            ] != (record["state"] in UNRESOLVED):
                 raise ValueError
             for key in ("attempt_id", "booking_ref"):
                 if len(bytes.fromhex(record[key])) != (
@@ -108,11 +110,12 @@ class AttemptStore:
                 "interrupted",
             }:
                 raise ValueError
+            if (record["state"] in TERMINAL) != (record["evidence_type"] != "none"):
+                raise ValueError
         for consent in state["consents"]:
-            if (
-                set(consent) != {"binding_ref", "policy_version"}
-                or consent["policy_version"] != POLICY_VERSION
-            ):
+            if set(consent) != {"binding_ref", "policy_version"} or consent[
+                "policy_version"
+            ] not in {"submit-v0", POLICY_VERSION}:
                 raise ValueError
             if len(bytes.fromhex(consent["binding_ref"])) != 32:
                 raise ValueError

@@ -112,8 +112,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.2.16" in content
-    assert 'const SCRIPT_VERSION = "0.2.16";' in content
+    assert "// @version      0.3.0" in content
+    assert 'const SCRIPT_VERSION = "0.3.0";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -197,7 +197,7 @@ def test_normalize_settings_keeps_python_config_semantics_for_business_fields():
         "detail": "深南花园",
     }
     assert result["booking"]["autoSubmit"] is True
-    assert result["booking"]["maxSubmitAttemptsPerAppointment"] == 4
+    assert result["booking"]["maxPreSubmitAttempts"] == 3
     assert result["booking"]["diseaseDescription"] == "门诊就诊，具体病情现场面诊沟通"
     assert result["session"]["keepAliveIntervalSeconds"] == 180
     assert result["logging"]["level"] == "debug"

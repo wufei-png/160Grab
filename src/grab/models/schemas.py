@@ -155,6 +155,10 @@ class NotificationsConfig(BaseModel):
         return value
 
 
+class BookingConfig(BaseModel):
+    submit_mode: Literal["auto", "manual_confirm"] = "auto"
+
+
 class GrabConfig(BaseModel):
     username: str | None = None
     password: str | None = None
@@ -171,6 +175,7 @@ class GrabConfig(BaseModel):
     enable_appoint: bool = False
     appoint_time: datetime | None = None
     booking_strategy: str = "page"
+    booking: BookingConfig = Field(default_factory=BookingConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

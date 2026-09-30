@@ -77,3 +77,102 @@ sandbox.document.getElementById = () => ({querySelector:()=>body});""",
     )
     assert result["blocked"]
     assert "SYN_" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("legacy,mode", [(True, "auto"), (False, "manual_confirm")])
+def test_legacy_boolean_migrates_without_authorization(legacy, mode):
+    result = _run_hook(f"""(async () => {{
+      const settings = hooks.normalizeSettings({{booking:{{autoSubmit:{json.dumps(legacy)}, consent:true, maxSubmitAttemptsPerAppointment:20}}}});
+      const allowed = await hooks.ensureSubmissionConsent({{unitId:'u',depId:'d',doctorId:'doc'}}, {{memberId:'member'}});
+      return {{settings, allowed}};
+    }})()""")
+    assert result["settings"]["booking"]["submitMode"] == mode
+    assert result["settings"]["booking"]["maxPreSubmitAttempts"] == 3
+    assert result["allowed"] is False
+
+
+def test_consent_bound_to_member_target_and_run():
+    result = _run_hook("""(async () => {
+      let prompts = [];
+      sandbox.confirm = (text) => { prompts.push(text); return true; };
+      const target = {unitId:'u',depId:'d',doctorId:'SYN_DOCTOR'};
+      const member = {memberId:'SYN_MEMBER'};
+      await hooks.ensureSubmissionConsent(target, member, {interactive:true});
+      await hooks.ensureSubmissionConsent(target, member, {interactive:true});
+      await hooks.ensureSubmissionConsent({...target,doctorId:'other'}, member, {interactive:true});
+      await hooks.ensureSubmissionConsent(target, {memberId:'other'}, {interactive:true});
+      return {prompts, journal:hooks.readJournal()};
+    })()""")
+    assert len(result["prompts"]) == 3
+    assert "未知" in result["prompts"][0] and "禁止" in result["prompts"][0]
+    assert "SYN_" not in json.dumps(result["journal"])
+
+
+def test_rejected_consent_keeps_manual_mode():
+    result = _run_hook("""(async () => {
+      sandbox.confirm = () => false;
+      let stored = null;
+      sandbox.GM_setValue = (_key, value) => { stored = value; };
+      const allowed = await hooks.ensureSubmissionConsent({unitId:'u',depId:'d',doctorId:'doc'}, {memberId:'member'}, {interactive:true});
+      return {allowed, stored};
+    })()""")
+    assert result["allowed"] is False
+    assert result["stored"]["booking"]["submitMode"] == "manual_confirm"
+
+
+def test_human_resolution_leaves_audit_and_same_booking_cannot_repeat():
+    result = _run_hook("""(async () => {
+      const record = await hooks.beginAttempt(['SYN_BOOKING']);
+      hooks.finishAttempt(record.attempt_id, 'CONFIRMED_NO_EFFECT', true);
+      let blocked = false;
+      try { await hooks.beginAttempt(['SYN_BOOKING']); } catch (_) { blocked = true; }
+      return {blocked, journal:hooks.readJournal()};
+    })()""")
+    assert result["blocked"]
+    assert result["journal"]["audit"][0]["state"] == "CONFIRMED_NO_EFFECT"
+    assert "SYN_" not in json.dumps(result["journal"])
+
+
+def test_revoke_preserves_pending_and_resolution_updates_panel_outcome():
+    result = _run_hook(
+        """(async () => {
+      await hooks.ensureSubmissionConsent({unitId:'u',depId:'d',doctorId:'doc'}, {memberId:'member'}, {interactive:true});
+      const record = await hooks.beginAttempt(['slot']);
+      hooks.revokeConsent();
+      const pending = hooks.submissionBlocked();
+      hooks.resolvePending(false);
+      return {pending, blocked:hooks.submissionBlocked(), state:hooks.readState().outcome, journal:hooks.readJournal()};
+    })()""",
+        extra_js="""sandbox.console.log = sandbox.console.warn = () => undefined;
+const body = {innerHTML: '', querySelector:()=>null};
+sandbox.document.getElementById = () => ({querySelector:()=>body});""",
+    )
+    assert result["pending"]
+    assert not result["blocked"]
+    assert result["state"] == "CONFIRMED_NO_EFFECT"
+    assert result["journal"]["consents"] == []
+    assert len(result["journal"]["audit"]) == 1
+
+
+def test_prior_policy_is_not_current_consent():
+    result = _run_hook("""(async () => {
+      const target = {unitId:'u',depId:'d',doctorId:'doc'};
+      const member = {memberId:'member'};
+      await hooks.ensureSubmissionConsent(target, member, {interactive:true, accountRef:'account'});
+      const journal = hooks.readJournal();
+      journal.consents[0].policy_version = 'submit-v0';
+      hooks.writeJournal(journal);
+      const allowed = await hooks.ensureSubmissionConsent(target, member, {accountRef:'account'});
+      return allowed;
+    })()""")
+    assert result is False
+
+
+def test_stop_during_hashing_never_enters_click_boundary():
+    result = _run_hook('''(async () => {
+      let clicks = 0;
+      const outcome = await hooks.submitTransaction({method:'selector',element:{click(){clicks++;}}}, {scheduleId:'slot'}, {memberId:'member'}, {}, true, null, () => false);
+      return {clicks, pending:hooks.submissionBlocked(), outcome};
+    })()''')
+    assert result['clicks'] == 0
+    assert not result['pending']

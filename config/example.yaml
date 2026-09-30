@@ -37,7 +37,7 @@ hours:
 sleep_time: "3000-5000"
 # 打开预约页、提交前随机停顿(ms)
 page_action_sleep_time: "400-900"
-# 同一号源重试间隔(ms)
+# 仅提交前打开/准备的瞬态失败重试间隔(ms)，最多三次
 booking_retry_sleep_time: "2000-4000"
 # 命中「访问次数过多」等提示后的冷却(ms)
 rate_limit_sleep_time: "15000-25000"
@@ -45,3 +45,6 @@ brush_start_date:
 enable_appoint: false
 appoint_time:
 booking_strategy: "page"
+booking:
+  # auto 仍须首次明确授权；manual_confirm 仅准备后交人工
+  submit_mode: "auto"

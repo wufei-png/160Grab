@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "scenarios": [
+    {"id": "timeout", "error": true, "authorized": true, "evidence": null, "matched": true, "state": "OUTCOME_UNKNOWN", "clicks": 1},
+    {"id": "navigation-race", "error": true, "authorized": true, "evidence": null, "matched": true, "state": "OUTCOME_UNKNOWN", "clicks": 1},
+    {"id": "post-submit-rate-limit", "error": true, "authorized": true, "evidence": null, "matched": true, "state": "OUTCOME_UNKNOWN", "clicks": 1},
+    {"id": "response-lost", "error": true, "authorized": true, "evidence": null, "matched": true, "state": "OUTCOME_UNKNOWN", "clicks": 1},
+    {"id": "weak-page-change", "error": false, "authorized": true, "evidence": null, "matched": true, "state": "OUTCOME_UNKNOWN", "clicks": 1},
+    {"id": "matched-success", "error": false, "authorized": true, "evidence": "CONFIRMED_SUCCESS", "matched": true, "state": "CONFIRMED_SUCCESS", "clicks": 1},
+    {"id": "business-rejection", "error": false, "authorized": true, "evidence": "CONFIRMED_NO_EFFECT", "matched": true, "state": "CONFIRMED_NO_EFFECT", "clicks": 1},
+    {"id": "wrong-booking-evidence", "error": false, "authorized": true, "evidence": "CONFIRMED_SUCCESS", "matched": false, "state": "OUTCOME_UNKNOWN", "clicks": 1},
+    {"id": "unauthorized", "error": false, "authorized": false, "evidence": null, "matched": true, "state": "AWAITING_MANUAL_CONFIRMATION", "clicks": 0}
+  ]
+}
