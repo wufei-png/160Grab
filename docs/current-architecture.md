@@ -1,7 +1,7 @@
 # 当前架构与核验证据
 
 核验日期：2026-09-30；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -27,7 +27,7 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 | bool 结果、同 slot 三次 submit、弱成功判定、失败换 slot/继续轮询 | `models/schemas.py::BookingResult/RunResult`；`services/booking.py::submit_with_retry/_is_booking_success/try_book_first_available`；`GrabRunner._poll_and_book`；JS `inspectBookingPage` |
 | 假病情/单 radio fallback；Python 缺 card/address/date；JS 默认地区/通用病情、reset 可清 pending | Python `fill_booking_form`；JS `CONFIG_DEFAULTS`、fill/readiness、start/stop/reset |
 | 宽控件选择、form.submit、follow-up 待审计 | Python `_trigger_submit_control/submit_booking_via_page`；JS `findSubmitControl/clickFollowupControl/checkIdInfo` |
-| 原始 event 外发、直接日志、敏感快照 | `observability/reporter.py/notifications.py`；runner/booking/session/main loguru；`PlaywrightClient.capture_snapshot/collect_debug_state`；JS `appendLog/state` |
+| 隐私 sink 已按 S02 收口；Windows 权限能力仍未实测 | `observability/privacy.py/safe_logging.py/reporter.py/notifications.py`；`utils/private_files.py/retention.py`；JS `appendLog/state` |
 | 缓存 key 失效判断不足、一般网络异常退出 | `ScheduleService._resolve_schedule_user_key/fetch_doctor_schedule/poll` |
 | 时间 naive；只有 profile 锁/页面 controller，无业务互斥；无 channel | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
 | live 缺 ready/完整目标解析/有限等待闭环 | `tests/e2e/conftest.py::LiveRunner`；待 S06 |
@@ -48,7 +48,30 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 - PR/push CI 与 release 验证前置均安装 Node/Chromium，锁定 sync、Ruff、Node 语法检查及
   unit/contract/本地 Chromium 检查；明确排除 live。release 的打包和 frozen smoke 流程保留。
 
-S01 未实现隐私 sink、提交事务/持久授权、严格真实值填表或互斥；这些仍分别属于 S02–S05。
+S01 阶段尚未实现隐私 sink；S02 数据边界成果见下。提交事务/持久授权、严格真实值填表与互斥仍属于 S03–S05。
+
+## S02 已实现事实
+
+- [数据合同](security-and-privacy.md) 已固化。JSONL/reporter 使用字段与值白名单，拒绝未知键、
+  自由 message、nested selector/value、URL、服务器文本和异常。直接日志使用固定消息与安全 logger，
+  CLI 不渲染 exception traceback；登录诊断只保留安全 readiness，真实就诊人选择提示与日志分开。
+- JS console、panel 日志和摘要使用相同封闭投影；读取 sessionStorage 时立即丢弃旧日志/摘要，
+  已版本化条目也重新投影并过滤 7 天窗口；原有 pending/submitting 与计数保留。
+- 桌面/webhook 通知使用最小安全投影；失败只记录固定分类，不改变预约结果。
+  webhook destination/header 作为传输配置保留，但不复制到 body/错误输出。
+- `private_files` 在 POSIX 逐级 no-follow 并以 directory descriptor 锚定读写/清理；
+  新目录 0700、文件 0600，Chromium 启动继承 0077 umask。拒绝 linked profile/marker 与文件 hardlink，
+  不复制 profile，不递归 chmod 已有目录；配置写回/打包模板也使用安全入口。
+- 普通 debug 只有安全 JSON，cookie metadata 仅为布尔与计数。原始 HTML/截图须显式
+  `GRAB_DEBUG_DIR` 加 `logging.include_sensitive_debug=true` 且目录匹配，只写本地私有文件；
+  文件名没有 label/个人值，普通日志与通知不包含 raw 内容。生成诊断文件名已纳入 Git ignore。
+- `--cleanup-data [--dry-run]` 不启动浏览器，输出仅计数。普通 JSONL 保留 7 天、debug 24 小时，
+  只删除根目录匹配应用格式的单链接常规文件；保护 profile 及非输出命名空间的 attempt journal。
+  启动/快照时机会式清理；没有退出后后台服务，原始快照需在 24 小时内人工删除或运行清理命令。
+  旧原始快照 ownership 不明时不自动删除。S06 现场 converter 仍未实现，不认可原始文件为 fixture。
+
+S02 未改变预约提交/填表/恢复语义，也未执行真实登录/预约或复制认证状态。Windows ACL/reparse
+与跨平台/frozen 行为未实测，不能把 POSIX 模式和 descriptor 验证当成跨平台保证。
 
 ## 已取得证据
 
@@ -69,3 +92,18 @@ CI 配置 Node 22，但未执行远端 CI、Windows/Linux 或 frozen 打包验�
 真实观察仅为 Chrome 的 `https://www.91160.com/` 呈现已登录 UI；未验证服务端 session、医生/排班/成员/预约页
 或提交，未导出认证资料。Chrome 用户 profile 与 Python 专用 profile 不共享这份登录证据。
 后续 canary 须重新取证；现有 `LIVE_BOOKING=1` 最终提交门槛保留。
+
+S02：锁定离线 `uv sync --locked --offline --extra dev`、Ruff、Node 两份 JS 语法通过。
+完整 **222 passed, 2 live skipped**；contract/integration **17 passed**，含真实本地 Chromium **6 passed**。
+CI 同命令 **222 passed, 2 deselected**。新增隐私 Chromium 场景使用临时 context、本地 synthetic route，
+包含 DOM/script、cookie、URL 与 JS console/storage 注入；普通 debug 只生成安全 JSON、canary 零明文。
+注入、通知失败、POSIX 权限/link、retention/dry-run 测试通过；四阶段相关检查为 145/58/92/53 passed。
+本机 Node v24.15.0、Playwright 1.58.0；锁文件未改。两个 live 因未启用 `LIVE_E2E=1` 跳过，
+未执行远端 CI、Windows/Linux/frozen/release 或现场 fixture 导出。
+
+S02 新鲜只读委派 review 审查 `f14a7ea..d81b350` 及完成证据草稿，发现 1 个 P2：JS 固定消息白名单
+遗漏人工等待/限频摘要，导致面板阶段错误。独立复核后接受，`040b911` 补齐固定工作流消息并将
+动态摘要改为安全固定提示，回归证明人工等待/两条冷却/失败阶段正确且 detail 仍无敏感明文。
+无拒绝项；reviewer 独立检查两组相关套件 75/111 passed、Ruff/Node/whitespace，以及临时真实
+Chromium profile 新目录/文件 0700/0600。修复后相关 62 passed、完整 222 passed/2 live skipped、
+CI 同命令 222 passed/2 deselected；最终修复由主实现者验证，未声称 reviewer 重新审查修复提交。

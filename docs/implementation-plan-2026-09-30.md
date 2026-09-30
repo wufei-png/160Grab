@@ -230,7 +230,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 | 会话 | 状态 | commits | 检查 / review / 现场证据 | 剩余 gate |
 |---|---|---|---|---|
 | S01 | 已完成（2026-09-30） | `4dc188f`, `e57aa95`, `89bc2ce`；记录提交见文件历史 | Ruff/Node 通过；完整 197 passed, 2 live skipped；contract/integration 16 passed（含 Chromium 5）；只读 review: No findings，独立复核 48 passed | 远端 CI/live/跨平台 release/frozen 未验证；后续安全 gate 仍属 S02–S05 |
-| S02 | 未开始 | — | — | S01 |
+| S02 | 已完成（2026-09-30） | `8c167c9`, `f3d0a47`, `c9cd962`, `d81b350`, `040b911`；记录提交见文件历史 | 完整 222 passed, 2 live skipped；contract/integration 17 passed（Chromium 6）；Ruff/Node/锁定离线 sync 通过；只读 review 1 P2 接受并修复，相关 62 passed | Windows/远端 CI/live/frozen 未验证；后续授权/提交/互斥 gate 属于 S03–S05 |
 | S03 | 未开始 | — | — | S02 |
 | S04 | 未开始 | — | — | S03 |
 | S05 | 未开始 | — | — | S04 |
@@ -268,3 +268,41 @@ reviewer 独立复核相关测试 **48 passed**（含 Chromium 5）、Ruff、两
 审查覆盖边界同上述验证记录，最终仅将结论与完成状态写回文档。
 README、future-improvements、启动提示词的会话前改动保留且未纳入本会话提交；
 按任务要求更新并纳入原先未跟踪的本计划与 current-architecture 文件。
+
+### S02 会话证据（2026-09-30）
+
+会话基线 `f14a7ea`；S01 前置完成，合同与 Chromium harness 已实际通过。
+本会话仅实现 S02，没有改变已确认决策或执行 S03–S09。按依赖顺序作四个本地提交，不 push：
+
+1. `8c167c9`：Python 输出字段/值白名单、固定直接日志、安全 exception/登录诊断，
+   JS console/state 日志投影与旧日志迁移；相关回归 **145 passed**。
+2. `f3d0a47`：桌面/webhook 最小投影与通知失败隔离；相关检查 **58 passed**。
+3. `c9cd962`：私有文件、profile/link 防护、0077 Chromium umask、原始快照双开关及安全 metadata；
+   配置模板/写回走私有入口；相关检查 **92 passed**，含本地 Chromium 6。
+4. `d81b350`：7 天/24 小时 retention、dry-run/cleanup CLI、profile/未决记录命名空间保护、
+   数据合同与诊断 Git ignore；retention/CLI/隐私/浏览器相关检查 **53 passed**，完整套件见下。
+
+最终适用检查：锁定离线 sync（dev）、Ruff、Node userscript/harness 语法、差异空白检查均通过，
+`uv.lock` 未改。完整 **222 passed, 2 skipped**；contract/integration **17 passed**（含真实 Chromium 6）；
+CI 同命令 `pytest -q -m "not live" --browser chromium` 为 **222 passed, 2 deselected**。
+Synthetic canary 覆盖姓名/证件/phone/member/token/card/address，注入 nested selector/value、message、
+exception、URL、JS detail/旧日志、notification error、HTML script/cookie，逐 sink 捕获零明文。
+原始 opt-in 仅在临时本地目录生成 HTML/PNG，普通 debug 仅安全 JSON；POSIX 权限/link/hardlink
+与清理目录替换、retention 边界、dry-run、profile/未决记录保护通过。
+
+验证限制：本机 Node v24.15.0、Playwright 1.58.0、macOS arm64 Chromium；未运行远端 CI、Windows/Linux
+或 frozen/release。两个 live 因未启用 `LIVE_E2E=1` 跳过。未读/复制真实 profile/认证资料，未执行真实
+登录/预约、上传或现场 fixture 导出；S06 converter 未实现。Windows ACL/reparse 防护能力未实测；
+程序退出后没有后台清理服务，raw 文件需按数据合同在 24 小时内人工删除/运行清理命令。
+README、future-improvements、未跟踪启动提示词等会话前改动保留且不纳入 S02 提交。
+
+review：delegated-change-review 使用一个新鲜只读 `$review-agent`，比较基线 `f14a7ea`，
+覆盖本会话全部四阶段提交、数据合同和完成证据草稿。发现 1 个 P2：固定日志白名单遗漏
+`setSummary` 的人工提交等待与限频消息，导致 `panelPhase` 显示 idle/polling 而不是等待/冷却。
+主实现者独立核对调用链与复现后接受；没有拒绝项。`040b911` 补齐固定工作流消息、把动态摘要
+改为安全固定文本，新增人工等待/医生页及预约页冷却/失败阶段和敏感 detail 回归。
+修复后相关 **62 passed**，完整 **222 passed, 2 live skipped**；Ruff/Node/差异空白检查通过，
+CI 同命令 **222 passed, 2 deselected**。修复由主实现者验证，未另行声称 reviewer 重审修复提交。
+reviewer 独立检查两组相关套件 **75/111 passed**、Ruff/Node/whitespace；额外在临时真实 Chromium
+profile 核对新目录/文件均为 0700/0600。没有检查真实认证 profile，也没有执行 live。
+完成记录/架构证据另作文档提交，hash 见本文件历史，避免自引用。
