@@ -257,3 +257,23 @@ async def test_lost_owner_does_not_fallback_to_a_new_transport(chromium_page):
     await first.evaluate("failPoll({status:0}, 'timeout', 'synthetic')")
     assert await first.evaluate("fetchCalls") == 0
     await second.evaluate(f"{HOOKS}.stopRun()")
+
+
+async def test_legacy_pending_blocks_other_normal_booking_controller(chromium_page):
+    first, second = await pages_for(chromium_page, BOOKING)
+    await first.evaluate(f"""() => {{
+        localStorage.removeItem({HOOKS}.JOURNAL_KEY);
+        sessionStorage.setItem({HOOKS}.STATE_KEY, JSON.stringify({{submittingBooking:{{memberId:'synthetic-old'}}}}));
+        {HOOKS}.readState();
+    }}""")
+    second.on("dialog", lambda dialog: dialog.accept())
+    result = await second.evaluate("""async () => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        const id = h.prepareManualControllerStart('booking');
+        await h.runBookingPageController(id);
+        return {clicks:localStorage.getItem('clicks'),pending:h.submissionBlocked(),journal:h.readJournal()};
+    }""")
+    assert result["clicks"] is None
+    assert result["pending"] is True
+    assert len(result["journal"]["attempts"]) == 1
+    assert result["journal"]["attempts"][0]["failure_class"] == "interrupted"

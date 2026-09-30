@@ -508,6 +508,7 @@
   }
 
   let legacyPendingRecord = null;
+  let legacyMigrationQueued = false;
 
   function readJournal() {
     if (!globalThis.localStorage) throw new Error("storage");
@@ -530,6 +531,13 @@
     if (journalWriteActive) {
       if (raw === null || migrated) writeJournal(journal);
       legacyPendingRecord = null;
+    } else if (legacyPendingRecord && !legacyMigrationQueued) {
+      // A blocked legacy controller will never run. Queue its migration now,
+      // ahead of any later controller's journal initialization/begin request.
+      legacyMigrationQueued = true;
+      void withJournalLock(() => readJournal()).catch(() => {
+        // Keep the local blocker and legacy session marker on storage failure.
+      }).finally(() => { legacyMigrationQueued = false; });
     }
     return journal;
   }
