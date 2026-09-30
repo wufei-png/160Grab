@@ -51,7 +51,10 @@ def test_storage_fault_no_click(fault):
       const outcome = await hooks.submitTransaction({method:'selector', element:{click(){clicks++;}}}, {scheduleId:'slot'}, {memberId:'member'}, {}, true);
       return {outcome, clicks};
     })()""",
-        extra_js=setup,
+        extra_js=setup
+        + """sandbox.console.log = sandbox.console.warn = () => undefined;
+const body = {innerHTML:'',querySelector:()=>null};
+sandbox.document.getElementById = () => ({querySelector:()=>body});""",
     )
     assert result == {"outcome": "OUTCOME_UNKNOWN", "clicks": 0}
 
@@ -123,7 +126,7 @@ def test_rejected_consent_keeps_manual_mode():
 def test_human_resolution_leaves_audit_and_same_booking_cannot_repeat():
     result = _run_hook("""(async () => {
       const record = await hooks.beginAttempt(['SYN_BOOKING']);
-      hooks.finishAttempt(record.attempt_id, 'CONFIRMED_NO_EFFECT', true);
+      await hooks.finishAttempt(record.attempt_id, 'CONFIRMED_NO_EFFECT', true);
       let blocked = false;
       try { await hooks.beginAttempt(['SYN_BOOKING']); } catch (_) { blocked = true; }
       return {blocked, journal:hooks.readJournal()};
@@ -138,9 +141,9 @@ def test_revoke_preserves_pending_and_resolution_updates_panel_outcome():
         """(async () => {
       await hooks.ensureSubmissionConsent({unitId:'u',depId:'d',doctorId:'doc'}, {memberId:'member'}, {interactive:true});
       const record = await hooks.beginAttempt(['slot']);
-      hooks.revokeConsent();
+      await hooks.revokeConsent();
       const pending = hooks.submissionBlocked();
-      hooks.resolvePending(false);
+      await hooks.resolvePending(false);
       return {pending, blocked:hooks.submissionBlocked(), state:hooks.readState().outcome, journal:hooks.readJournal()};
     })()""",
         extra_js="""sandbox.console.log = sandbox.console.warn = () => undefined;
@@ -161,7 +164,7 @@ def test_prior_policy_is_not_current_consent():
       await hooks.ensureSubmissionConsent(target, member, {interactive:true, accountRef:'account'});
       const journal = hooks.readJournal();
       journal.consents[0].policy_version = 'submit-v0';
-      hooks.writeJournal(journal);
+      await hooks.writeJournal(journal);
       const allowed = await hooks.ensureSubmissionConsent(target, member, {accountRef:'account'});
       return allowed;
     })()""")
@@ -169,10 +172,10 @@ def test_prior_policy_is_not_current_consent():
 
 
 def test_stop_during_hashing_never_enters_click_boundary():
-    result = _run_hook('''(async () => {
+    result = _run_hook("""(async () => {
       let clicks = 0;
       const outcome = await hooks.submitTransaction({method:'selector',element:{click(){clicks++;}}}, {scheduleId:'slot'}, {memberId:'member'}, {}, true, null, () => false);
       return {clicks, pending:hooks.submissionBlocked(), outcome};
-    })()''')
-    assert result['clicks'] == 0
-    assert not result['pending']
+    })()""")
+    assert result["clicks"] == 0
+    assert not result["pending"]

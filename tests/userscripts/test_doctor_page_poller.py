@@ -47,6 +47,21 @@ const sandbox = {{
   String,
   setTimeout,
   clearTimeout,
+  performance: require("node:perf_hooks").performance,
+  navigator: {{ locks: {{
+    tails: new Map(),
+    async request(name, options, callback) {{
+      if (typeof options === 'function') {{ callback = options; options = {{}}; }}
+      const previous = this.tails.get(name);
+      if (previous && options.ifAvailable) return callback(null);
+      let release;
+      const gate = new Promise(resolve => {{ release = resolve; }});
+      this.tails.set(name, gate);
+      if (previous) await previous;
+      try {{ return await callback({{name}}); }}
+      finally {{ if (this.tails.get(name) === gate) this.tails.delete(name); release(); }}
+    }},
+  }} }},
   location: new URL("https://www.91160.com/doctors/index/unit_id-21/dep_id-0/docid-200002522.html"),
   document: {{
     querySelector: () => null,
@@ -249,7 +264,7 @@ def test_booking_submit_settle_only_applies_after_doctor_page_auto_open():
 
 def test_controller_claim_is_singleton_per_page_instance():
     result = _run_hook(
-        """(() => {
+        """hooks.withBrowserLeader(async () => {
   sandbox.sessionStorage.setItem(hooks.STATE_KEY, JSON.stringify({ running: true }));
   const first = hooks.claimPageController("doctor");
   const second = hooks.claimPageController("doctor");
@@ -260,7 +275,7 @@ def test_controller_claim_is_singleton_per_page_instance():
     stateControllerId: stateAfterSecond.controllerId,
     sameController: stateAfterSecond.controllerId === first,
   };
-})()""",
+})""",
     )
 
     assert result["firstIsActive"] is True
@@ -271,7 +286,7 @@ def test_controller_claim_is_singleton_per_page_instance():
 
 def test_manual_start_restarts_active_controller():
     result = _run_hook(
-        """(() => {
+        """hooks.withBrowserLeader(async () => {
   sandbox.sessionStorage.setItem(hooks.STATE_KEY, JSON.stringify({ running: true }));
   const first = hooks.prepareManualControllerStart("doctor");
   const second = hooks.prepareManualControllerStart("doctor");
@@ -284,7 +299,7 @@ def test_manual_start_restarts_active_controller():
     stateControllerId: stateAfterSecond.controllerId,
     pollAttempt: stateAfterSecond.pollAttempt,
   };
-})()""",
+})""",
     )
 
     assert result["first"].startswith("doctor:")

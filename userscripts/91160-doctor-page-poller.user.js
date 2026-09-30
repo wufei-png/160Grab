@@ -368,6 +368,7 @@
     "Settings saved.",
     "Settings validation failed.",
     "Started.",
+    "Automatic operation paused; leader unavailable. Continue manually.",
     "Stopped.",
     "Submit attempts exhausted; manual action required.",
     "Submitted booking form.",
@@ -496,6 +497,7 @@
   }
 
   function writeJournal(journal) {
+    if (!journalWriteActive) throw new Error("journal lock required");
     validateJournal(journal);
     const raw = JSON.stringify(journal);
     if (!globalThis.localStorage) throw new Error("storage");
@@ -505,22 +507,30 @@
     if (localStorage.getItem(JOURNAL_KEY) !== raw) throw new Error("storage");
   }
 
+  let legacyPendingRecord = null;
+
   function readJournal() {
     if (!globalThis.localStorage) throw new Error("storage");
     const raw = localStorage.getItem(JOURNAL_KEY);
-    if (raw !== null) {
-      const journal = JSON.parse(raw);
-      validateJournal(journal);
-      return journal;
-    }
-    const journal = { version: 1, salt: randomRef(32), attempts: [], consents: [], audit: [] };
+    const journal = raw === null
+      ? { version: 1, salt: randomRef(32), attempts: [], consents: [], audit: [] }
+      : JSON.parse(raw);
+    validateJournal(journal);
     const legacyRaw = globalThis.sessionStorage?.getItem(STATE_KEY);
     const legacy = legacyRaw ? JSON.parse(legacyRaw) : null;
-    if (legacy?.submittingBooking) {
+    if (!legacyPendingRecord && legacy?.submittingBooking && journal.attempts.length === 0) {
       const now = new Date().toISOString();
-      journal.attempts.push({ attempt_id: randomRef(), booking_ref: randomRef(32), state: "OUTCOME_UNKNOWN", created_at: now, updated_at: now, evidence_type: "none", failure_class: "interrupted", human_action_required: true });
+      legacyPendingRecord = { attempt_id: randomRef(), booking_ref: randomRef(32), state: "OUTCOME_UNKNOWN", created_at: now, updated_at: now, evidence_type: "none", failure_class: "interrupted", human_action_required: true };
     }
-    writeJournal(journal);
+    let migrated = false;
+    if (legacyPendingRecord && !journal.attempts.some(r => UNRESOLVED.has(r.state))) {
+      journal.attempts.push(legacyPendingRecord);
+      migrated = true;
+    }
+    if (journalWriteActive) {
+      if (raw === null || migrated) writeJournal(journal);
+      legacyPendingRecord = null;
+    }
     return journal;
   }
 
@@ -538,6 +548,10 @@
   }
 
   async function beginAttempt(parts, guard = () => true) {
+    return withJournalLock(() => beginAttemptOwned(parts, guard));
+  }
+
+  async function beginAttemptOwned(parts, guard) {
     const bookingRef = await journalReference(parts);
     const journal = readJournal();
     if (!guard()) throw new Error("cancelled");
@@ -549,7 +563,11 @@
     return record;
   }
 
-  function finishAttempt(attemptId, outcome, human = false) {
+  async function finishAttempt(attemptId, outcome, human = false) {
+    return withJournalLock(() => finishAttemptOwned(attemptId, outcome, human));
+  }
+
+  function finishAttemptOwned(attemptId, outcome, human = false) {
     if (!(TERMINAL.has(outcome) || outcome === "OUTCOME_UNKNOWN")) throw new Error("storage");
     const journal = readJournal();
     const record = journal.attempts.find((r) => r.attempt_id === attemptId);
@@ -559,9 +577,13 @@
     writeJournal(journal);
   }
 
-  function resolvePending(booked) {
+  async function resolvePending(booked) {
+    return withJournalLock(() => resolvePendingOwned(booked)).catch(() => pauseForLeaderLoss());
+  }
+
+  function resolvePendingOwned(booked) {
     if (!globalThis.confirm("请先在原站预约记录核对每个未决预约。确认核对结果为" + (booked ? "已预约" : "未预约") + "？")) return;
-    for (const r of readJournal().attempts.filter((r) => UNRESOLVED.has(r.state))) finishAttempt(r.attempt_id, booked ? "CONFIRMED_SUCCESS" : "CONFIRMED_NO_EFFECT", true);
+    for (const r of readJournal().attempts.filter((r) => UNRESOLVED.has(r.state))) finishAttemptOwned(r.attempt_id, booked ? "CONFIRMED_SUCCESS" : "CONFIRMED_NO_EFFECT", true);
     stopRun();
     renderPanel();
   }
@@ -570,7 +592,11 @@
   let consentDenied = false;
   let activeConsentBinding = null;
 
-  async function ensureSubmissionConsent(target, memberSelection, { accountRef = null, interactive = false } = {}) {
+  async function ensureSubmissionConsent(target, memberSelection, options = {}) {
+    return withJournalLock(() => ensureSubmissionConsentOwned(target, memberSelection, options));
+  }
+
+  async function ensureSubmissionConsentOwned(target, memberSelection, { accountRef = null, interactive = false } = {}) {
     if (consentDenied || submissionBlocked()) return false;
     if (!isCompleteTarget(target) || !memberSelection.memberId) return false;
     consentRunNonce ??= randomRef();
@@ -608,7 +634,11 @@
     return readJournal().consents.some((c) => c.binding_ref === activeConsentBinding && c.policy_version === POLICY_VERSION);
   }
 
-  function revokeConsent() {
+  async function revokeConsent() {
+    return withJournalLock(() => revokeConsentOwned()).catch(() => pauseForLeaderLoss());
+  }
+
+  function revokeConsentOwned() {
     const journal = readJournal();
     journal.consents = [];
     writeJournal(journal);
@@ -618,6 +648,92 @@
     stopRun();
     renderPanel();
   }
+
+  const LEADER_LOCK = "grab160.automation.origin.v1";
+  const JOURNAL_LOCK = "grab160.journal.origin.v1";
+  const LEADER_TTL_MS = 30000;
+  let browserLeader = null;
+  let journalWriteActive = false;
+  const leaderNow = () => globalThis.performance.now();
+
+  function ownsBrowserLeader(owner = browserLeader) {
+    return Boolean(owner && owner === browserLeader && owner.valid &&
+      leaderNow() < owner.deadline && document.visibilityState !== "hidden");
+  }
+
+  function releaseBrowserLeader() {
+    const owner = browserLeader;
+    if (!owner) return;
+    owner.valid = false; // Fence the old continuation before releasing the Web Lock.
+    browserLeader = null;
+    owner.release();
+  }
+
+  function pauseForLeaderLoss() {
+    stopRun("Automatic operation paused; leader unavailable. Continue manually.");
+  }
+
+  async function withJournalLock(work) {
+    if (!globalThis.navigator?.locks?.request) throw new Error("leader unavailable");
+    return navigator.locks.request(JOURNAL_LOCK, async () => {
+      journalWriteActive = true;
+      try { return await work(); }
+      finally { journalWriteActive = false; }
+    });
+  }
+
+  async function withBrowserLeader(work, { reuse = false } = {}) {
+    if (reuse && ownsBrowserLeader()) return work(browserLeader);
+    if (browserLeader || !globalThis.navigator?.locks?.request || document.visibilityState === "hidden") {
+      pauseForLeaderLoss();
+      return "AWAITING_MANUAL_CONFIRMATION";
+    }
+    try {
+      return await navigator.locks.request(LEADER_LOCK, { ifAvailable: true }, async (lock) => {
+        if (!lock) { pauseForLeaderLoss(); return "AWAITING_MANUAL_CONFIRMATION"; }
+        let release;
+        const released = new Promise((resolve) => { release = resolve; });
+        const owner = { nonce: randomRef(), valid: true, deadline: leaderNow() + LEADER_TTL_MS, release };
+        browserLeader = owner;
+        let timer;
+        const renew = () => {
+          if (!ownsBrowserLeader(owner)) { pauseForLeaderLoss(); return; }
+          owner.deadline = leaderNow() + LEADER_TTL_MS;
+          timer = setTimeout(renew, 5000);
+        };
+        timer = setTimeout(renew, 5000);
+        try {
+          // Initialize/migrate the journal only while holding its atomic mutex.
+          try { await withJournalLock(() => readJournal()); }
+          catch (_error) {
+            stopRun("Submission outcome unknown; verify original site records.");
+            return "OUTCOME_UNKNOWN";
+          }
+          if (!ownsBrowserLeader(owner)) return "AWAITING_MANUAL_CONFIRMATION";
+          return await Promise.race([
+            Promise.resolve().then(() => work(owner)),
+            released.then(() => submissionBlocked() ? "OUTCOME_UNKNOWN" : "AWAITING_MANUAL_CONFIRMATION"),
+          ]);
+        } finally {
+          clearTimeout(timer);
+          owner.valid = false;
+          if (browserLeader === owner) browserLeader = null;
+        }
+      });
+    } catch (_error) {
+      pauseForLeaderLoss();
+      return submissionBlocked() ? "OUTCOME_UNKNOWN" : "AWAITING_MANUAL_CONFIRMATION";
+    }
+  }
+
+  globalThis.addEventListener?.("pagehide", () => {
+    // Keep sessionStorage's navigation handoff, but fence this document (also BFCache).
+    activeControllerId = null;
+    releaseBrowserLeader();
+  });
+  document.addEventListener?.("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && browserLeader) pauseForLeaderLoss();
+  });
 
   function defaultState() {
     return {
@@ -675,10 +791,13 @@
   }
 
   function resetRuntimeState() {
+    activeControllerId = null;
+    releaseBrowserLeader();
     const state = readState();
     writeState({
       ...defaultState(),
       activeView: state.activeView,
+      submittingBooking: submissionBlocked() ? { state: "OUTCOME_UNKNOWN" } : null,
     });
     renderPanel();
   }
@@ -693,7 +812,7 @@
   }
 
   function isControllerActive(controllerId) {
-    if (submissionBlocked()) return false;
+    if (!ownsBrowserLeader() || submissionBlocked()) return false;
     const state = readState();
     return Boolean(controllerId && state.running && state.controllerId === controllerId);
   }
@@ -1364,10 +1483,11 @@
     }
   }
 
-  async function fetchJsonInsidePage(url, params) {
+  async function fetchJsonInsidePage(url, params, guard = () => true) {
     const pageWindow = globalThis.unsafeWindow || globalThis;
     let lastError = null;
     if (pageWindow.jQuery?.ajax) {
+      if (!guard()) throw new Error("cancelled");
       try {
         return await new Promise((resolve, reject) => {
           pageWindow.jQuery.ajax({
@@ -1388,6 +1508,7 @@
           });
         });
       } catch (error) {
+        if (!guard()) throw new Error("cancelled");
         lastError = error;
         appendLog("debug", "Page jQuery schedule request failed; trying fetch.", error.message);
       }
@@ -1395,6 +1516,7 @@
     const requestUrl = buildUrlWithParams(url, params);
     const fetchImpl = pageWindow.fetch || globalThis.fetch;
     if (typeof fetchImpl === "function") {
+      if (!guard()) throw new Error("cancelled");
       try {
         const response = await fetchImpl.call(pageWindow, requestUrl, {
           credentials: "omit",
@@ -1412,6 +1534,8 @@
   }
 
   async function fetchDoctorSchedule(target, settings) {
+    const owner = browserLeader;
+    if (!ownsBrowserLeader(owner)) throw new Error("cancelled");
     const userKey = findCurrentUserKey();
     if (!userKey) {
       return {
@@ -1431,6 +1555,7 @@
         date: settings.filters.startDate || new Date().toISOString().slice(0, 10),
         days: "6",
       },
+      () => ownsBrowserLeader(owner),
     );
   }
 
@@ -1683,17 +1808,17 @@
     return memberReady && (!decision.appointment_value || JSON.stringify(snapshot.times.filter(t => t.selected).map(t => t.value)) === JSON.stringify([decision.appointment_value]));
   }
 
-  function applyBookingDecision(snapshot, decision) {
+  function applyBookingDecision(snapshot, decision, guard = () => true) {
     if (!decision.can_prepare) return;
     if (decision.member_index !== null) {
       const matches = Array.from(document.querySelectorAll('input[type="radio"]')).filter(n => n.value === decision.member_id);
       if (matches.length !== 1 || !formActionable(matches[0])) return;
-      if (!matches[0].checked) matches[0].click();
+      if (!matches[0].checked) { if (!guard()) throw new Error("cancelled"); matches[0].click(); }
     }
     if (decision.appointment_value) {
       const matches = Array.from(document.querySelectorAll('#delts li[val]')).filter(n => n.getAttribute('val') === decision.appointment_value);
       if (matches.length !== 1 || !formActionable(matches[0])) return;
-      if (!matches[0].classList.contains('selected')) matches[0].click();
+      if (!matches[0].classList.contains('selected')) { if (!guard()) throw new Error('cancelled'); matches[0].click(); }
     }
     for (const write of decision.writes) {
       const controls = Array.from(document.querySelectorAll(FORM_FIELDS[write.field]));
@@ -1701,6 +1826,7 @@
       const n = controls[0];
       if (n.value.trim() && !(write.kind === 'select' && n.value === '0')) continue;
       if (n.matches(':disabled') || n.readOnly) return;
+      if (!guard()) throw new Error("cancelled");
       n.value = write.value;
       n.dispatchEvent(new Event('input', {bubbles:true}));
       n.dispatchEvent(new Event('change', {bubbles:true}));
@@ -1727,7 +1853,7 @@
     for (let attempt = 1; attempt <= attempts; attempt++) {
       const snapshot = readBookingSnapshot();
       const decision = decideBookingPreparation(snapshot, formSelection(formState, memberSelection), formValues(addressConfig, bookingConfig));
-      applyBookingDecision(snapshot, decision);
+      applyBookingDecision(snapshot, decision, options.guard);
       readiness = readBookingFormReadiness(formState, memberSelection, addressConfig, bookingConfig);
       if (readiness.ok) return {ok:true, attempt, readiness};
       if (decision.blockers.some(b => /\.(conflict|ambiguous|mismatch|blocked)$/.test(b))) return {ok:false,attempt,readiness};
@@ -1793,13 +1919,21 @@
   }
 
   async function markSubmitInProgress(formState, memberSelection, _fillResult, _attemptCount, target = readState().lastTarget, guard = () => true) {
-    const record = await beginAttempt([target?.unitId, target?.depId, target?.doctorId, memberSelection.memberId, formState.scheduleId, formState.appointmentValue], guard);
+    const owner = browserLeader;
+    if (!ownsBrowserLeader(owner)) throw new Error("cancelled");
+    const record = await beginAttempt([target?.unitId, target?.depId, target?.doctorId, memberSelection.memberId, formState.scheduleId, formState.appointmentValue], () => ownsBrowserLeader(owner) && guard());
     activeControllerId = null;
     patchState((next) => ({ ...next, running: false, controllerId: null, pendingBooking: null, submittingBooking: record }));
     return record;
   }
 
-  async function submitTransaction(control, formState, memberSelection, target, authorized = false, evidenceAdapter = null, guard = () => true) {
+  async function submitTransaction(...args) {
+    if (submissionBlocked()) return "OUTCOME_UNKNOWN";
+    return withBrowserLeader(() => submitTransactionOwned(...args), { reuse: true });
+  }
+
+  async function submitTransactionOwned(control, formState, memberSelection, target, authorized = false, evidenceAdapter = null, guard = () => true) {
+    const owner = browserLeader;
     if (submissionBlocked()) return "OUTCOME_UNKNOWN";
     if (!authorized || control.method !== "selector") return "AWAITING_MANUAL_CONFIRMATION";
     let record;
@@ -1807,6 +1941,7 @@
     catch (error) { return error.message === "cancelled" ? "AWAITING_MANUAL_CONFIRMATION" : "OUTCOME_UNKNOWN"; }
     let outcome = "OUTCOME_UNKNOWN";
     try {
+      if (!ownsBrowserLeader(owner)) throw new Error("cancelled");
       triggerSubmitControl(control);
       // No live evidence/follow-up adapter is verified. Unknown controls, terms,
       // security checks and payment remain manual. Never repeat a click.
@@ -1816,7 +1951,7 @@
         if (evidence && TERMINAL.has(evidence.state) && JSON.stringify(evidence.selection) === JSON.stringify(expected)) outcome = evidence.state;
       }
     } catch (_error) { outcome = "OUTCOME_UNKNOWN"; }
-    try { finishAttempt(record.attempt_id, outcome); }
+    try { await finishAttempt(record.attempt_id, outcome); }
     catch (_error) { outcome = "OUTCOME_UNKNOWN"; }
     return outcome;
   }
@@ -1866,6 +2001,7 @@
       patchState((state) => ({ ...state, running: false }));
       return;
     }
+    if (!ownsBrowserLeader()) return;
     location.replace(buildDoctorUrl(target));
   }
 
@@ -1879,13 +2015,14 @@
   }
 
   function stopRun(reason = "Stopped.") {
+    releaseBrowserLeader();
     activeControllerId = null;
     patchState((state) => ({
       ...state,
       running: false,
       controllerId: null,
       pendingBooking: null,
-      submittingBooking: null,
+      submittingBooking: submissionBlocked() ? { state: "OUTCOME_UNKNOWN" } : null,
       outcome: submissionBlocked() ? "OUTCOME_UNKNOWN" : reason === "Stopped." ? state.outcome : "AWAITING_MANUAL_CONFIRMATION",
     }));
     setSummary("info", reason, "");
@@ -1935,6 +2072,10 @@
   }
 
   async function runDoctorPageController(controllerId) {
+    return withBrowserLeader(() => runDoctorPageControllerOwned(controllerId));
+  }
+
+  async function runDoctorPageControllerOwned(controllerId) {
     const settings = readSettings();
     const state = readState();
     if (!isControllerActive(controllerId)) {
@@ -2037,6 +2178,7 @@
           compactText(`${nextSlot.date} ${nextSlot.dayPeriod} ${nextSlot.timeRange}`),
         );
         await sleepMs(pickDelayMs(activeSettings.pacing.pageActionMs));
+        if (!isControllerActive(controllerId)) return;
         location.replace(buildBookingUrl(target, nextSlot.scheduleId));
         return;
       }
@@ -2058,6 +2200,10 @@
   }
 
   async function runBookingPageController(controllerId) {
+    return withBrowserLeader(() => runBookingPageControllerOwned(controllerId));
+  }
+
+  async function runBookingPageControllerOwned(controllerId) {
     const settings = readSettings();
     const bookingTarget = parseBookingUrl(location.href);
     const state = readState();
@@ -2127,6 +2273,7 @@
       memberSelection,
       settings.address,
       settings.booking,
+      { guard: () => isControllerActive(controllerId) },
     );
     if (!preparation.ok) {
       stopRun("Booking form preparation failed; manual action required.");
@@ -3320,8 +3467,9 @@
   }
 
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
-    runBookingPageController, ensureSubmissionConsent, revokeConsent, writeSettings, readSettings,
-    JOURNAL_KEY, readJournal, writeJournal, submissionBlocked, beginAttempt, finishAttempt, submitTransaction, resolvePending, startRun, stopRun, resetRuntimeState,
+    LEADER_LOCK, JOURNAL_LOCK, ownsBrowserLeader, withBrowserLeader, releaseBrowserLeader, pauseForLeaderLoss,
+    runDoctorPageController, runBookingPageController, ensureSubmissionConsent, revokeConsent, writeSettings, readSettings,
+    JOURNAL_KEY, readJournal, writeJournal: (journal) => withJournalLock(() => writeJournal(journal)), submissionBlocked, beginAttempt, finishAttempt, submitTransaction, resolvePending, startRun, stopRun, resetRuntimeState,
     appendLog,
     setSummary,
     panelPhase,
@@ -3363,7 +3511,7 @@
     waitForBookingSubmitSettle,
     findSubmitControl,
     triggerSubmitControl,
-    markSubmitInProgress,
+    markSubmitInProgress: (...args) => withBrowserLeader(() => markSubmitInProgress(...args)),
     resolveMemberSelection,
     inspectBookingPage,
   };
