@@ -117,7 +117,7 @@ async def test_userscript_real_controller_enforces_new_consent(chromium_page, mo
         lambda route: route.fulfill(
             content_type="text/html",
             body="""<form id="suborder">
-        <input name="schedule_id" value="slot"><input name="member_id" value="SYN_MEMBER">
+        <input name="schedule_id" value="slot"><input type="hidden" name="member_id" value="SYN_MEMBER">
         <button id="submitbtn" type="button">预约</button></form>""",
         ),
     )
@@ -172,7 +172,7 @@ async def test_userscript_rechecks_revoke_after_async_prepare(chromium_page):
         "**/*",
         lambda route: route.fulfill(
             content_type="text/html",
-            body='<input name="schedule_id" value="slot"><input name="member_id" value="member"><button id="submitbtn">预约</button>',
+            body='<input name="schedule_id" value="slot"><input type="hidden" name="member_id" value="member"><button id="submitbtn">预约</button>',
         ),
     )
     await page.goto(

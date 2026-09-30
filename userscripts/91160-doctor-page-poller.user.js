@@ -30,7 +30,6 @@
     "操作过于频繁",
   ];
   const LOG_LEVELS = ["debug", "info", "warn", "error"];
-  const DEFAULT_DISEASE_DESCRIPTION = "门诊就诊，具体病情现场面诊沟通";
   const DISABLE_AUTO_START = Boolean(
     globalThis.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__,
   );
@@ -53,9 +52,9 @@
       memberLabel: null,
     },
     address: {
-      province: "广东",
-      city: "深圳",
-      area: "南山区",
+      province: null,
+      city: null,
+      area: null,
       detail: null,
     },
     filters: {
@@ -76,7 +75,8 @@
       autoSubmit: true,
       maxPreSubmitAttempts: 3,
       autoReturnAfterSubmitFailure: false,
-      diseaseDescription: DEFAULT_DISEASE_DESCRIPTION,
+      diseaseDescription: null,
+      clinicCard: null,
     },
     session: {
       recoveryEnabled: true,
@@ -215,12 +215,20 @@
   function normalizeSettings(rawSettings) {
     const merged = mergeConfig(CONFIG_DEFAULTS, rawSettings);
     const sourceBooking = rawSettings?.booking ?? {};
+    // Old generated defaults are indistinguishable from explicit choices. Clear
+    // those exact values on migration; re-entry in v4 records an explicit choice.
+    if (rawSettings?.settingsVersion !== 4) {
+      for (const [key, old] of Object.entries({province:"广东",city:"深圳",area:"南山区"})) {
+        if (merged.address[key] === old) merged.address[key] = null;
+      }
+      if (merged.booking.diseaseDescription === "门诊就诊，具体病情现场面诊沟通") merged.booking.diseaseDescription = null;
+    }
     const submitMode = sourceBooking.submitMode === undefined
       ? (sourceBooking.autoSubmit === false ? "manual_confirm" : "auto")
       : sourceBooking.submitMode;
     if (!["auto", "manual_confirm"].includes(submitMode)) throw new Error("Invalid submission mode");
     return {
-      settingsVersion: 3,
+      settingsVersion: 4,
       runtime: {
         autoStart: normalizeBoolean(merged.runtime.autoStart, false),
         startAt: normalizeStartAtValue(merged.runtime.startAt),
@@ -291,8 +299,8 @@
           false,
         ),
         diseaseDescription:
-          normalizeOptionalValue(merged.booking.diseaseDescription) ??
-          DEFAULT_DISEASE_DESCRIPTION,
+          normalizeOptionalValue(merged.booking.diseaseDescription),
+        clinicCard: normalizeOptionalValue(merged.booking.clinicCard),
       },
       session: {
         recoveryEnabled: normalizeBoolean(merged.session.recoveryEnabled, true),
@@ -341,7 +349,6 @@
     "Could not find a submit control on the booking page.",
     "Diagnostic event.",
     "Doctor target resolution failed.",
-    "Installed checkIdInfo blank-response JSON patch.",
     "Login expired; manual login required.",
     "Matched slot; opening booking page.",
     "Member selection failed.",
@@ -355,7 +362,6 @@
     "Schedule polling request failed.",
     "Selected member blocked before submit.",
     "Selected member cannot submit booking.",
-    "Selected member has page warning attributes; continuing to submit.",
     "Session looks expired. Refreshing doctor page before retrying.",
     "Session recovery disabled; manual login required.",
     "Settings reset to defaults.",
@@ -441,7 +447,7 @@
     try {
       const raw = readStoredValue(SETTINGS_KEY, null);
       const settings = normalizeSettings(raw);
-      if (raw && raw.settingsVersion !== 3) writeStoredValue(SETTINGS_KEY, settings);
+      if (raw && raw.settingsVersion !== 4) writeStoredValue(SETTINGS_KEY, settings);
       return settings;
     } catch (error) {
       console.error("[160Grab error] Failed to load stored settings; using defaults.");
@@ -1467,9 +1473,8 @@
   }
 
   function parseBookingFormState(filters, fallbackScheduleId) {
-    const scheduleId =
-      compactText(document.querySelector('input[name="schedule_id"]')?.value) ||
-      compactText(fallbackScheduleId);
+    const scheduleInputs = Array.from(document.querySelectorAll('input[name="schedule_id"]'));
+    const scheduleId = scheduleInputs.length === 1 ? compactText(scheduleInputs[0].value) : "";
     const appointmentOptions = parseAppointmentOptions();
     const appointment = chooseAppointmentOption(appointmentOptions, filters);
     let invalidReason = null;
@@ -1490,638 +1495,193 @@
     };
   }
 
-  function readScheduleDateFromSerializedData(scheduleId) {
-    const serialized = compactText(document.querySelector('input[name="sch_data"]')?.value);
-    if (!serialized) {
-      return null;
-    }
-    const scheduleNeedle = compactText(scheduleId);
-    const searchStart = scheduleNeedle ? serialized.indexOf(scheduleNeedle) : 0;
-    const scoped =
-      searchStart >= 0 ? serialized.slice(searchStart, searchStart + 1200) : serialized;
-    return scoped.match(/s:7:"to_date";s:10:"(\d{4}-\d{2}-\d{2})"/)?.[1] ?? null;
+  // Private form snapshots/decisions: values never enter logs or the journal.
+  const FORM_FIELDS = {
+    card: '#hismemid, [name="hisMemId"], [name="hismemid"]',
+    date: '#sch_date, [name="sch_date"]',
+    disease_input: '#disease_input, [name="disease_input"]',
+    disease_content: '#disease_content, [name="disease_content"]',
+    'address.province': '#useraddress_province',
+    'address.city': '#useraddress_city',
+    'address.area': '#useraddress_area, select[name="addressId"]',
+    'address.detail': '#useraddress_detail, input[name="address"]',
+    accept: '#check_yuyue_rule, input[name="accept"][value="1"]',
+  };
+  const SUBMIT_SELECTOR = '#submitbtn, #submit_booking, #submitBooking, #suborder button[type="submit"], #suborder input[type="submit"]';
+
+  function formActionable(node) {
+    return Boolean(node && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden' && !node.matches(':disabled') && !node.closest('[aria-disabled="true"]'));
   }
 
-  function readScheduleDateFromPage() {
-    const text = compactText(
-      document.querySelector("#jzdate")?.parentElement?.textContent ||
-        document.querySelector("#suborder")?.textContent ||
-        "",
-    );
-    const match = text.match(/(20\d{2})年(\d{2})月(\d{2})日/);
-    return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
-  }
-
-  function fillScheduleDate(formState) {
-    const input =
-      document.querySelector("#sch_date") ?? document.querySelector('input[name="sch_date"]');
-    if (!input) {
-      return { ok: true, required: false };
-    }
-    const existing = compactText(input.value);
-    if (existing) {
-      return { ok: true, required: true, filled: false, source: "existing", value: existing };
-    }
-    const date =
-      readScheduleDateFromSerializedData(formState?.scheduleId) ?? readScheduleDateFromPage();
-    if (!date) {
-      return { ok: false, required: true, reason: "Could not infer schedule date." };
-    }
-    input.value = date;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    return { ok: true, required: true, filled: true, source: "schedule", value: date };
-  }
-
-  function uniqueElementsFromSelectors(selectors) {
-    const elements = [];
-    const seen = new Set();
-    for (const selector of selectors) {
-      const element = document.querySelector(selector);
-      if (element && !seen.has(element)) {
-        seen.add(element);
-        elements.push(element);
-      }
-    }
-    return elements;
-  }
-
-  function fillDiseaseDescription(bookingConfig = CONFIG_DEFAULTS.booking) {
-    const diseaseDescription =
-      normalizeOptionalValue(bookingConfig?.diseaseDescription) ?? DEFAULT_DISEASE_DESCRIPTION;
-    const inputs = uniqueElementsFromSelectors([
-      'input[name="disease_input"]',
-      'textarea[name="disease_input"]',
-      "#disease_input",
-      'textarea[name="disease_content"]',
-      'input[name="disease_content"]',
-      "#disease_content",
-    ]);
-    if (!inputs.length) {
-      return { ok: true, required: false };
-    }
-    const values = [];
-    for (const input of inputs) {
-      if (!compactText(input.value)) {
-        input.value = diseaseDescription;
-      }
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-      values.push({ name: input.getAttribute?.("name") || "", filled: Boolean(compactText(input.value)) });
-    }
-    const missing = values.filter((item) => !item.filled);
-    return {
-      ok: missing.length === 0,
-      required: true,
-      filledCount: values.length - missing.length,
-      missing,
-    };
-  }
-
-  function fillBookingRulesAcceptance() {
-    const inputs = uniqueElementsFromSelectors([
-      'input[name="accept"][value="1"]',
-      "#check_yuyue_rule",
-    ]);
-    if (!inputs.length) {
-      return { ok: true, required: false };
-    }
-    for (const input of inputs) {
-      input.checked = true;
-      input.setAttribute("checked", "checked");
-      input.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-    return { ok: true, required: true, checkedCount: inputs.length };
-  }
-
-  function clickElement(element) {
-    if (!element) {
-      return false;
-    }
-    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    if ("checked" in element) {
-      element.checked = true;
-      element.setAttribute("checked", "checked");
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-    return true;
-  }
-
-  function isPlaceholderSelectValue(value) {
-    const text = compactText(value);
-    return !text || text === "0";
-  }
-
-  function optionText(option) {
-    return compactText(option?.textContent || option?.text || option?.label);
-  }
-
-  function canonicalPlaceText(value) {
-    return compactText(value)
-      .replace(/\s+/g, "")
-      .replace(/[省市区县]$/, "");
-  }
-
-  function findSelectOption(select, spec) {
-    const expected = compactText(spec);
-    if (!select || !expected) {
-      return null;
-    }
-    const options = Array.from(select.options ?? []).filter(
-      (option) => !isPlaceholderSelectValue(option.value),
-    );
-    const expectedCanonical = canonicalPlaceText(expected);
-    return (
-      options.find((option) => compactText(option.value) === expected) ??
-      options.find((option) => optionText(option) === expected) ??
-      options.find((option) => canonicalPlaceText(optionText(option)) === expectedCanonical) ??
-      options.find((option) => {
-        const text = optionText(option);
-        return text.includes(expected) || expected.includes(text);
-      }) ??
-      null
-    );
-  }
-
-  function setSelectOption(select, option) {
-    if (!select || !option) {
-      return false;
-    }
-    if (compactText(select.value) === compactText(option.value)) {
-      return false;
-    }
-    Array.from(select.options ?? []).forEach((candidate) => {
-      candidate.selected = candidate === option;
+  function readBookingSnapshot() {
+    const all = selector => Array.from(document.querySelectorAll(selector));
+    const snapshot = {version:1, schedule_ids:all('[name="schedule_id"]').map(n => n.value.trim()), members:[], hidden_members:[], times:[], dates:[], fields:{}, submit:all(SUBMIT_SELECTOR).map(formActionable), other_required:[]};
+    snapshot.hidden_members = all('input[type="hidden"]').filter(n => ['member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => n.value.trim());
+    all('input[type="radio"]').forEach((n, index) => {
+      if (!['mid','member_id','memberid','his_mem_id'].includes(n.name.toLowerCase()) && !n.hasAttribute('data-member-id') && !n.hasAttribute('data-mid')) return;
+      const container = n.closest('tr,li,label,.patient_item,.member_item,.person_item') || n.parentElement;
+      snapshot.members.push({ids:[...new Set([n.value.trim(), n.getAttribute('data-member-id'), n.getAttribute('data-mid')].filter(Boolean))], label:compactText(container.textContent), index,
+        actionable:formActionable(n), checked:n.checked,
+        blocked:n.getAttribute('need_check') === '1' || ['record_created','is_complete','is_info_complete'].some(k => n.getAttribute(k) === '0') || /暂不能预约|审核中|认证|建档/.test((n.getAttribute('data-title') || '') + (n.title || '')),
+        address:Object.fromEntries([['province','province_id'],['city','city_id'],['area','area_id'],['detail','address']].map(([k,a]) => [k,n.getAttribute(a) || '']))});
     });
-    select.value = option.value;
-    select.dispatchEvent(new Event("input", { bubbles: true }));
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    return true;
-  }
-
-  function selectAddressOption(select, spec, fieldName) {
-    if (!select) {
-      return { ok: true, skipped: true, field: fieldName, reason: "missing_select" };
-    }
-    if (!isPlaceholderSelectValue(select.value)) {
-      if (!spec) {
-        return {
-          ok: true,
-          field: fieldName,
-          value: compactText(select.value),
-          text: optionText(select.options?.[select.selectedIndex]),
-          alreadySelected: true,
-        };
+    snapshot.times = all('#delts li[val]').map(n => ({value:n.getAttribute('val').trim(),label:compactText(n.textContent),actionable:formActionable(n),selected:n.classList.contains('selected')}));
+    const known = new Set();
+    Object.entries(FORM_FIELDS).forEach(([key, selector]) => {
+      const nodes = all(selector).filter(n => ['INPUT','SELECT','TEXTAREA'].includes(n.tagName));
+      if (!nodes.length) return;
+      snapshot.fields[key] = nodes.map(n => {
+        known.add(n);
+        return {value:n.value.trim(), checked:Boolean(n.checked), actionable:!n.matches(':disabled') && !n.readOnly && (formActionable(n) || n.type === 'hidden'), kind:n.tagName.toLowerCase(),
+          options:Array.from(n.options || []).map(o => ({value:o.value,label:compactText(o.textContent),disabled:o.disabled}))};
+      });
+    });
+    snapshot.other_required = all('[required]').filter(n => !known.has(n) && !['schedule_id','member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => ['radio','checkbox'].includes(n.type) ? n.checked : Boolean(n.value.trim()));
+    all('[name="sch_data"]').forEach(n => {
+      if (snapshot.schedule_ids.length === 1 && n.value.includes(`"${snapshot.schedule_ids[0]}";`)) {
+        snapshot.dates.push(...Array.from(n.value.matchAll(/s:7:"to_date";s:10:"(\d{4}-\d{2}-\d{2})"/g), m => m[1]));
       }
-      const currentOption = Array.from(select.options ?? []).find(
-        (option) => compactText(option.value) === compactText(select.value),
-      );
-      const desiredOption = findSelectOption(select, spec);
-      if (!desiredOption) {
-        return {
-          ok: false,
-          field: fieldName,
-          reason: `Could not find address ${fieldName} option ${JSON.stringify(spec)}.`,
-          availableOptions: Array.from(select.options ?? [])
-            .map((candidate) => optionText(candidate))
-            .filter(Boolean)
-            .slice(0, 20),
-        };
+    });
+    all('#jzdate').forEach(n => snapshot.dates.push(...Array.from(n.parentElement.textContent.matchAll(/(20\d{2})年(\d{2})月(\d{2})日/g), m => `${m[1]}-${m[2]}-${m[3]}`)));
+    return snapshot;
+  }
+
+  function validFormDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
+    const parsed = new Date(value + 'T00:00:00Z');
+    return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0,10) === value;
+  }
+
+  function decideBookingPreparation(snapshot, selection, values = {}) {
+    const blockers = [], writes = [], sources = {};
+    let memberId = selection.member_id || null, memberIndex = null, member = null;
+    const members = snapshot.members;
+    let matches = memberId ? members.filter(m => m.ids.includes(memberId)) : [];
+    if (!memberId && selection.member_label) matches = members.filter(m => m.label === selection.member_label);
+    if (!memberId && !selection.member_label) matches = members.length === 1 ? members : [];
+    if (matches.length === 1) {
+      member = matches[0]; memberId ||= member.ids[0]; memberIndex = member.index;
+      if (member.ids.length !== 1 || !member.actionable || member.blocked) blockers.push('member.blocked');
+    } else if (!matches.length && !members.length && memberId && JSON.stringify(snapshot.hidden_members) === JSON.stringify([memberId])) {
+      member = null;
+    } else if (!matches.length && !members.length && !memberId && snapshot.hidden_members.length === 1 && snapshot.hidden_members[0]) {
+      memberId = snapshot.hidden_members[0];
+    } else blockers.push(memberId ? 'member.mismatch' : 'member.ambiguous');
+    if (snapshot.schedule_ids.length !== 1 || snapshot.schedule_ids[0] !== selection.schedule_id) blockers.push('schedule.mismatch');
+    const timeValue = selection.appointment_value ?? null;
+    const times = snapshot.times.filter(t => t.value === timeValue);
+    if ((snapshot.times.length || timeValue) && (times.length !== 1 || !times[0].actionable)) blockers.push('time.mismatch');
+    const dates = [...new Set([...snapshot.dates, selection.date].filter(Boolean))];
+    if (dates.some(d => !validFormDate(d)) || dates.length > 1) blockers.push('date.conflict');
+    Object.entries(snapshot.fields).forEach(([key, controls]) => {
+      if (controls.length !== 1) { blockers.push(key + '.ambiguous'); return; }
+      const f = controls[0];
+      let existing = f.value, desired = values[key] || '', source = desired ? 'config' : null;
+      if (key.startsWith('address.') && member) {
+        const memberValue = member.address[key.split('.')[1]] || '';
+        if (memberValue) {
+          if (desired && desired !== memberValue) {
+            const options = f.options.filter(o => o.value === desired || o.label === desired);
+            if (!(options.length === 1 && options[0].value === memberValue)) blockers.push(key + '.conflict');
+          }
+          desired = memberValue; source = 'member';
+        }
       }
-      if (currentOption === desiredOption) {
-        return {
-          ok: true,
-          field: fieldName,
-          value: compactText(select.value),
-          text: optionText(currentOption),
-          alreadySelected: true,
-        };
+      if (key === 'date') { desired = dates.length === 1 ? dates[0] : ''; source = desired ? 'schedule' : null; }
+      if (key === 'accept') {
+        if (!f.checked) blockers.push('accept.required');
+        sources[key] = f.checked ? 'existing' : 'missing'; return;
       }
-      setSelectOption(select, desiredOption);
-      return {
-        ok: true,
-        field: fieldName,
-        value: compactText(desiredOption.value),
-        text: optionText(desiredOption),
-        alreadySelected: false,
-      };
-    }
-    if (!spec) {
-      return {
-        ok: false,
-        field: fieldName,
-        reason: `Missing address ${fieldName}; set it in Settings.`,
-      };
-    }
-    const option = findSelectOption(select, spec);
-    if (!option) {
-      return {
-        ok: false,
-        field: fieldName,
-        reason: `Could not find address ${fieldName} option ${JSON.stringify(spec)}.`,
-        availableOptions: Array.from(select.options ?? [])
-          .map((candidate) => optionText(candidate))
-          .filter(Boolean)
-          .slice(0, 20),
-      };
-    }
-    setSelectOption(select, option);
-    return {
-      ok: true,
-      field: fieldName,
-      value: compactText(option.value),
-      text: optionText(option),
-      alreadySelected: false,
-    };
-  }
-
-  function readMemberAddress(memberSelection) {
-    const radio = memberSelection?.radio;
-    if (!radio?.getAttribute) {
-      return {};
-    }
-    return {
-      province: normalizeOptionalValue(radio.getAttribute("province_id")),
-      city: normalizeOptionalValue(radio.getAttribute("city_id")),
-      area: normalizeOptionalValue(radio.getAttribute("area_id")),
-      detail: normalizeOptionalValue(radio.getAttribute("address")),
-    };
-  }
-
-  function fillAddressSelection(addressConfig, memberSelection) {
-    const provinceSelect = document.querySelector("#useraddress_province");
-    const citySelect = document.querySelector("#useraddress_city");
-    const areaSelect =
-      document.querySelector("#useraddress_area") ??
-      document.querySelector('select[name="addressId"]');
-    if (!provinceSelect && !citySelect && !areaSelect) {
-      return { ok: true, required: false };
-    }
-
-    const memberAddress = readMemberAddress(memberSelection);
-    const desired = {
-      province: memberAddress.province || addressConfig?.province,
-      city: memberAddress.city || addressConfig?.city,
-      area: memberAddress.area || addressConfig?.area,
-      detail: memberAddress.detail || addressConfig?.detail,
-    };
-    const detailInput =
-      document.querySelector("#useraddress_detail") ??
-      document.querySelector('input[name="address"]');
-    let detailFilled = false;
-    if (detailInput && desired.detail && !compactText(detailInput.value)) {
-      detailInput.value = desired.detail;
-      detailInput.dispatchEvent(new Event("input", { bubbles: true }));
-      detailInput.dispatchEvent(new Event("change", { bubbles: true }));
-      detailFilled = true;
-    }
-
-    const province = selectAddressOption(provinceSelect, desired.province, "province");
-    if (!province.ok) {
-      return { ok: false, required: true, reason: province.reason, province };
-    }
-    const city = selectAddressOption(citySelect, desired.city, "city");
-    if (!city.ok) {
-      return { ok: false, required: true, reason: city.reason, province, city };
-    }
-    const area = selectAddressOption(areaSelect, desired.area, "area");
-    if (!area.ok) {
-      return { ok: false, required: true, reason: area.reason, province, city, area };
-    }
-    if (areaSelect && isPlaceholderSelectValue(areaSelect.value)) {
-      return {
-        ok: false,
-        required: true,
-        reason: "Address area is still not selected.",
-        province,
-        city,
-        area,
-      };
-    }
-    return {
-      ok: true,
-      required: true,
-      province,
-      city,
-      area,
-      detailFilled,
-    };
-  }
-
-  function fillClinicId() {
-    const input =
-      document.querySelector("#hismemid") ??
-      document.querySelector('input[name="hisMemId"]') ??
-      document.querySelector('input[name="hismemid"]') ??
-      document.querySelector('select[name="hismemid"]');
-    if (!input) {
-      return { ok: true, required: false };
-    }
-
-    const existing = compactText(input.value);
-    if (existing) {
-      if (input.getAttribute && !compactText(input.getAttribute("true_value"))) {
-        input.setAttribute?.("true_value", existing);
+      if (f.kind === 'select') {
+        if (existing === '0') existing = '';
+        if (desired) {
+          const options = f.options.filter(o => !o.disabled && !['','0'].includes(o.value) && (o.value === desired || o.label === desired));
+          if (options.length !== 1) { blockers.push(key + '.option'); return; }
+          desired = options[0].value;
+        }
       }
-      return {
-        ok: true,
-        required: true,
-        filled: false,
-        source: "existing",
-        valueLength: existing.length,
-      };
-    }
-
-    return {
-      ok: true,
-      required: true,
-      filled: false,
-      waiting: true,
-      reason: "Waiting for page card lookup to populate clinic card id.",
-    };
+      if (existing) {
+        sources[key] = 'existing';
+        if ((desired && desired !== existing) || (key === 'date' && !validFormDate(existing))) blockers.push(key + '.conflict');
+      } else if (desired) {
+        sources[key] = source;
+        if (!f.actionable) blockers.push(key + '.disabled');
+        else writes.push({field:key,value:desired,kind:f.kind});
+      } else { sources[key] = 'missing'; blockers.push(key + '.required'); }
+    });
+    if (!snapshot.other_required.every(Boolean)) blockers.push('other.required');
+    if (JSON.stringify(snapshot.submit) !== '[true]') blockers.push('submit.control');
+    const unique = [...new Set(blockers)].sort();
+    const hard = unique.some(b => !b.endsWith('.required') && !b.endsWith('.option'));
+    return {state:unique.length ? 'AWAITING_MANUAL_CONFIRMATION' : 'PREPARED',blockers:unique, member_id:memberId, member_index:memberIndex, schedule_id:selection.schedule_id,appointment_value:timeValue,sources,writes:hard ? [] : writes,can_prepare:!hard};
   }
 
-  function memberRadioLabelText(radio) {
-    const container = radio.closest("tr, li, label, .patient_item, .member_item, .person_item");
-    return compactText(container?.textContent || radio.parentElement?.textContent);
+  function formSelection(formState, memberSelection) {
+    return {member_id:memberSelection.memberId, schedule_id:formState.scheduleId, appointment_value:formState.appointmentValue ?? null, date:formState.expectedDate ?? null};
   }
 
-  function isLikelyMemberRadio(radio) {
-    const name = compactText(radio.getAttribute("name")).toLowerCase();
-    if (["mid", "member_id", "memberid", "his_mem_id"].includes(name)) {
-      return true;
-    }
-    if (
-      compactText(radio.getAttribute("data-member-id")) ||
-      compactText(radio.getAttribute("data-mid"))
-    ) {
-      return true;
-    }
-    return Boolean(
-      radio.closest(
-        'tr[id^="mem"], [data-member-id], [data-mid], .member_item, .patient_item, .person_item',
-      ),
-    );
+  function formValues(addressConfig = {}, bookingConfig = {}) {
+    return {card:bookingConfig.clinicCard, disease_input:bookingConfig.diseaseDescription, disease_content:bookingConfig.diseaseDescription,
+      ...Object.fromEntries(['province','city','area','detail'].map(k => ['address.' + k,addressConfig[k]]))};
   }
 
-  function collectRadioGroups() {
-    const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
-    return {
-      radios,
-      memberRadios: radios.filter(isLikelyMemberRadio),
-      ignoredRadios: radios.filter((radio) => !isLikelyMemberRadio(radio)),
-    };
+  function selectionReady(snapshot, decision) {
+    const checked = snapshot.members.filter(m => m.checked);
+    const memberReady = (decision.member_index === null || (checked.length === 1 && checked[0].index === decision.member_index)) && snapshot.hidden_members.every(v => v === decision.member_id);
+    return memberReady && (!decision.appointment_value || JSON.stringify(snapshot.times.filter(t => t.selected).map(t => t.value)) === JSON.stringify([decision.appointment_value]));
   }
 
-  function memberRadioDebugRows(radios) {
-    return radios.map((radio, index) => ({
-      index,
-      value: compactText(radio.value),
-      name: radio.getAttribute("name") ?? "",
-      id: radio.getAttribute("id") ?? "",
-      checked: Boolean(radio.checked),
-      disabled: Boolean(radio.disabled),
-      label: memberRadioLabelText(radio),
-    }));
-  }
-
-  function memberRadioDebugSummary(memberRadios, ignoredRadios = []) {
-    const lines = [
-      `Found ${memberRadios.length} candidate member radio(s) out of ${
-        memberRadios.length + ignoredRadios.length
-      } total <input type="radio"> element(s).`,
-      ...memberRadioDebugRows(memberRadios).map(
-        (row) =>
-          `member#${row.index}\tvalue=${JSON.stringify(row.value)}\tname=${JSON.stringify(row.name)}\tlabel=${JSON.stringify(row.label)}`,
-      ),
-    ];
-    if (ignoredRadios.length) {
-      lines.push(
-        "",
-        `Ignored ${ignoredRadios.length} non-member radio(s).`,
-        ...memberRadioDebugRows(ignoredRadios).map(
-          (row) =>
-            `ignored#${row.index}\tvalue=${JSON.stringify(row.value)}\tname=${JSON.stringify(row.name)}\tlabel=${JSON.stringify(row.label)}`,
-        ),
-      );
+  function applyBookingDecision(snapshot, decision) {
+    if (!decision.can_prepare) return;
+    if (decision.member_index !== null) {
+      const matches = Array.from(document.querySelectorAll('input[type="radio"]')).filter(n => n.value === decision.member_id);
+      if (matches.length !== 1 || !formActionable(matches[0])) return;
+      if (!matches[0].checked) matches[0].click();
     }
-    return lines.join("\n");
-  }
-
-  function readSelectedMemberBlocker(memberSelection) {
-    const radio = memberSelection?.radio;
-    if (!radio) {
-      return { ok: true, blocked: false };
+    if (decision.appointment_value) {
+      const matches = Array.from(document.querySelectorAll('#delts li[val]')).filter(n => n.getAttribute('val') === decision.appointment_value);
+      if (matches.length !== 1 || !formActionable(matches[0])) return;
+      if (!matches[0].classList.contains('selected')) matches[0].click();
     }
-    const dataTitle = compactText(
-      radio.getAttribute("data-title") || radio.getAttribute("title") || "",
-    );
-    const status = {
-      needCheck: compactText(radio.getAttribute("need_check")),
-      recordCreated: compactText(radio.getAttribute("record_created")),
-      isComplete: compactText(radio.getAttribute("is_complete")),
-      isInfoComplete: compactText(radio.getAttribute("is_info_complete")),
-      dataTitle,
-    };
-    const warning =
-      /暂不能预约|审核中/.test(dataTitle) ||
-      (status.needCheck === "1" && /认证|审核|建档|暂不能预约/.test(dataTitle));
-    if (warning) {
-      return {
-        ok: true,
-        blocked: false,
-        warning: true,
-        reason: dataTitle,
-        status,
-      };
+    for (const write of decision.writes) {
+      const controls = Array.from(document.querySelectorAll(FORM_FIELDS[write.field]));
+      if (controls.length !== 1) return;
+      const n = controls[0];
+      if (n.value.trim() && !(write.kind === 'select' && n.value === '0')) continue;
+      if (n.matches(':disabled') || n.readOnly) return;
+      n.value = write.value;
+      n.dispatchEvent(new Event('input', {bubbles:true}));
+      n.dispatchEvent(new Event('change', {bubbles:true}));
     }
-    return { ok: true, blocked: false, status };
   }
 
   function resolveMemberSelection(memberConfig) {
-    const { memberRadios, ignoredRadios } = collectRadioGroups();
-    const hiddenMemberId =
-      compactText(document.querySelector('input[name="member_id"]')?.value) ||
-      compactText(document.querySelector('input[name="mid"]')?.value) ||
-      compactText(document.querySelector("#member_id")?.value);
-    if (memberConfig.memberId) {
-      const radio = memberRadios.find(
-        (candidate) =>
-          compactText(candidate.value) === memberConfig.memberId ||
-          compactText(candidate.getAttribute("data-member-id")) === memberConfig.memberId ||
-          compactText(candidate.getAttribute("data-mid")) === memberConfig.memberId,
-      );
-      if (!radio && hiddenMemberId === memberConfig.memberId) {
-        return { ok: true, memberId: memberConfig.memberId, radio: null };
-      }
-      if (!radio && (memberRadios.length || ignoredRadios.length)) {
-        return {
-          ok: false,
-          reason: [
-            `Configured memberId ${memberConfig.memberId} was not found.`,
-            memberRadioDebugSummary(memberRadios, ignoredRadios),
-          ].join("\n\n"),
-        };
-      }
-      return { ok: true, memberId: memberConfig.memberId, radio: radio ?? null };
-    }
-    if (memberConfig.memberLabel) {
-      const radio = memberRadios.find((candidate) =>
-        memberRadioLabelText(candidate).includes(memberConfig.memberLabel),
-      );
-      if (!radio) {
-        return {
-          ok: false,
-          reason: [
-            `Configured memberLabel ${memberConfig.memberLabel} was not found.`,
-            memberRadioDebugSummary(memberRadios, ignoredRadios),
-          ].join("\n\n"),
-        };
-      }
-      return { ok: true, memberId: compactText(radio.value), radio };
-    }
-    if (memberRadios.length === 1) {
-      return {
-        ok: true,
-        memberId: compactText(memberRadios[0].value),
-        radio: memberRadios[0],
-      };
-    }
-    if (memberRadios.length > 1) {
-      return {
-        ok: false,
-        reason: [
-          "Multiple member candidates were found. Set memberId or memberLabel first.",
-          memberRadioDebugSummary(memberRadios, ignoredRadios),
-        ].join("\n\n"),
-      };
-    }
-    if (hiddenMemberId) {
-      return { ok: true, memberId: hiddenMemberId, radio: null };
-    }
-    return { ok: false, reason: "No member selection was found on this booking page." };
+    const snapshot = readBookingSnapshot();
+    const decision = decideBookingPreparation(snapshot, {member_id:memberConfig.memberId,member_label:memberConfig.memberLabel,schedule_id:snapshot.schedule_ids[0],appointment_value:snapshot.times[0]?.value});
+    if (decision.blockers.some(b => b.startsWith('member.'))) return {ok:false, reason:'Member selection requires manual action.'};
+    return {ok:true,memberId:decision.member_id,radio:decision.member_index === null ? null : document.querySelectorAll('input[type="radio"]')[decision.member_index]};
   }
 
-  function fillBookingForm(
-    formState,
-    memberSelection,
-    addressConfig,
-    bookingConfig = CONFIG_DEFAULTS.booking,
-  ) {
-    if (formState.appointmentValue) {
-      const appointmentElement = formState.appointmentOptions.find(
-        (option) => option.value === formState.appointmentValue,
-      )?.element;
-      clickElement(appointmentElement);
-    }
-    for (const selector of [
-      'input[name="member_id"]',
-      "#member_id",
-      'input[name="memberId"]',
-      "#memberId",
-      'input[name="mid"]',
-      "#mid",
-      'input[name="his_mem_id"]',
-      "#his_mem_id",
-    ]) {
-      const input = document.querySelector(selector);
-      if (input) {
-        input.value = memberSelection.memberId;
-      }
-    }
-    if (memberSelection.radio) {
-      clickElement(memberSelection.radio);
-    }
-    const clinicIdSelection = fillClinicId();
-    const addressSelection = fillAddressSelection(addressConfig, memberSelection);
-    const scheduleDateSelection = fillScheduleDate(formState);
-    const diseaseSelection = fillDiseaseDescription(bookingConfig);
-    const acceptSelection = fillBookingRulesAcceptance();
-    return {
-      addressSelection,
-      clinicIdSelection,
-      scheduleDateSelection,
-      diseaseSelection,
-      acceptSelection,
-    };
+  function readBookingFormReadiness(formState, memberSelection, addressConfig, bookingConfig) {
+    const snapshot = readBookingSnapshot();
+    const decision = decideBookingPreparation(snapshot, formSelection(formState, memberSelection), formValues(addressConfig, bookingConfig));
+    return {ok:!decision.blockers.length && !decision.writes.length && selectionReady(snapshot, decision),missing:decision.blockers,decision};
   }
 
-  function readBookingFormReadiness() {
-    const missing = [];
-    const checkSelect = (selector, field) => {
-      const select = document.querySelector(selector);
-      if (select && isPlaceholderSelectValue(select.value)) {
-        missing.push(field);
-      }
-    };
-    checkSelect("#useraddress_province", "address.province");
-    checkSelect("#useraddress_city", "address.city");
-    checkSelect("#useraddress_area, select[name='addressId']", "address.area");
-
-    const detailInput =
-      document.querySelector("#useraddress_detail") ??
-      document.querySelector('input[name="address"]');
-    if (detailInput && !compactText(detailInput.value)) {
-      missing.push("address.detail");
-    }
-
-    const scheduleDateInput =
-      document.querySelector("#sch_date") ?? document.querySelector('input[name="sch_date"]');
-    if (scheduleDateInput && !compactText(scheduleDateInput.value)) {
-      missing.push("sch_date");
-    }
-
-    const diseaseInputs = uniqueElementsFromSelectors([
-      'input[name="disease_input"]',
-      'textarea[name="disease_input"]',
-      "#disease_input",
-      'textarea[name="disease_content"]',
-      'input[name="disease_content"]',
-      "#disease_content",
-    ]);
-    for (const input of diseaseInputs) {
-      if (!compactText(input.value)) {
-        missing.push(input.getAttribute?.("name") || input.id || "disease");
-      }
-    }
-
-    const accept = document.querySelector('input[name="accept"][value="1"], #check_yuyue_rule');
-    if (accept && !accept.checked) {
-      missing.push("accept");
-    }
-    return { ok: missing.length === 0, missing };
-  }
-
-  async function prepareBookingFormForSubmit(
-    formState,
-    memberSelection,
-    addressConfig,
-    bookingConfig = CONFIG_DEFAULTS.booking,
-    options = {},
-  ) {
+  async function prepareBookingFormForSubmit(formState, memberSelection, addressConfig, bookingConfig = CONFIG_DEFAULTS.booking, options = {}) {
     const attempts = Math.min(3, Math.max(1, Number(options.attempts ?? bookingConfig.maxPreSubmitAttempts ?? 3)));
     const delayMs = Math.max(0, Number(options.delayMs ?? 250));
-    let fillResult = null;
-    let readiness = { ok: false, missing: ["not_checked"] };
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      fillResult = fillBookingForm(formState, memberSelection, addressConfig, bookingConfig);
-      readiness = readBookingFormReadiness();
-      if (fillResult.addressSelection.ok && fillResult.scheduleDateSelection.ok && readiness.ok) {
-        return { ok: true, attempt, fillResult, readiness };
-      }
-      if (attempt < attempts) {
-        await sleepMs(delayMs);
-      }
+    let readiness;
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const snapshot = readBookingSnapshot();
+      const decision = decideBookingPreparation(snapshot, formSelection(formState, memberSelection), formValues(addressConfig, bookingConfig));
+      applyBookingDecision(snapshot, decision);
+      readiness = readBookingFormReadiness(formState, memberSelection, addressConfig, bookingConfig);
+      if (readiness.ok) return {ok:true, attempt, readiness};
+      if (decision.blockers.some(b => /\.(conflict|ambiguous|mismatch|blocked)$/.test(b))) return {ok:false,attempt,readiness};
+      if (attempt < attempts) await sleepMs(delayMs);
     }
-    return {
-      ok: false,
-      attempt: attempts,
-      fillResult,
-      readiness,
-      reason: readiness.ok
-        ? "Booking form fill did not stabilize."
-        : `Booking form required fields are not ready: ${readiness.missing.join(", ")}`,
-    };
+    return {ok:false,attempt:attempts,readiness};
   }
 
   function resolveBookingSubmitSettleMs(settings, autoOpenedFromDoctor) {
@@ -2147,63 +1707,6 @@
     return { waited: true, delayMs };
   }
 
-  function isCheckIdInfoUrl(url) {
-    return /checkidinfo|checkIdInfo/.test(String(url || ""));
-  }
-
-  function normalizeCheckIdInfoJsonResponse(data, dataType) {
-    if (
-      typeof data === "string" &&
-      data.trim() === "" &&
-      compactText(dataType).toLowerCase().includes("json")
-    ) {
-      return "{}";
-    }
-    return data;
-  }
-
-  function installCheckIdInfoBlankResponsePatch() {
-    const pageWindow = globalThis.unsafeWindow || globalThis;
-    const jquery = pageWindow.jQuery || pageWindow.$;
-    if (!jquery || typeof jquery.ajax !== "function") {
-      return { installed: false, reason: "page-jquery-unavailable" };
-    }
-    if (jquery.__grab160CheckIdInfoBlankResponsePatch) {
-      return { installed: false, alreadyInstalled: true };
-    }
-
-    const originalAjax = jquery.ajax;
-    const patchedAjax = function grab160PatchedAjax(...args) {
-      const options = args[0] && typeof args[0] === "object" ? args[0] : args[1];
-      const url = typeof args[0] === "string" ? args[0] : options?.url;
-      if (!options || typeof options !== "object" || !isCheckIdInfoUrl(url)) {
-        return originalAjax.apply(this, args);
-      }
-
-      const nextOptions = { ...options };
-      const originalDataFilter = nextOptions.dataFilter;
-      nextOptions.dataFilter = function grab160CheckIdInfoDataFilter(data, dataType) {
-        const filtered =
-          typeof originalDataFilter === "function"
-            ? originalDataFilter.call(this, data, dataType)
-            : data;
-        return normalizeCheckIdInfoJsonResponse(
-          filtered,
-          nextOptions.dataType || dataType,
-        );
-      };
-
-      if (typeof args[0] === "string") {
-        return originalAjax.call(this, args[0], nextOptions);
-      }
-      return originalAjax.call(this, nextOptions);
-    };
-    patchedAjax.__grab160OriginalAjax = originalAjax;
-    jquery.ajax = patchedAjax;
-    jquery.__grab160CheckIdInfoBlankResponsePatch = true;
-    return { installed: true };
-  }
-
   function isVisible(element) {
     if (!element) {
       return false;
@@ -2213,9 +1716,9 @@
   }
 
   function findSubmitControl() {
-    const selector = '#submitbtn, #submit_booking, #submitBooking, #suborder button[type="submit"], #suborder input[type="submit"]';
+    const selector = SUBMIT_SELECTOR;
     const candidates = Array.from(document.querySelectorAll(selector));
-    if (candidates.length !== 1 || !isVisible(candidates[0]) || candidates[0].disabled || typeof candidates[0].click !== "function") return { method: "not-found", target: null };
+    if (candidates.length !== 1 || !isVisible(candidates[0]) || candidates[0].disabled || typeof candidates[0].click !== "function" || (candidates[0].getClientRects && !formActionable(candidates[0]))) return { method: "not-found", target: null };
     return { method: "selector", target: selector, element: candidates[0] };
   }
 
@@ -2473,6 +1976,7 @@
             depId: target.depId,
             doctorId: target.doctorId,
             scheduleId: nextSlot.scheduleId,
+            date: nextSlot.date,
           },
         }));
         setSummary(
@@ -2564,45 +2068,17 @@
       return;
     }
 
+    formState.expectedDate = state.pendingBooking?.date ?? null;
+    if (formState.scheduleId !== bookingTarget.scheduleId) { stopRun("Booking form invalid."); return; }
     const preparation = await prepareBookingFormForSubmit(
       formState,
       memberSelection,
       settings.address,
       settings.booking,
     );
-    const fillResult = preparation.fillResult;
-    if (!fillResult.addressSelection.ok) {
-      stopRun("Address selection failed.");
-      return;
-    }
-    if (!fillResult.scheduleDateSelection.ok) {
-      stopRun("Schedule date fill failed.");
-      return;
-    }
     if (!preparation.ok) {
       stopRun("Booking form preparation failed; manual action required.");
-      appendLog("warn", "Booking form did not become ready before submit.", {
-        readiness: preparation.readiness,
-        attempts: preparation.attempt,
-      });
       return;
-    }
-    const memberBlocker = readSelectedMemberBlocker(memberSelection);
-    if (!memberBlocker.ok) {
-      stopRun("Selected member cannot submit booking.");
-      appendLog("warn", "Selected member blocked before submit.", memberBlocker.status);
-      return;
-    }
-    if (memberBlocker.warning) {
-      appendLog(
-        "warn",
-        "Selected member has page warning attributes; continuing to submit.",
-        memberBlocker.status,
-      );
-    }
-    const checkIdInfoPatch = installCheckIdInfoBlankResponsePatch();
-    if (checkIdInfoPatch.installed) {
-      appendLog("debug", "Installed checkIdInfo blank-response JSON patch.");
     }
     let authorized = false;
     try {
@@ -2627,10 +2103,7 @@
           appointmentValue: formState.appointmentValue,
           appointmentLabel: formState.appointmentLabel,
           memberId: memberSelection.memberId,
-          address: fillResult.addressSelection,
-          clinicId: fillResult.clinicIdSelection,
-          scheduleDate: fillResult.scheduleDateSelection,
-          checkIdInfoPatch,
+          ready: true,
         },
       );
       renderPanel();
@@ -2649,7 +2122,7 @@
       stopRun("Could not find a submit control on the booking page.");
       return;
     }
-    const outcome = await submitTransaction(submitControl, formState, memberSelection, target, authorized, null, () => isControllerActive(controllerId) && consentStillValid() && readSettings().booking.submitMode === "auto");
+    const outcome = await submitTransaction(submitControl, formState, memberSelection, target, authorized, null, () => isControllerActive(controllerId) && consentStillValid() && readSettings().booking.submitMode === "auto" && readBookingFormReadiness(formState, memberSelection, settings.address, settings.booking).ok && findSubmitControl().element === submitControl.element);
     patchState((next) => ({ ...next, running: false, outcome }));
     setSummary("warn", outcome === "OUTCOME_UNKNOWN" ? "Submission outcome unknown; verify original site records." : "Booking form prepared; waiting for manual submit.");
     renderPanel();
@@ -3419,7 +2892,7 @@
               )}
               ${renderField(
                 "Member Label",
-                "按就诊人显示文字做模糊匹配，例如姓名的一部分；当不知道 memberId 时可用。",
+                "按就诊人显示文字精确匹配；多个候选时须填写 memberId。",
                 `<input data-setting="member.memberLabel" value="${htmlEscape(
                   settings.member.memberLabel ?? "",
                 )}">`,
@@ -3538,10 +3011,15 @@
             )}
             ${renderField(
               "Disease description",
-              "预约页病情描述输入框内容。",
+              "仅填写真实病情；为空时保留站点已有值，冲突或缺必填值交人工。",
               `<input data-setting="booking.diseaseDescription" value="${htmlEscape(
                 settings.booking.diseaseDescription ?? "",
               )}">`,
+            )}
+            ${renderField(
+              "Clinic card",
+              "仅使用真实就诊卡；留空等待站点查询，证件号不会被复制为卡号。",
+              `<input data-setting="booking.clinicCard" type="password" value="${htmlEscape(settings.booking.clinicCard ?? "")}">`,
             )}
             ${renderField(
               "Max pre-submit attempts",
@@ -3689,6 +3167,7 @@
       "booking.submitMode",
       "booking.autoReturnAfterSubmitFailure",
       "booking.diseaseDescription",
+      "booking.clinicCard",
       "booking.maxPreSubmitAttempts",
       "session.recoveryEnabled",
       "session.keepAliveIntervalSeconds",
@@ -3825,25 +3304,15 @@
     chooseAppointmentOption,
     appointmentKey,
     parseBookingFormState,
-    findSelectOption,
-    fillAddressSelection,
-    fillClinicId,
-    readScheduleDateFromSerializedData,
-    fillScheduleDate,
-    fillDiseaseDescription,
-    fillBookingForm,
+    readBookingSnapshot, decideBookingPreparation, applyBookingDecision, selectionReady,
     readBookingFormReadiness,
     prepareBookingFormForSubmit,
     resolveBookingSubmitSettleMs,
     waitForBookingSubmitSettle,
-    installCheckIdInfoBlankResponsePatch,
-    normalizeCheckIdInfoJsonResponse,
     findSubmitControl,
     triggerSubmitControl,
     markSubmitInProgress,
     resolveMemberSelection,
-    readSelectedMemberBlocker,
-    memberRadioDebugSummary,
     inspectBookingPage,
   };
 

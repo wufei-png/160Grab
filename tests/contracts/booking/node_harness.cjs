@@ -26,7 +26,8 @@ const sandbox = {
       }
       throw new Error(`Unexpected parser selector: ${selector}`);
     },
-    querySelectorAll: () => options,
+    querySelectorAll: (selector) => selector === 'input[name="schedule_id"]'
+      ? (input.schedule_id ? [{value:input.schedule_id}] : []) : options,
   },
   __GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__: true,
 };
