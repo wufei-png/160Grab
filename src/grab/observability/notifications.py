@@ -10,6 +10,8 @@ from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 
+from grab.observability.privacy import notification_message, notification_projection
+
 
 @dataclass
 class NotificationDeliveryResult:
@@ -45,9 +47,9 @@ class WindowsDesktopNotifier:
         subtitle: str | None = None,
     ) -> None:
         script = _build_windows_toast_script(
-            title=title,
-            message=message,
-            subtitle=subtitle,
+            title="160Grab",
+            message=notification_message(message),
+            subtitle=None,
         )
         await asyncio.to_thread(
             self._run_command,
@@ -73,9 +75,9 @@ class MacOSDesktopNotifier:
         subtitle: str | None = None,
     ) -> None:
         script = _build_macos_notification_script(
-            title=title,
-            message=message,
-            subtitle=subtitle,
+            title="160Grab",
+            message=notification_message(message),
+            subtitle=None,
         )
         await asyncio.to_thread(
             self._run_command,
@@ -96,7 +98,8 @@ class HttpWebhookNotifier:
         url: str,
         timeout_seconds: int,
         headers: dict[str, str] | None = None,
-        post_json: Callable[[str, dict[str, Any], int, dict[str, str]], Any] | None = None,
+        post_json: Callable[[str, dict[str, Any], int, dict[str, str]], Any]
+        | None = None,
     ):
         self._url = url
         self._timeout_seconds = timeout_seconds
@@ -111,12 +114,7 @@ class HttpWebhookNotifier:
         severity: str,
         payload: dict[str, Any],
     ) -> None:
-        body = {
-            **payload,
-            "title": title,
-            "message": message,
-            "severity": severity,
-        }
+        body = notification_projection(payload)
         await self._post_json(
             self._url,
             body,
@@ -192,6 +190,14 @@ class NotificationManager:
         payload: dict[str, Any],
         subtitle: str | None = None,
     ) -> list[NotificationDeliveryResult]:
+        projected = notification_projection(payload)
+        title, message, severity, subtitle = (
+            "160Grab",
+            projected["message"],
+            projected["severity"],
+            None,
+        )
+        payload = projected
         results: list[NotificationDeliveryResult] = []
         results.extend(
             await self._attempt_desktop_notification(
@@ -227,12 +233,12 @@ class NotificationManager:
                 message=message,
                 subtitle=subtitle,
             )
-        except Exception as exc:
+        except Exception:
             return [
                 NotificationDeliveryResult(
                     provider=getattr(notifier, "provider_name", "desktop:unknown"),
                     ok=False,
-                    error=str(exc),
+                    error="notification_delivery_failed",
                 )
             ]
 
@@ -262,12 +268,12 @@ class NotificationManager:
                 severity=severity,
                 payload=payload,
             )
-        except Exception as exc:
+        except Exception:
             return [
                 NotificationDeliveryResult(
                     provider=notifier.provider_name,
                     ok=False,
-                    error=str(exc),
+                    error="notification_delivery_failed",
                 )
             ]
 
@@ -288,7 +294,7 @@ def _build_windows_toast_script(
         text_nodes.append(f"<text>{safe_subtitle}</text>")
     text_nodes.append(f"<text>{safe_message}</text>")
     toast_xml = (
-        "<toast><visual><binding template=\"ToastGeneric\">"
+        '<toast><visual><binding template="ToastGeneric">'
         + "".join(text_nodes)
         + "</binding></visual></toast>"
     )

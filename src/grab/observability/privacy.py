@@ -170,3 +170,24 @@ def project_event(payload: Any) -> dict[str, Any]:
         "message": event_message(event),
         "data": safe_data(value.get("data")),
     }
+
+
+def notification_projection(payload: Any) -> dict[str, Any]:
+    value = payload if isinstance(payload, dict) else {}
+    event = project_event({**value, "level": value.get("level", value.get("severity"))})
+    result = {key: event[key] for key in ("event", "run_id", "phase", "message")}
+    result["severity"] = event["level"]
+    value = payload if isinstance(payload, dict) else {}
+    attempt = opaque_ref(value.get("attempt_id")) or event["data"].get("attempt_id")
+    if attempt:
+        result["attempt_id"] = attempt
+    return result
+
+
+def notification_message(value: Any) -> str:
+    allowed = {event_message(event) for event in EVENTS}
+    return (
+        value
+        if isinstance(value, str) and value in allowed
+        else event_message("diagnostic_event")
+    )

@@ -38,7 +38,7 @@ async def test_windows_desktop_notifier_invokes_powershell():
     assert calls[0][0] == "powershell.exe"
     assert calls[0][1:3] == ["-NoProfile", "-Command"]
     assert "160Grab" in calls[0][3]
-    assert "挂号成功" in calls[0][3]
+    assert "Diagnostic event." in calls[0][3]
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_macos_desktop_notifier_invokes_osascript():
     assert calls[0][:2] == ["/usr/bin/osascript", "-e"]
     assert "display notification" in calls[0][2]
     assert "160Grab" in calls[0][2]
-    assert "挂号成功" in calls[0][2]
+    assert "Diagnostic event." in calls[0][2]
 
 
 @pytest.mark.asyncio
@@ -73,7 +73,7 @@ async def test_webhook_notifier_posts_json_payload():
         title="160Grab 挂号成功",
         message="Booking succeeded",
         severity="info",
-        payload={"event": "booking_succeeded", "run_id": "run-1"},
+        payload={"event": "booking_succeeded", "run_id": "aaaaaaaaaaaa"},
     )
 
     assert calls == [
@@ -81,9 +81,9 @@ async def test_webhook_notifier_posts_json_payload():
             "https://example.com/hook",
             {
                 "event": "booking_succeeded",
-                "run_id": "run-1",
-                "title": "160Grab 挂号成功",
-                "message": "Booking succeeded",
+                "run_id": "aaaaaaaaaaaa",
+                "phase": "startup",
+                "message": "Booking succeeded.",
                 "severity": "info",
             },
             8,

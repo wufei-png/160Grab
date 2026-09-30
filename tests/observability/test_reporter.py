@@ -126,7 +126,7 @@ async def test_reporter_rate_limit_threshold_notifies_once_until_reset(tmp_path)
     await reporter.record_rate_limit(context="schedule_polling", message="访问次数过多")
 
     assert len(notifications.calls) == 1
-    assert notifications.calls[0]["title"] == "160Grab 持续限频"
+    assert notifications.calls[0]["title"] == "160Grab"
 
     reporter.reset_rate_limit_streak()
 
@@ -138,7 +138,9 @@ async def test_reporter_rate_limit_threshold_notifies_once_until_reset(tmp_path)
         json.loads(line) for line in sink.path.read_text(encoding="utf-8").splitlines()
     ]
     threshold_events = [
-        payload for payload in payloads if payload["event"] == "rate_limit_threshold_reached"
+        payload
+        for payload in payloads
+        if payload["event"] == "rate_limit_threshold_reached"
     ]
     assert len(threshold_events) == 2
 

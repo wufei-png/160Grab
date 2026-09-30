@@ -7,7 +7,12 @@ from typing import Any
 from uuid import uuid4
 
 from grab.observability.notifications import NotificationManager
-from grab.observability.privacy import project_event, safe_phase
+from grab.observability.privacy import (
+    event_message,
+    notification_projection,
+    project_event,
+    safe_phase,
+)
 from grab.observability.safe_logging import logger
 
 
@@ -79,11 +84,11 @@ class RunReporter:
 
         if notify:
             await self._deliver_notifications(
-                title=notification_title or "160Grab",
+                title="160Grab",
                 message=payload["message"],
                 severity=payload["level"],
                 payload=payload,
-                subtitle=notification_subtitle,
+                subtitle=None,
             )
 
         return payload
@@ -146,13 +151,29 @@ class RunReporter:
         payload: dict[str, Any],
         subtitle: str | None = None,
     ) -> None:
-        results = await self.notification_manager.notify(
-            title=title,
-            message=message,
-            severity=severity,
-            payload=payload,
-            subtitle=subtitle,
-        )
+        projected = notification_projection(payload)
+        try:
+            results = await self.notification_manager.notify(
+                title="160Grab",
+                message=projected["message"],
+                severity=projected["severity"],
+                payload=projected,
+                subtitle=None,
+            )
+        except Exception:
+            self._record(
+                self._build_payload(
+                    event="notification_delivery_failed",
+                    level="warning",
+                    message=event_message("notification_delivery_failed"),
+                    data={
+                        "failure_class": "notification",
+                        "original_event": payload.get("event"),
+                    },
+                    phase=payload.get("phase"),
+                )
+            )
+            return
         for result in results:
             if result.ok:
                 continue
@@ -162,7 +183,7 @@ class RunReporter:
                 message=f"Notification delivery failed via {result.provider}",
                 data={
                     "provider": result.provider,
-                    "error": result.error,
+                    "failure_class": "notification",
                     "original_event": payload.get("event"),
                 },
                 phase=payload.get("phase"),
@@ -178,9 +199,7 @@ class RunReporter:
             self.sink.write(payload)
         except Exception:
             self.sink = None
-            logger.warning(
-                "Structured event sink failed; JSONL disabled."
-            )
+            logger.warning("Structured event sink failed; JSONL disabled.")
 
     def _build_payload(
         self,
@@ -212,9 +231,7 @@ def build_run_reporter(config) -> RunReporter:
     try:
         sink = JsonlEventSink(config.logging.jsonl_dir, run_id=run_id)
     except Exception:
-        logger.warning(
-            "Structured event sink initialization failed; JSONL disabled."
-        )
+        logger.warning("Structured event sink initialization failed; JSONL disabled.")
     notification_manager = NotificationManager.from_config(config.notifications)
     return RunReporter(
         sink=sink,

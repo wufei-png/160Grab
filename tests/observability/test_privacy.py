@@ -114,3 +114,65 @@ async def test_login_diagnostic_stdout_and_reporter_drop_page_text(capsys):
     await service.print_login_page_diagnostics()
     assert_clean(capsys.readouterr().out)
     assert_clean(reporter.events)
+
+
+@pytest.mark.asyncio
+async def test_notifications_capture_only_projection_and_failure_is_safe(tmp_path):
+    from grab.observability.notifications import (
+        HttpWebhookNotifier,
+        NotificationManager,
+    )
+
+    desktop, webhook = [], []
+
+    class Desktop:
+        provider_name = "desktop:macos"
+
+        async def notify(self, **kwargs):
+            desktop.append(kwargs)
+            raise RuntimeError(POISON)
+
+    async def post(url, body, timeout, headers):
+        webhook.append(body)
+        raise RuntimeError("https://example.test/?token=" + POISON)
+
+    manager = NotificationManager(
+        desktop_notifier=Desktop(),
+        webhook_notifier=HttpWebhookNotifier(
+            url="https://example.test/hook", timeout_seconds=1, post_json=post
+        ),
+    )
+    sink = JsonlEventSink(tmp_path, "a" * 12)
+    reporter = RunReporter(
+        sink=sink, notification_manager=manager, rate_limit_threshold=2
+    )
+    event = await reporter.emit_event(
+        "booking_succeeded",
+        message=POISON,
+        notify=True,
+        notification_title=POISON,
+        notification_subtitle=POISON,
+        data={"token": POISON, "success": True, "url": POISON},
+    )
+    assert event["event"] == "booking_succeeded"
+    assert_clean([desktop, webhook, sink.path.read_text()])
+    assert set(webhook[0]) == {"event", "run_id", "phase", "message", "severity"}
+    assert desktop[0]["title"] == "160Grab"
+    assert desktop[0]["subtitle"] is None
+    assert webhook[0]["message"] == "Booking succeeded."
+    assert "notification_delivery_failed" in sink.path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_broken_notification_manager_cannot_change_booking_event(tmp_path):
+    class Broken:
+        async def notify(self, **kwargs):
+            raise RuntimeError(POISON)
+
+    sink = JsonlEventSink(tmp_path, "a" * 12)
+    reporter = RunReporter(
+        sink=sink, notification_manager=Broken(), rate_limit_threshold=2
+    )
+    result = await reporter.emit_event("booking_succeeded", message=POISON, notify=True)
+    assert result["event"] == "booking_succeeded"
+    assert_clean(sink.path.read_text())
