@@ -55,6 +55,36 @@ class PrivateDirectory:
             handle.write(data)
         return self.path / name
 
+    def replace_durable(self, name: str, data: bytes) -> None:
+        """Write and fsync a private temporary file, then atomically replace the leaf."""
+        import secrets
+
+        name = _leaf(name)
+        temporary = f".transaction-{secrets.token_hex(16)}"
+        fd = self._open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # Validate existing destination before replacement (including hardlinks).
+            try:
+                check = self._open(name, os.O_RDONLY)
+            except FileNotFoundError:
+                pass
+            else:
+                os.close(check)
+            if self.fd is not None:
+                os.replace(temporary, name, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+                os.fsync(self.fd)
+            else:
+                os.replace(self.path / temporary, self.path / name)
+        finally:
+            try:
+                self.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
     def append(self, name: str, data: bytes) -> None:
         fd = self._open(name, os.O_WRONLY | os.O_APPEND)
         with os.fdopen(fd, "ab") as handle:

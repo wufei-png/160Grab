@@ -1,7 +1,8 @@
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from grab.utils.profile_name import validate_profile_name
 from grab.utils.runtime import normalize_hour_value
@@ -223,12 +224,50 @@ class BookingForm(BaseModel):
     invalid_reason: str | None = None
 
 
-class BookingResult(BaseModel):
-    success: bool
-    attempts: int
+class BookingState(StrEnum):
+    DISCOVERED = "DISCOVERED"
+    PREPARED = "PREPARED"
+    AWAITING_MANUAL_CONFIRMATION = "AWAITING_MANUAL_CONFIRMATION"
+    SUBMITTING = "SUBMITTING"
+    CONFIRMED_SUCCESS = "CONFIRMED_SUCCESS"
+    CONFIRMED_NO_EFFECT = "CONFIRMED_NO_EFFECT"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+
+
+class Outcome(BaseModel):
+    state: BookingState = BookingState.AWAITING_MANUAL_CONFIRMATION
+    failure_class: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_success(cls, value):
+        if isinstance(value, dict):
+            value = dict(value)
+            success = value.pop("success", None)
+            if "state" not in value and success is True:
+                value["state"] = BookingState.CONFIRMED_SUCCESS
+        return value
+
+    @property
+    def success(self) -> bool:
+        return self.state == BookingState.CONFIRMED_SUCCESS
+
+    @property
+    def exit_code(self) -> int:
+        if self.success:
+            return 0
+        if self.state in {BookingState.OUTCOME_UNKNOWN, BookingState.SUBMITTING}:
+            return 3
+        if self.state in {BookingState.AWAITING_MANUAL_CONFIRMATION, BookingState.PREPARED}:
+            return 2
+        return 1
+
+
+class BookingResult(Outcome):
+    attempts: int = 0
     slot_id: str | None = None
+    attempt_id: str | None = None
 
 
-class RunResult(BaseModel):
-    success: bool
+class RunResult(Outcome):
     booked_slot_id: str | None = None
