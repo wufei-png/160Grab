@@ -329,6 +329,7 @@ class ScheduleService:
 
         return filtered_slots
 
+    @exclusive_operation
     async def poll_until_match(self) -> list[Slot]:
         async for slots in self.poll():
             if slots:
@@ -391,6 +392,7 @@ class ScheduleService:
         except TransientSessionRefreshError:
             logger.warning("Session keepalive failed but polling will continue.")
 
+    @exclusive_operation
     async def _refresh_session(
         self,
         *,
@@ -400,6 +402,7 @@ class ScheduleService:
     ) -> str | None:
         if self.target is None or self._session_refresh is None:
             return None
+        check_leader()
         refreshed_user_key = await self._session_refresh(
             self.target,
             aggressive=aggressive,

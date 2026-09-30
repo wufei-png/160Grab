@@ -16,7 +16,15 @@ from pathlib import Path
 
 from grab.utils.private_files import private_directory
 
-DEFAULT_LEADER_DIR = Path("~/.160grab/coordination")
+if os.name == "posix":
+    import pwd
+
+    # Key the default by OS identity, independent of config/profile/HOME overrides.
+    DEFAULT_LEADER_DIR = (
+        Path(pwd.getpwuid(os.getuid()).pw_dir) / ".160grab/coordination"
+    )
+else:
+    DEFAULT_LEADER_DIR = Path.home() / ".160grab/coordination"
 _current = ContextVar("grab_leader", default=None)
 
 
@@ -75,7 +83,8 @@ class LocalLeader:
             if self.fd is None or self.clock() >= self.deadline:
                 raise LeaderLost()
             opened = os.fstat(self.fd)
-            named = self.directory.stat("leader.lock")
+            with private_directory(self.root, create=False) as current_directory:
+                named = current_directory.stat("leader.lock")
             if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
                 raise LeaderLost()
             os.lseek(self.fd, 0, os.SEEK_SET)

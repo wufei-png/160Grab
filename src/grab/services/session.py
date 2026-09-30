@@ -7,6 +7,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from grab.browser.page_api import BrowserPageApi
+from grab.core.leader import check_active_leader
 from grab.errors import TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, MemberProfile
 from grab.observability.privacy import safe_data
@@ -568,6 +569,7 @@ class SessionCaptureService:
         final_urls: list[dict[str, str]] = []
         recovered_user_key: str | None = None
         for url, capture_user_key in touch_urls:
+            check_active_leader()
             try:
                 final_url, page_user_key = await self._touch_url_with_browser_page(
                     url,
@@ -619,6 +621,7 @@ class SessionCaptureService:
             owns_temp_page = True
 
         try:
+            check_active_leader()
             await probe_page.goto(url, wait_until="domcontentloaded")
             page_user_key = await self._extract_page_user_key(probe_page)
             if not capture_user_key:

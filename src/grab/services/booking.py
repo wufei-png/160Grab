@@ -9,7 +9,7 @@ from grab.booking.page import (
     read_decision,
     selected_member_ready,
 )
-from grab.core.leader import check_leader, exclusive_operation
+from grab.core.leader import LeaderLost, check_leader, exclusive_operation
 from grab.models.schemas import (
     BookingForm,
     BookingResult,
@@ -328,7 +328,7 @@ class PageBookingStrategy:
             self._run_blocked = True
             try:
                 self.attempt_store.finish(attempt_id, BookingState.OUTCOME_UNKNOWN)
-            except StoreBlocked:
+            except (StoreBlocked, LeaderLost):
                 pass
             raise
         except Exception:
@@ -340,7 +340,7 @@ class PageBookingStrategy:
             outcome = BookingState.OUTCOME_UNKNOWN
         try:
             self.attempt_store.finish(attempt_id, outcome)
-        except StoreBlocked:
+        except (StoreBlocked, LeaderLost):
             outcome = BookingState.OUTCOME_UNKNOWN
         self._run_blocked = outcome == BookingState.OUTCOME_UNKNOWN
         result = BookingResult(
