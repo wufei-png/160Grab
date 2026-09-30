@@ -1,15 +1,15 @@
 # 当前架构与核验证据
 
 核验日期：2026-09-30；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
 
 | 路径 | 调用链与行为 |
 |---|---|
-| Python | `main.py` → `GrabRunner` → auth/session/scheduler/schedule/booking services → `PageBookingStrategy`。人工登录、打开医生页并确认后，轮询、筛选、填表、自动提交。 |
-| Tampermonkey | `userscripts/91160-doctor-page-poller.user.js` 的 doctor/booking controllers。复用浏览器登录态，医生页轮询，跳入 ystep1；默认 `autoSubmit=false`，开启后提交并暂停，可选返回重试。 |
+| Python | `main.py` → `GrabRunner` → auth/session/scheduler/schedule/booking services → `PageBookingStrategy`。人工登录、打开医生页并确认后，轮询、筛选、填表；auto 须本机明确授权，单次提交，无实证 adapter 时 UNKNOWN 并停止。 |
+| Tampermonkey | `userscripts/91160-doctor-page-poller.user.js` 的 doctor/booking controllers。复用浏览器登录态，医生页轮询，跳入 ystep1；`submitMode=auto`（旧 false 迁为 manual_confirm），明确授权后单次提交；未决记录跨刷新/重启阻断。 |
 
 仅支持医生详情通道：入口 `/doctors/index/*`，表单 `/guahao/ystep1/*`，Python 页面内请求
 `https://gate.91160.com/guahao/v1/pc/sch/doctor`。channel_2 fixture 不代表科室 provider 已实现。
@@ -24,9 +24,9 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 
 | 缺口 | 入口 |
 |---|---|
-| bool 结果、同 slot 三次 submit、弱成功判定、失败换 slot/继续轮询 | `models/schemas.py::BookingResult/RunResult`；`services/booking.py::submit_with_retry/_is_booking_success/try_book_first_available`；`GrabRunner._poll_and_book`；JS `inspectBookingPage` |
-| 假病情/单 radio fallback；Python 缺 card/address/date；JS 默认地区/通用病情、reset 可清 pending | Python `fill_booking_form`；JS `CONFIG_DEFAULTS`、fill/readiness、start/stop/reset |
-| 宽控件选择、form.submit、follow-up 待审计 | Python `_trigger_submit_control/submit_booking_via_page`；JS `findSubmitControl/clickFollowupControl/checkIdInfo` |
+| S03 提交事务与授权已实现；无已验证 live 结果 adapter | `transactions/store.py/consent.py/evidence.py`；`services/booking.py`；runner/main；JS journal/controller |
+| 假病情/单 radio fallback；Python 缺 card/address/date；JS 默认地区/通用病情；未决提交不受 reset 影响 | Python `fill_booking_form`；JS `CONFIG_DEFAULTS`、fill/readiness、start/stop/reset |
+| 最终控件已收窄且唯一；填表及 checkIdInfo patch 的严格审计仍待 S04 | Python `fill_booking_form/_submit_control`；JS fill/readiness/checkIdInfo；未验证 follow-up 已交人工 |
 | 隐私 sink 已按 S02 收口；Windows 权限能力仍未实测 | `observability/privacy.py/safe_logging.py/reporter.py/notifications.py`；`utils/private_files.py/retention.py`；JS `appendLog/state` |
 | 缓存 key 失效判断不足、一般网络异常退出 | `ScheduleService._resolve_schedule_user_key/fetch_doctor_schedule/poll` |
 | 时间 naive；只有 profile 锁/页面 controller，无业务互斥；无 channel | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
@@ -48,7 +48,7 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 - PR/push CI 与 release 验证前置均安装 Node/Chromium，锁定 sync、Ruff、Node 语法检查及
   unit/contract/本地 Chromium 检查；明确排除 live。release 的打包和 frozen smoke 流程保留。
 
-S01 阶段尚未实现隐私 sink；S02 数据边界成果见下。提交事务/持久授权、严格真实值填表与互斥仍属于 S03–S05。
+S01 阶段尚未实现隐私 sink；S02 数据边界成果见下。提交事务/持久授权见 S03；严格真实值填表与互斥仍属于 S04–S05。
 
 ## S02 已实现事实
 
@@ -107,3 +107,42 @@ S02 新鲜只读委派 review 审查 `f14a7ea..d81b350` 及完成证据草稿，
 无拒绝项；reviewer 独立检查两组相关套件 75/111 passed、Ruff/Node/whitespace，以及临时真实
 Chromium profile 新目录/文件 0700/0600。修复后相关 62 passed、完整 222 passed/2 live skipped、
 CI 同命令 222 passed/2 deselected；最终修复由主实现者验证，未声称 reviewer 重新审查修复提交。
+
+## S03 已实现事实
+
+- `BookingState`/`BookingResult`/`RunResult` 贯通 service、runner、CLI；兼容 `success` 仅 confirmed success
+  为 true，旧 false 归人工等待。UNKNOWN/人工等待停止整个 run，不再换 slot 或继续轮询；CLI 退出 0/1/2/3。
+- Python 全工具共享 `~/.160grab/transactions/journal.json`，私有临时文件 fsync → atomic replace →
+  POSIX directory fsync 后才调用一次 Locator.click。JS 同 origin 使用独立 localStorage journal 的单 item
+  原子写入和读回，不走日志/设置的宽松 storage fallback；这是提交记录，不宣称 localStorage 可作互斥 CAS。
+- journal 保存随机 attempt_id、加盐 HMAC booking_ref、状态/时间、封闭 evidence/failure 类型及人工操作标志；
+  不保存 member/doctor 原值、表单、response 或 URL。损坏/未知版本 fail closed，未决不做 retention。
+  unresolved SUBMITTING 重启按 UNKNOWN 展示；旧 JS submitting 迁移为无个人字段的 UNKNOWN 记录。
+- click 超时、导航 race、限频、丢响应、弱页面变化均归 UNKNOWN；未验证的支付/确认 follow-up 不自动点击。
+  无 live adapter 时不推断成功/无副作用。`BookingEvidence` 和 JS adapter seam 只在完整匹配目标/成员/时段的
+  synthetic 测试中产生成功或明确拒绝；未把 synthetic schema 当成真实站点证据。
+- Python 打开/准备瞬态失败最多三次；确定无匹配不重试；JS DOM 准备最多三次，预约页只读限频预算亦最多三次。
+  最终按钮只接受唯一可操作控件；Python Locator、JS native click，移除宽文本和 form.submit fallback。
+- Python `booking.submit_mode`、JS `booking.submitMode` 默认 auto，仍需确认。旧 JS true 迁 auto、false 迁人工；
+  旧 maxSubmitAttempts 仅迁最多三次的 pre-submit 预算。配置 consent 不构成授权。拒绝保留人工选择；提供撤销入口。
+- 授权绑定账号引用、就诊人、医生目标和 submit-v1。当前没有可靠稳定账号 adapter，实际使用运行 nonce：
+  Python 本次运行有效并在重新准备登录身份时失效；JS 本次页面有效，刷新/重启需再确认。仅本机保存加盐引用。
+  stable-account seam 仅以 synthetic 验证，不提取/复制认证状态。确认只在终端输入/browser dialog 显示绑定值，
+  不流入日志/通知；非交互无授权停下。授权不代替站点协议、CAPTCHA 或支付。
+- Python `--pending-attempts` 列出不透明 ID；`--resolve-attempt ID --resolution booked|not-booked`
+  要求交互核对后输入 VERIFIED；`--revoke-consent` 不清未决。JS 面板提供核对已预约/未预约、撤销；
+  Start/Stop/reset/刷新都不清 journal，人工解决留下最小 audit，已提交过的相同 booking_ref 不自动再次 click。
+- 最后一次 prepare/settle await 后只读复核 grant 和模式，不因撤销重新弹授权；Python 等待期间撤销、
+  JS 另一页面撤销都使尚未开始的事务零 click。Python interactive 人工等待保留页面直到用户按 Enter
+  结束交接再关闭浏览器；非交互仍退出 2，不恢复自动操作。
+
+S03 最终全套 **294 passed, 2 live skipped**；共享 contract/integration **39 passed**，其中 Chromium **19**；
+CI 同命令 **294 passed, 2 deselected**。Ruff、Node 两份语法、锁定离线 sync、差异空白检查通过，uv.lock 未变。
+`51e9f41` 在临时 synthetic profile 上实际关闭并重启 Chromium，验证持久 blocker 阻断且累计 click 仍为 1；
+没有复用用户 profile，也不宣称断电/硬崩溃时 browser storage 的 OS fsync 保证。
+独立只读 review 比较 `f291831..76bdc60` 与文档草稿，发现两个 P2（撤销窗口、人工交接关闭页面），
+均由主实现者独立复核并接受，分别在 `5c9e454`、`1e7dbeb` 修复；无拒绝项。reviewer 独立检查
+111 passed（含 Chromium 11）、Ruff/Node/whitespace；修复后由主实现者验证 101/33 passed 及最终全套，
+没有声称 reviewer 再审修复提交。
+无真实登录/预约或现场 adapter 证据；远端 CI、Windows/Linux/frozen/release 未运行。
+S04 填表/身份/日期/readiness 合同和 S05 原子互斥尚未完成，默认 auto 的发布 gate 仍关闭。

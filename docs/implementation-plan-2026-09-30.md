@@ -231,7 +231,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 |---|---|---|---|---|
 | S01 | 已完成（2026-09-30） | `4dc188f`, `e57aa95`, `89bc2ce`；记录提交见文件历史 | Ruff/Node 通过；完整 197 passed, 2 live skipped；contract/integration 16 passed（含 Chromium 5）；只读 review: No findings，独立复核 48 passed | 远端 CI/live/跨平台 release/frozen 未验证；后续安全 gate 仍属 S02–S05 |
 | S02 | 已完成（2026-09-30） | `8c167c9`, `f3d0a47`, `c9cd962`, `d81b350`, `040b911`；记录提交见文件历史 | 完整 222 passed, 2 live skipped；contract/integration 17 passed（Chromium 6）；Ruff/Node/锁定离线 sync 通过；只读 review 1 P2 接受并修复，相关 62 passed | Windows/远端 CI/live/frozen 未验证；后续授权/提交/互斥 gate 属于 S03–S05 |
-| S03 | 未开始 | — | — | S02 |
+| S03 | 已完成（2026-09-30） | `9a8b33a`, `fcb4e18`, `c04ab7f`, `76bdc60`, `5c9e454`, `1e7dbeb`, `51e9f41`；记录提交见文件历史 | 最终 294 passed, 2 live skipped；contract/integration 39 passed（Chromium 19）；CI 同命令 294 passed, 2 deselected；Ruff/Node/离线锁定 sync 通过；review 2 P2 接受并修复 | 无 live adapter；S04/S05 发布 gate、Windows/远端 CI/frozen 未完成 |
 | S04 | 未开始 | — | — | S03 |
 | S05 | 未开始 | — | — | S04 |
 | S06 | 未开始 | — | — | S05 |
@@ -305,4 +305,45 @@ review：delegated-change-review 使用一个新鲜只读 `$review-agent`，比�
 CI 同命令 **222 passed, 2 deselected**。修复由主实现者验证，未另行声称 reviewer 重审修复提交。
 reviewer 独立检查两组相关套件 **75/111 passed**、Ruff/Node/whitespace；额外在临时真实 Chromium
 profile 核对新目录/文件均为 0700/0600。没有检查真实认证 profile，也没有执行 live。
+完成记录/架构证据另作文档提交，hash 见本文件历史，避免自引用。
+
+### S03 会话证据（2026-09-30）
+
+会话基线 `f291831`；已读取实施计划/当前架构并核对 S02 完成证据和现有调用链。
+本会话仅执行 S03；README、future-improvements 与未跟踪启动提示词的会话前改动保留且不提交。
+使用 implement-in-stages，四阶段分别本地提交；后续 review 修复、重启验收与记录另行提交，不 push：
+
+1. `9a8b33a`：显式结果状态、私有 atomic durable attempt journal、最小人工解决审计；相关 **11 + 26 passed**。
+2. `fcb4e18`：Python 一次 Locator click，未验证 follow-up 交人工、保守证据 seam，service/runner/CLI 终态；
+   相关 **67 passed**，完整 **245 passed, 2 skipped**。
+3. `c04ab7f`：JS 独立持久 journal、旧 submitting 迁移、Start/Stop/reset/刷新阻断与人工核对入口；
+   相关 **21 passed**（Chromium 7），完整 **263 passed, 2 skipped**。
+4. `76bdc60`：授权 gate、auto/manual 配置迁移、拒绝/撤销/非交互/绑定与策略版本回归、JS 本地真实 controller、
+   两路径共享 submission.v1.json 期望；完整 **290 passed, 2 skipped**，contract/integration **37 passed**（Chromium 17）。
+
+锁定离线 sync（dev）、Ruff、Node userscript/harness 语法、差异空白通过，uv.lock 未改。
+本机 Node v24.15.0、Playwright 1.58.0、macOS arm64 Chromium；浏览器仅临时 context/profile 与 synthetic local route，
+不访问真实预约站点。两个 live 因未启用 LIVE_E2E 跳过；无真实登录/预约、认证状态复制或现场 fixture 导出。
+共享场景和 fake adapter 的正证据/业务拒绝只证明本地合同，实际无已验证 live adapter 时始终 UNKNOWN。
+当前账号无法可靠区分，授权仅 Python 本次 run / JS 本次页面有效；不把 cookie/user_key 当成稳定账号 ID。
+Python POSIX fsync/权限已验证；JS 采用 browser storage 的同步 atomic item/读回能力，非 OS fsync 保证。
+未运行远端 CI、Windows/Linux、frozen/release；S04 填表与 S05 互斥 gate 按依赖留后续，默认 auto 尚不具备发布条件。
+
+review：delegated-change-review/review-agent，一个新鲜只读 subagent 比较 `f291831..76bdc60` 与两份
+文档证据草稿，确证两个 P2。主实现者逐项复核后均接受，无拒绝项：
+
+- 撤销入口在提交前 await 期间清空 grant，旧授权布尔值仍可能 click。`5c9e454` 在最后一次 await 后
+  只读复核授权与模式；不重新弹确认。Python sleep 中撤销与 JS 另一真实浏览器页面撤销均零 click，
+  未产生 pending；相关 **101 passed**（含本地 Chromium 12）。
+- Python 人工等待立即返回，使 CLI context 关闭准备页。`1e7dbeb` 保留 interactive context 供人工处理，
+  明确提示核对原站记录，用户按 Enter 后才关闭；noninteractive 仍退出 2。相关 **33 passed**。
+
+reviewer 独立检查 **111 passed**（含真实本地 Chromium 11）、Ruff/Node/whitespace。修复后检查由
+主实现者完成，未再委派，也未声称 reviewer 重新审查修复提交。`51e9f41` 再补真实 Chromium 关闭/重启：
+临时 synthetic persistent profile 重启后复读 journal，累计 click=1，未读取/复用用户认证 profile；
+该测试 **1 passed**，不宣称断电/硬崩溃 browser storage 的 fsync 能力。
+
+最终完整 **294 passed, 2 live skipped**；contract/integration **39 passed**（Chromium 19）；
+CI 同命令 **294 passed, 2 deselected**。Ruff、Node 两份语法、差异空白检查通过。
+未决阻断/人工核对/撤销和非交互 gate 均保持；本会话仅 S03，未执行后续实现或真实预约。
 完成记录/架构证据另作文档提交，hash 见本文件历史，避免自引用。
