@@ -216,3 +216,43 @@ def test_invalid_source_dates_reject_export_instead_of_losing_blockers(date_sour
     )
     with pytest.raises(FixtureRejected, match="unsupported schema"):
         convert_booking_html(raw, **META)
+
+
+def test_empty_schedule_time_range_preserves_deferred_hour_filter():
+    from grab.services.schedule import ScheduleService
+
+    payload = {
+        "data": {
+            "schedules": [
+                {
+                    "schedule_id": "slot",
+                    "doctor_id": "doc",
+                    "time_range": "",
+                    "status": "available",
+                }
+            ]
+        }
+    }
+    exported = convert_schedule(payload, **META)["payload"]
+    assert exported["data"]["schedules"][0]["time_range"] == ""
+    service = ScheduleService(None)
+    before = service.filter_slots(
+        service.parse_doctor_schedule(payload), [], [], [], ["09:00-09:30"]
+    )
+    after = service.filter_slots(
+        service.parse_doctor_schedule(exported), [], [], [], ["09:00-09:30"]
+    )
+    assert len(before) == len(after) == 1
+
+    from tests.userscripts.test_doctor_page_poller import _run_hook
+
+    for value in (payload, exported):
+        doctor_id = value["data"]["schedules"][0]["doctor_id"]
+        result = _run_hook(
+            "hooks.filterSlots(hooks.parseDoctorSchedulePayload("
+            + json.dumps(value)
+            + ", null), "
+            + json.dumps({"doctorId": doctor_id})
+            + ', {weeks:[],days:[],hours:["09:00-09:30"]}).length'
+        )
+        assert result == 1

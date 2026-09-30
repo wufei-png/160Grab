@@ -74,6 +74,8 @@ def metadata(payload, *, captured_on, level, path, source, coverage):
 
 
 def _time_label(value):
+    if value == "":
+        return ""  # No coarse time: both adapters defer precise hour filtering.
     # Keep only a strict time range used by both parsers, never free-form labels.
     match = re.search(r"(?<!\d)([0-2]\d:[0-5]\d\s*-\s*[0-2]\d:[0-5]\d)(?!\d)", value)
     return match[1].replace(" ", "") if match else "synthetic-time"
