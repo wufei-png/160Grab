@@ -154,7 +154,8 @@ class GrabRunner:
             await self._ensure_login_and_prepare_target()
 
             self._set_phase("wait_until_ready")
-            await self.scheduler.wait_until_ready()
+            if await self.scheduler.wait_until_ready() is False:
+                return RunResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
             logger.info("Scheduler ready. Starting schedule polling.")
 
             session_recovery_attempts = 0

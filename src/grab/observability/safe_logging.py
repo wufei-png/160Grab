@@ -50,6 +50,7 @@ MESSAGES = frozenset(
         "Diagnostic snapshot saved locally.",
         "Schedule polling could not resolve _user_key/access_hash. Attempting aggressive session refresh before failing.",
         "Scheduler ready. Starting schedule polling.",
+        "Scheduled start missed; manual confirmation required.",
         "Appointment time selected.",
         "Session expired during schedule polling.",
         "Session keepalive completed.",

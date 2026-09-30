@@ -1,11 +1,14 @@
+import warnings
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from grab.utils.profile_name import validate_profile_name
 from grab.utils.runtime import normalize_hour_value
+from grab.utils.schedule_time import schedule_instant
 
 
 class Slot(BaseModel):
@@ -169,6 +172,22 @@ class BookingConfig(BaseModel):
     address: BookingAddressConfig = Field(default_factory=BookingAddressConfig)
 
 
+class ScheduleConfig(BaseModel):
+    timezone: str = "Asia/Shanghai"
+    late_start_grace_seconds: float = Field(default=30, ge=0, allow_inf_nan=False)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(
+                "schedule.timezone must be a known IANA timezone"
+            ) from None
+        return value
+
+
 class GrabConfig(BaseModel):
     username: str | None = None
     password: str | None = None
@@ -184,6 +203,7 @@ class GrabConfig(BaseModel):
     brush_start_date: date | None = None
     enable_appoint: bool = False
     appoint_time: datetime | None = None
+    schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     booking_strategy: str = "page"
     booking: BookingConfig = Field(default_factory=BookingConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
@@ -191,6 +211,21 @@ class GrabConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     ocr: OcrConfig | None = None
+
+    @model_validator(mode="after")
+    def normalize_appoint_time(self):
+        if self.appoint_time is not None:
+            naive = self.appoint_time.tzinfo is None
+            self.appoint_time = schedule_instant(
+                self.appoint_time, self.schedule.timezone
+            )
+            if naive:
+                warnings.warn(
+                    "Naive appoint_time uses schedule.timezone; migrate to an offset ISO time.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        return self
 
     @field_validator("hours", mode="before")
     @classmethod

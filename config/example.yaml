@@ -41,8 +41,13 @@ page_action_sleep_time: "400-900"
 booking_retry_sleep_time: "2000-4000"
 # 命中「访问次数过多」等提示后的冷却(ms)
 rate_limit_sleep_time: "15000-25000"
+schedule:
+  timezone: "Asia/Shanghai"
+  late_start_grace_seconds: 30
+# 未指定刷号日期时按 schedule.timezone 取当天
 brush_start_date:
 enable_appoint: false
+# 推荐带 offset ISO，例如 "2030-01-01T08:00:00+08:00"；旧 naive 按上述时区解释
 appoint_time:
 booking_strategy: "page"
 booking:

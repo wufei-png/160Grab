@@ -26,6 +26,8 @@ datas = [
     (str(PROJECT_ROOT / "packaging" / "_embedded_version.txt"), "."),
 ]
 datas += collect_data_files("playwright_stealth")
+# Windows and frozen installations may have no system IANA timezone database.
+datas += collect_data_files("tzdata")
 datas += copy_metadata("playwright")
 datas += copy_metadata("playwright-stealth")
 

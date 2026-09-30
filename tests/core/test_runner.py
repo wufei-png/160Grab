@@ -444,3 +444,12 @@ async def test_pending_during_recovery_blocks_new_login(runner):
         )
     assert result.state == BookingState.OUTCOME_UNKNOWN
     assert runner.auth_service.calls == 0
+
+
+async def test_runner_missed_start_stops_without_poll_or_booking(runner, frozen_clock):
+    frozen_clock.current += timedelta(seconds=46)
+    runner.scheduler.is_interactive = False
+    result = await runner.run()
+    assert result.state == BookingState.AWAITING_MANUAL_CONFIRMATION
+    assert runner.schedule_service.poll_calls == 0
+    assert runner.booking_service.calls == 0

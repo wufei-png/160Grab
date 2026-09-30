@@ -1,7 +1,8 @@
 import asyncio
 import time
-from datetime import date
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from grab.browser.page_api import _is_destroyed_context_error
 from grab.core.leader import check_leader, exclusive_operation
@@ -28,7 +29,9 @@ class ScheduleService:
         monotonic=None,
         session_refresh=None,
         retry_budget=None,
+        now=None,
     ):
+        self._now = now or (lambda: datetime.now(UTC))
         self.page_api = page_api
         self.config = config
         self._sleep = sleep or asyncio.sleep
@@ -389,7 +392,10 @@ class ScheduleService:
         return []
 
     def _resolve_target_date(self) -> str:
-        target = self.config.brush_start_date or date.today()
+        target = (
+            self.config.brush_start_date
+            or self._now().astimezone(ZoneInfo(self.config.schedule.timezone)).date()
+        )
         return target.isoformat()
 
     def _should_emit_heartbeat(self) -> bool:
