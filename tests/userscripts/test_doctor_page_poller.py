@@ -593,7 +593,7 @@ def test_old_generated_values_are_cleared_and_explicit_v4_values_survive():
         "booking": {"diseaseDescription": "门诊就诊，具体病情现场面诊沟通"},
     }
     migrated = _run_hook("hooks.normalizeSettings(" + json.dumps(old) + ")")
-    assert migrated["settingsVersion"] == 4
+    assert migrated["settingsVersion"] == 5
     assert migrated["address"] == dict(province=None, city=None, area=None, detail=None)
     assert migrated["booking"]["diseaseDescription"] is None
     explicit = _run_hook(

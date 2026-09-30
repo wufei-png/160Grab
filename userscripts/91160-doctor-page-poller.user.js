@@ -36,12 +36,14 @@
   let lastResolvedUserKey = null;
   let lastResolvedUserKeySource = null;
   let activeControllerId = null;
+  let manualStartControllerId = null;
 
   const CONFIG_DEFAULTS = {
     runtime: {
       autoStart: false,
       startAt: null,
     },
+    schedule: { timezone: "Asia/Shanghai", lateStartGraceSeconds: 30 },
     target: {
       unitId: null,
       depId: null,
@@ -155,16 +157,60 @@
     return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
   }
 
-  function normalizeStartAtValue(value) {
+  function timeParts(timestamp, timezone) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(timestamp));
+    return Object.fromEntries(parts.filter(p => p.type !== "literal").map(p => [p.type, p.value]));
+  }
+
+  function wallTimeValue(timestamp, timezone) {
+    const p = timeParts(timestamp, timezone);
+    return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
+  }
+
+  function normalizeTimezone(value) {
     const text = compactText(value);
-    if (!text) {
-      return null;
-    }
-    const timestamp = Date.parse(text);
-    if (Number.isNaN(timestamp)) {
-      return null;
-    }
+    timeParts(0, text); // Validate with the browser's IANA database.
     return text;
+  }
+
+  function normalizeStartAtValue(value, timezone = "Asia/Shanghai") {
+    const text = compactText(value);
+    if (!text) return null;
+    const match = text.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?$/);
+    if (!match || !validFormDate(match[1]) || Number(match[2]) > 23 || Number(match[3]) > 59 || Number(match[4] || 0) > 59) throw new Error("Invalid configured start time.");
+    const wall = `${match[1]}T${match[2]}:${match[3]}:${match[4] || '00'}`;
+    const fraction = Number(match[5] || 0) * 1000;
+    if (match[6]) {
+      const timestamp = Date.parse(text);
+      if (!Number.isFinite(timestamp)) throw new Error("Invalid configured start time.");
+      return new Date(timestamp).toISOString();
+    }
+    // Enumerate nearby zone offsets and round-trip each candidate. A DST fold
+    // gives two matches, a gap gives none; neither may silently choose a time.
+    const reference = Date.parse(wall + 'Z');
+    const candidates = new Set();
+    for (let hour = -36; hour <= 36; hour += 6) {
+      const sample = reference + hour * 3600000;
+      const offset = Date.parse(wallTimeValue(sample, timezone) + 'Z') - sample;
+      const candidate = reference - offset;
+      if (wallTimeValue(candidate, timezone) === wall) candidates.add(candidate + fraction);
+    }
+    if (candidates.size !== 1) throw new Error("Ambiguous or nonexistent start time; use an offset ISO time.");
+    return new Date([...candidates][0]).toISOString();
+  }
+
+  function startAtInputValue(value, timezone) {
+    if (!value) return "";
+    const timestamp = Date.parse(value);
+    const fraction = new Date(timestamp).getUTCMilliseconds();
+    return wallTimeValue(timestamp, timezone) + (fraction ? `.${String(fraction).padStart(3, '0')}` : '');
+  }
+
+  function scheduleDate(timezone, timestamp = Date.now()) {
+    return wallTimeValue(timestamp, timezone).slice(0, 10);
   }
 
   function normalizeHourEndpoint(value) {
@@ -217,7 +263,7 @@
     const sourceBooking = rawSettings?.booking ?? {};
     // Old generated defaults are indistinguishable from explicit choices. Clear
     // those exact values on migration; re-entry in v4 records an explicit choice.
-    if (rawSettings?.settingsVersion !== 4) {
+    if (![4, 5].includes(rawSettings?.settingsVersion)) {
       for (const [key, old] of Object.entries({province:"广东",city:"深圳",area:"南山区"})) {
         if (merged.address[key] === old) merged.address[key] = null;
       }
@@ -227,11 +273,16 @@
       ? (sourceBooking.autoSubmit === false ? "manual_confirm" : "auto")
       : sourceBooking.submitMode;
     if (!["auto", "manual_confirm"].includes(submitMode)) throw new Error("Invalid submission mode");
+    const timezone = normalizeTimezone(merged.schedule.timezone);
+    const grace = Number(merged.schedule.lateStartGraceSeconds);
+    if (!Number.isFinite(grace) || grace < 0) throw new Error("Invalid late start grace.");
     return {
-      settingsVersion: 4,
+      settingsVersion: 5,
+      schedule: {timezone, lateStartGraceSeconds: grace},
       runtime: {
         autoStart: normalizeBoolean(merged.runtime.autoStart, false),
-        startAt: normalizeStartAtValue(merged.runtime.startAt),
+        startAt: normalizeStartAtValue(merged.runtime.startAt, timezone),
+        startBlocked: merged.runtime.startBlocked === true,
       },
       target: {
         unitId: normalizeOptionalValue(merged.target.unitId),
@@ -383,6 +434,8 @@
     "Waited for booking page initialization before submit.",
     "Waiting for booking page initialization before submit.",
     "Waiting for configured start time.",
+    "Scheduled start missed; manual confirmation required.",
+    "Configured start time requires manual correction.",
   ]);
   const SAFE_DETAIL_COUNTS = new Set(["attempt", "pollAttempt", "delayMs", "slotCount", "count", "status"]);
   const SAFE_DETAIL_FLAGS = new Set(["ready", "success", "ticketPresent", "randstrPresent"]);
@@ -450,11 +503,14 @@
     try {
       const raw = readStoredValue(SETTINGS_KEY, null);
       const settings = normalizeSettings(raw);
-      if (raw && raw.settingsVersion !== 4) writeStoredValue(SETTINGS_KEY, settings);
+      if (raw?.runtime?.startAt && !/(Z|[+-]\d{2}:\d{2})$/.test(raw.runtime.startAt)) {
+        console.warn("[160Grab] Naive startAt uses schedule.timezone; migrated to offset ISO.");
+      }
+      if (raw && (raw.settingsVersion !== 5 || raw.runtime?.startAt !== settings.runtime.startAt)) writeStoredValue(SETTINGS_KEY, settings);
       return settings;
     } catch (error) {
-      console.error("[160Grab error] Failed to load stored settings; using defaults.");
-      return normalizeSettings({booking:{submitMode:"manual_confirm"}});
+      console.error("[160Grab error] Failed to load stored settings; automatic start blocked.");
+      return normalizeSettings({runtime:{startBlocked:true},booking:{submitMode:"manual_confirm"}});
     }
   }
 
@@ -864,6 +920,7 @@
     consentDenied = false;
     const controllerId = makeControllerId(kind);
     activeControllerId = controllerId;
+    manualStartControllerId = controllerId;
     patchState((next) => ({
       ...next,
       running: true,
@@ -1611,7 +1668,7 @@
         doc_id: target.doctorId,
         unit_id: target.unitId,
         dep_id: target.depId,
-        date: settings.filters.startDate || new Date().toISOString().slice(0, 10),
+        date: settings.filters.startDate || scheduleDate(settings.schedule.timezone),
         days: "6",
       },
       () => ownsBrowserLeader(owner) && (!canaryLatched() || canaryAlive()),
@@ -2085,19 +2142,30 @@
     setSummary("info", reason, "");
   }
 
-  function isStartAtReady(settings) {
-    if (!settings.runtime.startAt) {
-      return true;
-    }
-    return Date.now() >= Date.parse(settings.runtime.startAt);
-  }
-
   async function waitUntilStartAt(settings, controllerId) {
-    while (isControllerActive(controllerId) && !isStartAtReady(settings)) {
-      const remaining = Math.max(0, Date.parse(settings.runtime.startAt) - Date.now());
-      setSummary("info", "Waiting for configured start time.", `${Math.ceil(remaining / 1000)}s`);
-      await sleepMs(Math.min(5000, remaining || 1000));
+    const guard = () => isControllerActive(controllerId);
+    if (settings.runtime.startBlocked) {
+      stopRun("Configured start time requires manual correction.");
+      return false;
     }
+    if (!settings.runtime.startAt) return guard();
+    const target = Date.parse(settings.runtime.startAt);
+    while (guard() && Date.now() < target) {
+      const remaining = target - Date.now();
+      setSummary("info", "Waiting for configured start time.", "");
+      if (!await waitReadDelay(Math.min(5000, remaining), guard)) return false;
+    }
+    if (!guard()) return false;
+    if (Date.now() - target <= settings.schedule.lateStartGraceSeconds * 1000) return true;
+    // Auto start/reload has no interactive authorization. Only a fresh Start
+    // in this document can open the late-start confirmation dialog.
+    const accepted = manualStartControllerId === controllerId && typeof globalThis.confirm === 'function'
+      && globalThis.confirm("已超过定时启动宽限期，是否现在开始轮询？");
+    if (!accepted || !guard()) {
+      stopRun("Scheduled start missed; manual confirmation required.");
+      return false;
+    }
+    return true;
   }
 
   async function recoverSession(target, reason, settings) {
@@ -2190,6 +2258,10 @@
       return;
     }
 
+    if (settings.runtime.startBlocked) {
+      stopRun("Configured start time requires manual correction.");
+      return;
+    }
     const resolved = resolveTargetFromSnapshot(
       snapshotCurrentDoctorPage(),
       settings.target,
@@ -2208,7 +2280,7 @@
       return;
     }
 
-    await waitUntilStartAt(settings, controllerId);
+    if (!await waitUntilStartAt(settings, controllerId)) return;
 
     while (isControllerActive(controllerId)) {
       const activeSettings = readSettings();
@@ -3341,11 +3413,15 @@
             <div class="grab160-grid">
               ${renderField(
                 "Start At",
-                "到这个时间才开始轮询；为空则点击 Start 后立即开始。",
-                `<input data-setting="runtime.startAt" type="datetime-local" value="${htmlEscape(
-                  settings.runtime.startAt ?? "",
+                "按下方时区输入；为空立即开始。迟到超过宽限期需要人工确认。",
+                `<input data-setting="runtime.startAt" type="datetime-local" step="0.001" value="${htmlEscape(
+                  startAtInputValue(settings.runtime.startAt, settings.schedule.timezone),
                 )}">`,
               )}
+              ${renderField("Timezone", "IANA 时区，如 Asia/Shanghai。查询默认日期也按此时区计算。",
+                `<input data-setting="schedule.timezone" value="${htmlEscape(settings.schedule.timezone)}">`)}
+              ${renderField("Late Start Grace (seconds)", "迟到不超过此值仍开始；默认 30 秒。",
+                `<input data-setting="schedule.lateStartGraceSeconds" type="number" min="0" value="${settings.schedule.lateStartGraceSeconds}">`)}
               ${renderField(
                 "Appointment From",
                 "从哪一天开始查询号源，不是脚本启动时间；为空则从今天开始。",
@@ -3562,6 +3638,8 @@
       "address.detail",
       "filters.startDate",
       "runtime.startAt",
+      "schedule.timezone",
+      "schedule.lateStartGraceSeconds",
       "booking.submitMode",
       "booking.autoReturnAfterSubmitFailure",
       "booking.diseaseDescription",
@@ -3598,6 +3676,13 @@
         .map((input) => Number(input.value));
       setByPath(next, path, values);
     }
+    // Preserve an explicit instant when the displayed wall time is unchanged,
+    // including an offset-disambiguated DST fold and subsecond precision.
+    if (next.schedule.timezone === previous.schedule.timezone &&
+        next.runtime.startAt === startAtInputValue(previous.runtime.startAt, previous.schedule.timezone)) {
+      next.runtime.startAt = previous.runtime.startAt;
+    }
+    next.runtime.startBlocked = false;
     return normalizeSettings(next);
   }
 
@@ -3683,7 +3768,7 @@
     SETTINGS_KEY,
     STATE_KEY,
     normalizeOptionalValue,
-    normalizeSettings,
+    normalizeSettings, normalizeStartAtValue, wallTimeValue, startAtInputValue, collectSettingsFromPanel, scheduleDate, waitUntilStartAt,
     normalizeHourValue,
     normalizeHours,
     readCookieValue,
