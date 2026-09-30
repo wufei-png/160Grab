@@ -13,7 +13,11 @@ async def test_real_locator_click_is_durable_and_never_repeated(
 ):
     page = chromium_page
     await page.context.route(
-        "**/*", lambda route: route.fulfill(body='<button id="submitbtn">预约</button>')
+        "**/*",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body='<input name="schedule_id" value="slot"><input type="hidden" name="mid" value="member"><button id="submitbtn">预约</button>',
+        ),
     )
     await page.goto("https://synthetic.invalid/booking")
     await page.evaluate(

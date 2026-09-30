@@ -55,6 +55,8 @@ class FakeBookingPage:
             self.current_html = self.success_html
 
     async def evaluate(self, script: str, arg: dict | None = None):
+        if "clone.outerHTML" in script:
+            return self.current_html
         if arg is not None:
             self.evaluated.append(arg)
             return {
@@ -157,12 +159,13 @@ def test_booking_service_exposes_page_strategy_only_by_default(booking_service):
 
 
 @pytest.mark.asyncio
-async def test_open_booking_form_prefills_member_id(page_booking_strategy):
+async def test_open_booking_form_requires_existing_member_evidence(page_booking_strategy):
     form = await page_booking_strategy.open_booking_form("sch-1001")
 
     assert form.member_id == "member-1"
-    assert page_booking_strategy.page.evaluated[0]["memberId"] == "member-1"
-    assert page_booking_strategy.page.evaluated[0]["appointmentValue"] == "detl-1"
+    assert not form.is_valid
+    assert form.blockers == ["member.mismatch"]
+    assert page_booking_strategy.page.evaluated == []
 
 
 @pytest.mark.asyncio

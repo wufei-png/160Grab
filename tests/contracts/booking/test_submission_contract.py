@@ -36,6 +36,9 @@ async def test_both_paths_use_shared_outcome_and_click_contract(tmp_path, scenar
     control = Control()
 
     class Page:
+        async def content(self):
+            return '<input name="schedule_id" value="slot"><input type="hidden" name="mid" value="member"><ul id="delts"><li val="time" class="selected">Synthetic time</li></ul><button id="submitbtn">Submit</button>'
+
         def locator(self, selector):
             return control
 

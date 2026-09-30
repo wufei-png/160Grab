@@ -155,8 +155,18 @@ class NotificationsConfig(BaseModel):
         return value
 
 
+class BookingAddressConfig(BaseModel):
+    province: str | None = None
+    city: str | None = None
+    area: str | None = None
+    detail: str | None = None
+
+
 class BookingConfig(BaseModel):
     submit_mode: Literal["auto", "manual_confirm"] = "auto"
+    disease_description: str | None = None
+    clinic_card: str | None = None
+    address: BookingAddressConfig = Field(default_factory=BookingAddressConfig)
 
 
 class GrabConfig(BaseModel):
@@ -225,6 +235,8 @@ class BookingForm(BaseModel):
     schedule_id: str
     appointment_value: str | None = None
     appointment_label: str | None = None
+    schedule_date: str | None = None
+    blockers: list[str] = Field(default_factory=list)
     is_valid: bool = True
     invalid_reason: str | None = None
 
@@ -263,7 +275,10 @@ class Outcome(BaseModel):
             return 0
         if self.state in {BookingState.OUTCOME_UNKNOWN, BookingState.SUBMITTING}:
             return 3
-        if self.state in {BookingState.AWAITING_MANUAL_CONFIRMATION, BookingState.PREPARED}:
+        if self.state in {
+            BookingState.AWAITING_MANUAL_CONFIRMATION,
+            BookingState.PREPARED,
+        }:
             return 2
         return 1
 

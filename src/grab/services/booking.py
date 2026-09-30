@@ -1,9 +1,14 @@
 import asyncio
-import re
 from typing import Protocol
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from grab.booking.form import SUBMIT_SELECTOR, snapshot_html
+from grab.booking.page import (
+    apply_decision,
+    read_decision,
+    selected_member_ready,
+)
 from grab.models.schemas import (
     BookingForm,
     BookingResult,
@@ -48,6 +53,7 @@ class PageBookingStrategy:
         self.evidence_adapter = evidence_adapter
         self.consent_manager = consent_manager
         self._run_blocked = False
+        self.expected_date: str | None = None
         self.member_id: str | None = None
         self.target: DoctorPageTarget | None = None
 
@@ -67,11 +73,10 @@ class PageBookingStrategy:
         self.member_id = member_id
 
     def parse_booking_form(self, booking_page_html: str, member_id: str) -> BookingForm:
-        schedule_match = re.search(
-            r'name="schedule_id"\s+value="([^"]+)"',
-            booking_page_html,
+        snapshot = snapshot_html(booking_page_html)
+        schedule_id = (
+            snapshot["schedule_ids"][0] if len(snapshot["schedule_ids"]) == 1 else ""
         )
-        schedule_id = schedule_match.group(1) if schedule_match else ""
         appointment_options = self._parse_appointment_options(booking_page_html)
         appointment_value, appointment_label = self._select_appointment_option(
             booking_page_html,
@@ -102,6 +107,7 @@ class PageBookingStrategy:
             schedule_id=schedule_id,
             appointment_value=appointment_value,
             appointment_label=appointment_label,
+            schedule_date=self.expected_date,
             is_valid=invalid_reason is None,
             invalid_reason=invalid_reason,
         )
@@ -133,23 +139,11 @@ class PageBookingStrategy:
     def _parse_appointment_options(
         self, booking_page_html: str
     ) -> list[tuple[str, str]]:
-        delts_match = re.search(
-            r'<(?:ul|div)[^>]*id="delts"[^>]*>(?P<body>.*?)</(?:ul|div)>',
-            booking_page_html,
-            re.S,
-        )
-        body = delts_match.group("body") if delts_match else booking_page_html
-        raw_options = re.findall(
-            r'<li[^>]*\bval="(?P<value>[^"]+)"[^>]*>(?P<label>.*?)</li>',
-            body,
-            re.S,
-        )
-        options: list[tuple[str, str]] = []
-        for value, raw_label in raw_options:
-            label = re.sub(r"<[^>]+>", "", raw_label).strip()
-            if value.strip() and label:
-                options.append((value.strip(), label))
-        return options
+        return [
+            (t["value"], t["label"])
+            for t in snapshot_html(booking_page_html)["times"]
+            if t["value"] and t["label"]
+        ]
 
     def _appointment_matches_hours(self, label: str) -> bool:
         if self.config is None or not self.config.hours:
@@ -214,100 +208,24 @@ class PageBookingStrategy:
         )
 
     async def fill_booking_form(self, form: BookingForm) -> None:
-        if not hasattr(self.page, "evaluate"):
-            return
-
-        await self.page.evaluate(
-            """({ memberId, appointmentValue }) => {
-                const clickElement = (element) => {
-                    if (!element) return false;
-                    element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                    if ('checked' in element) {
-                        element.checked = true;
-                        element.setAttribute('checked', 'checked');
-                        element.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                    return true;
-                };
-
-                let appointmentSelected = false;
-                if (appointmentValue) {
-                    const options = Array.from(document.querySelectorAll('#delts li[val]'));
-                    const target = options.find(
-                        (item) => (item.getAttribute('val') || '').trim() === appointmentValue
-                    );
-                    if (target) {
-                        appointmentSelected = clickElement(target);
-                    }
-                }
-
-                const hiddenSelectors = [
-                    'input[name="member_id"]',
-                    '#member_id',
-                    'input[name="memberId"]',
-                    '#memberId',
-                    'input[name="mid"]',
-                    '#mid',
-                    'input[name="his_mem_id"]',
-                    '#his_mem_id',
-                ];
-                hiddenSelectors.forEach((selector) => {
-                    const input = document.querySelector(selector);
-                    if (input) {
-                        input.value = memberId;
-                    }
-                });
-
-                const radioSelectors = [
-                    `input[type="radio"][value="${memberId}"]`,
-                    `input[name="mid"][value="${memberId}"]`,
-                    `input[name="member_id"][value="${memberId}"]`,
-                    `input[data-member-id="${memberId}"]`,
-                    `input[data-mid="${memberId}"]`,
-                ];
-                let memberSelected = false;
-                for (const selector of radioSelectors) {
-                    const input = document.querySelector(selector);
-                    if (input) {
-                        memberSelected = clickElement(input);
-                        if (memberSelected) break;
-                    }
-                }
-
-                if (!memberSelected) {
-                    const allRadios = Array.from(document.querySelectorAll('input[type="radio"]'));
-                    if (allRadios.length === 1) {
-                        memberSelected = clickElement(allRadios[0]);
-                    }
-                }
-
-                const selectors = [
-                    'input[name="disease_input"]',
-                    '#disease_input',
-                    'textarea[name="disease_content"]',
-                    '#disease_content',
-                    'input[name="accept"][value="1"]',
-                    '#check_yuyue_rule',
-                ];
-                selectors.forEach((selector) => {
-                    const input = document.querySelector(selector);
-                    if (input) {
-                        if (input.type === 'radio' || input.type === 'checkbox') {
-                            input.checked = true;
-                            input.setAttribute('checked', 'checked');
-                        } else if (!input.value) {
-                            input.value = '11111111111111';
-                        }
-                    }
-                });
-                return { appointmentSelected, memberSelected };
-            }""",
-            {
-                "memberId": form.member_id,
-                "appointmentValue": form.appointment_value,
-            },
-        )
-        logger.info("Booking form selection completed.")
+        # Three bounded DOM preparation passes; deterministic conflicts stop now.
+        for attempt in range(3):
+            snapshot, decision = await read_decision(self.page, form, self.config)
+            if decision["can_prepare"]:
+                await apply_decision(self.page, snapshot, decision)
+                snapshot, decision = await read_decision(self.page, form, self.config)
+            form.blockers = decision["blockers"]
+            if not form.blockers and selected_member_ready(snapshot, decision):
+                return
+            deterministic = any(
+                b.endswith((".conflict", ".ambiguous", ".mismatch", ".blocked"))
+                for b in form.blockers
+            )
+            if deterministic or attempt == 2:
+                break
+            await asyncio.sleep(0.25)
+        form.is_valid = False
+        form.invalid_reason = "required_fields_blocked"
 
     def blocked_result(self) -> BookingResult | None:
         try:
@@ -323,10 +241,7 @@ class PageBookingStrategy:
 
     async def _submit_control(self):
         # A unique actionable Locator; no broad text or form.submit fallback.
-        control = self.page.locator(
-            "#submitbtn, #submit_booking, #submitBooking, "
-            '#suborder button[type="submit"], #suborder input[type="submit"]'
-        )
+        control = self.page.locator(SUBMIT_SELECTOR)
         if (
             await control.count() != 1
             or not await control.is_visible()
@@ -356,6 +271,13 @@ class PageBookingStrategy:
         if control is None:
             return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         try:
+            snapshot, readiness = await read_decision(self.page, form, self.config)
+            if (
+                readiness["blockers"]
+                or readiness["writes"]
+                or not selected_member_ready(snapshot, readiness)
+            ):
+                return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
             # Recheck after every preparatory await. Revocation cannot be replaced
             # by another confirmation prompt at this final boundary.
             if self.consent_manager and not self.consent_manager.is_authorized(
@@ -539,6 +461,7 @@ class BookingService:
             )
         total_attempts = 0
         for slot in slots:
+            self.page_strategy.expected_date = slot.date or None
             result = await self.page_strategy.submit_with_retry(slot.schedule_id)
             total_attempts += result.attempts
             if result.state != BookingState.CONFIRMED_NO_EFFECT:
@@ -550,6 +473,7 @@ class BookingService:
         )
 
     async def open_booking_form(self, slot) -> BookingForm:
+        self.page_strategy.expected_date = slot.date or None
         return await self.page_strategy.open_booking_form(slot.schedule_id)
 
     async def submit_open_form(self, form: BookingForm) -> BookingResult:

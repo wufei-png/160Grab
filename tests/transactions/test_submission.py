@@ -38,6 +38,9 @@ class Page:
     def __init__(self, store, error=None):
         self.store, self.error, self.clicks = store, error, 0
 
+    async def content(self):
+        return '<input name="schedule_id" value="slot"><input type="radio" name="mid" value="member" checked><ul id="delts"><li val="time" class="selected">Synthetic time</li></ul><button id="submitbtn">Submit</button>'
+
     def locator(self, selector):
         return Control(self)
 

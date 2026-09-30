@@ -230,7 +230,11 @@ def snapshot_html(html):
                 {
                     "value": n.value(),
                     "checked": "checked" in a,
-                    "actionable": n.actionable() and "readonly" not in a,
+                    "actionable": (
+                        a.get("data-grab-writable") == "true"
+                        if "data-grab-writable" in a
+                        else n.actionable() and "readonly" not in a
+                    ),
                     "kind": n.tag,
                     "options": [
                         {
