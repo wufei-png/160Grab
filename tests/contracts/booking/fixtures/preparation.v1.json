@@ -807,6 +807,31 @@
         "submit_clicks": 1
       },
       "native_required_valid": true
+    },
+    {
+      "id": "region-optgroup-existing",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><select id=\"useraddress_province\"><option value=\"0\">Choose</option><optgroup label=\"Synthetic regions\"><option selected value=\"synthetic-region\">Synthetic province</option></optgroup></select></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {
+        "address.province": "Synthetic province"
+      },
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "address.province": "existing"
+        },
+        "submit_clicks": 1
+      }
     }
   ]
 }

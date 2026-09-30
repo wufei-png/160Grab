@@ -29,11 +29,18 @@ class Node:
         self.children = []
         self.text = ""
 
+    def options(self):
+        return [
+            option
+            for child in self.children
+            for option in ([child] if child.tag == "option" else child.options())
+        ]
+
     def value(self):
         if self.tag == "textarea":
             return self.text.strip()
         if self.tag == "select":
-            options = [n for n in self.children if n.tag == "option"]
+            options = self.options()
             selected = next((n for n in options if "selected" in n.attrs), None)
             return (selected or (options[0] if options else self)).attrs.get(
                 "value", ""
@@ -272,10 +279,11 @@ def snapshot_html(html):
                         {
                             "value": c.attrs.get("value", ""),
                             "label": " ".join(c.text.split()),
-                            "disabled": "disabled" in c.attrs,
+                            "disabled": "disabled" in c.attrs
+                            or c.parent.tag == "optgroup"
+                            and "disabled" in c.parent.attrs,
                         }
-                        for c in n.children
-                        if c.tag == "option"
+                        for c in n.options()
                     ],
                 }
             )

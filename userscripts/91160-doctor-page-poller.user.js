@@ -1533,7 +1533,7 @@
       snapshot.fields[key] = nodes.map(n => {
         known.add(n);
         return {value:n.value.trim(), checked:Boolean(n.checked), actionable:!n.matches(':disabled') && !n.readOnly && (formActionable(n) || n.type === 'hidden'), kind:n.tagName.toLowerCase(),
-          options:Array.from(n.options || []).map(o => ({value:o.value,label:compactText(o.textContent),disabled:o.disabled}))};
+          options:Array.from(n.options || []).map(o => ({value:o.value,label:compactText(o.textContent),disabled:o.disabled || (o.parentElement.tagName === 'OPTGROUP' && o.parentElement.disabled)}))};
       });
     });
     snapshot.other_required = all('[required]').filter(n => !known.has(n) && !['schedule_id','member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => n.validity ? n.validity.valid : Boolean(n.value?.trim()));
