@@ -1,142 +1,152 @@
 import asyncio
 import os
-from dataclasses import dataclass
-from typing import Literal
+import select
+import sys
 
 import pytest
 
 from grab.browser.page_api import BrowserPageApi
 from grab.browser.playwright_client import PlaywrightClient
-from grab.core.scheduler import Scheduler
+from grab.canary.runner import CanaryRunner
+from grab.core.leader import leader_scope
 from grab.models.schemas import GrabConfig
-from grab.services.auth import AuthService
 from grab.services.booking import BookingService, PageBookingStrategy
 from grab.services.schedule import ScheduleService
 from grab.services.session import SessionCaptureService
+from grab.transactions.consent import ConsentManager
+from grab.transactions.store import AttemptStore
+from grab.utils.profile_manager import load_profile
 
 
 def pytest_collection_modifyitems(config, items):
     if os.getenv("LIVE_E2E") == "1":
         return
-
-    skip_live = pytest.mark.skip(reason="set LIVE_E2E=1 to run live tests")
     for item in items:
         if "live" in item.keywords:
-            item.add_marker(skip_live)
+            item.add_marker(pytest.mark.skip(reason="set LIVE_E2E=1 to run live tests"))
 
 
-def _parse_csv(value: str | None) -> list[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
-def _parse_int_csv(value: str | None) -> list[int]:
-    return [int(item) for item in _parse_csv(value)]
-
-
-def _build_live_config() -> GrabConfig:
+def _build_live_config():
     return GrabConfig(
         member_id=os.getenv("LIVE_MEMBER_ID"),
-        doctor_ids=_parse_csv(os.getenv("LIVE_DOCTOR_IDS")),
-        weeks=_parse_int_csv(os.getenv("LIVE_WEEKS")),
-        days=_parse_csv(os.getenv("LIVE_DAYS")),
-        hours=_parse_csv(os.getenv("LIVE_HOURS")),
-        sleep_time=os.getenv("LIVE_SLEEP_TIME", "3000"),
-        brush_start_date=os.getenv("LIVE_BRUSH_START_DATE"),
-        booking_strategy="page",
-        auth={"strategy": "manual"},
+        doctor_ids=[os.environ["LIVE_DOCTOR_ID"]],
+        hours=[os.environ["LIVE_HOURS"]] if os.getenv("LIVE_HOURS") else [],
+        brush_start_date=os.environ["LIVE_DATE"],
+        booking={
+            "clinic_card": os.getenv("LIVE_CARD"),
+            "disease_description": os.getenv("LIVE_DISEASE"),
+            "address": {
+                k: os.getenv("LIVE_ADDRESS_" + k.upper())
+                for k in ("province", "city", "area", "detail")
+            },
+        },
     )
 
 
-@dataclass
-class LiveRunResult:
-    logged_in: bool
-    schedule_checked: bool
-    booking_form_opened: bool
-    submitted: bool
-
-
-class LiveRunner:
-    def __init__(
-        self,
-        auth_service: AuthService,
-        session_service: SessionCaptureService,
-        schedule_service: ScheduleService,
-        booking_service: BookingService,
-        scheduler: Scheduler,
-    ):
-        self.auth_service = auth_service
-        self.session_service = session_service
-        self.schedule_service = schedule_service
-        self.booking_service = booking_service
-        self.scheduler = scheduler
-
-    async def run(
-        self,
-        until: Literal["booking_confirmation", "final_submit"],
-    ) -> LiveRunResult:
-        login_result = await self.auth_service.ensure_login()
-        if not login_result.success:
-            raise RuntimeError("Live login failed")
-
-        target = await self.session_service.capture_target_from_current_page()
-        member_id = await self.session_service.resolve_member_id()
-        self.schedule_service.set_target(target)
-        self.booking_service.prepare(target, member_id)
-
-        await self.scheduler.wait_until_ready()
-        slots = await self.schedule_service.poll_until_match()
-        if not slots:
-            raise RuntimeError("No matching live slots found")
-
-        form = await self.booking_service.open_booking_form(slots[0])
-        if not form.is_valid:
-            raise RuntimeError("Booking form is invalid")
-
-        if until == "final_submit" and os.getenv("LIVE_BOOKING") == "1":
-            submit_result = await self.booking_service.submit_open_form(form)
-            return LiveRunResult(
-                logged_in=True,
-                schedule_checked=True,
-                booking_form_opened=True,
-                submitted=submit_result.success,
-            )
-
-        return LiveRunResult(
-            logged_in=True,
-            schedule_checked=True,
-            booking_form_opened=True,
-            submitted=False,
+async def terminal_ready(phase, private):
+    # Nonblocking POSIX stdin, so timeout/cancellation also stops human waiting.
+    # No executor thread left reading a future operator response after timeout.
+    if not sys.stdin.isatty() or os.name != "posix":
+        return False
+    word = {"ready": "READY", "prepare": "PREPARE", "submit": "SUBMIT"}[phase]
+    if private:
+        target, item, config = private
+        print(
+            f"本次 {phase}：医生 {target.unit_id}/{target.dept_id}/{target.doctor_id}；"
+            f"就诊人 {config.member_id}；日期 {config.brush_start_date}；"
+            f"时段 {config.hours}；schedule {item.schedule_id}。",
+            flush=True,
         )
+        if phase == "prepare":
+            print(
+                "允许选择就诊人/时段及填写显式配置字段；请在本机核对全部字段。",
+                flush=True,
+            )
+        else:
+            print(
+                f"最终时段值 {item.appointment_value}；将点击一次最终提交。"
+                "未知结果必须在原站人工核对；禁止混跑。",
+                flush=True,
+            )
+    print(
+        f"手动登录并停留目标医生页（ready），或确认本次具体操作：输入 {word}：",
+        flush=True,
+    )
+    while True:
+        if select.select([sys.stdin], [], [], 0)[0]:
+            return sys.stdin.readline().strip() == word
+        await asyncio.sleep(0.1)
 
 
 @pytest.fixture
-async def live_runner():
-    config = _build_live_config()
-    client = PlaywrightClient(headless=False)
-    await client.launch()
-
-    page_api = BrowserPageApi(client.page)
-    auth_service = AuthService(client.page, config)
-    session_service = SessionCaptureService(client.page, config)
-    schedule_service = ScheduleService(page_api, config=config, sleep=asyncio.sleep)
-    booking_service = BookingService(
-        page_strategy=PageBookingStrategy(
-            client.page,
-            config=config,
-            sleep=asyncio.sleep,
-        )
-    )
-    scheduler = Scheduler(config)
-
+async def live_runner(request):
+    required = ("LIVE_LEVEL", "LIVE_PROFILE", "LIVE_DOCTOR_ID", "LIVE_DATE")
+    if not all(os.getenv(k) for k in required):
+        pytest.skip("live blocker: explicit level/profile/doctor/date required")
+    if os.getenv("LIVE_LEVEL") not in {"readonly", "prepare", "submit"}:
+        pytest.fail("invalid LIVE_LEVEL", pytrace=False)
+    if request.node.callspec.params["level"] != os.environ["LIVE_LEVEL"]:
+        pytest.skip("different explicitly selected canary level")
+    if os.environ["LIVE_LEVEL"] != "readonly" and not all(
+        os.getenv(k) for k in ("LIVE_MEMBER_ID", "LIVE_HOURS")
+    ):
+        pytest.skip("live blocker: prepare/submit require member and time range")
+    if not sys.stdin.isatty() or os.name != "posix":
+        pytest.skip("live blocker: POSIX interactive terminal required; run pytest -s")
+    if os.environ["LIVE_LEVEL"] == "submit" and os.getenv("LIVE_BOOKING") != "1":
+        pytest.skip("live blocker: submit also requires LIVE_BOOKING=1")
     try:
-        yield LiveRunner(
-            auth_service=auth_service,
-            session_service=session_service,
-            schedule_service=schedule_service,
-            booking_service=booking_service,
-            scheduler=scheduler,
+        config = _build_live_config()
+        profile = load_profile(
+            os.getenv("LIVE_PROFILES_ROOT", "~/.160grab/browser-profiles"),
+            os.environ["LIVE_PROFILE"],
         )
-    finally:
-        await client.close()
+        budget = int(os.getenv("LIVE_MAX_POLLS", "3"))
+        timeout = float(os.getenv("LIVE_TIMEOUT_SECONDS", "120"))
+        if not 1 <= budget <= 10 or not 1 <= timeout <= 600:
+            raise ValueError
+    except Exception:
+        pytest.skip("live blocker: unavailable profile or invalid scenario/budget")
+    # Hold the production OS-user lock BEFORE launching the named profile.
+    async with leader_scope():
+        client = PlaywrightClient(
+            headless=False, persistent_context_enabled=True, user_data_dir=profile.path
+        )
+        try:
+            await asyncio.wait_for(client.launch(), 30)
+            page = client.page
+            await page.goto("https://www.91160.com/", timeout=20000)
+            store = AttemptStore()
+            consent = ConsentManager(
+                store, interactive=True, prompt=lambda _: "AUTHORIZE"
+            )
+            strategy = PageBookingStrategy(
+                page,
+                config,
+                attempt_store=store,
+                consent_manager=consent,
+                authorization=consent.ensure,
+            )
+            schedule = ScheduleService(
+                BrowserPageApi(page), config, sleep=asyncio.sleep
+            )
+            session = SessionCaptureService(page, config)
+
+            def change_page(next_page):
+                strategy.page = next_page
+                schedule.page_api.page = next_page
+
+            session.on_page_change = change_page
+            yield CanaryRunner(
+                session,
+                schedule,
+                BookingService(strategy),
+                config,
+                ready=terminal_ready,
+                max_polls=budget,
+                timeout_seconds=timeout,
+                live_e2e=True,
+                live_booking=os.getenv("LIVE_BOOKING") == "1",
+            )
+        finally:
+            await client.close()

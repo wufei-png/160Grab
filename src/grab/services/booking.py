@@ -9,6 +9,7 @@ from grab.booking.page import (
     read_decision,
     selected_member_ready,
 )
+from grab.canary.policy import current_policy
 from grab.core.leader import LeaderLost, check_leader, exclusive_operation
 from grab.models.schemas import (
     BookingForm,
@@ -217,6 +218,11 @@ class PageBookingStrategy:
 
     @exclusive_operation
     async def fill_booking_form(self, form: BookingForm) -> None:
+        policy = current_policy()
+        if policy and not policy.allows_prepare():
+            form.is_valid = False
+            form.invalid_reason = "canary_prepare_blocked"
+            return
         # Three bounded DOM preparation passes; deterministic conflicts stop now.
         for attempt in range(3):
             snapshot, decision = await read_decision(self.page, form, self.config)
@@ -261,6 +267,9 @@ class PageBookingStrategy:
 
     @exclusive_operation
     async def submit_booking_via_page(self, form: BookingForm) -> BookingResult:
+        policy = current_policy()
+        if policy and not policy.allows_submit(self.target, form):
+            return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         blocked = self.blocked_result()
         if blocked:
             return blocked
@@ -304,6 +313,8 @@ class PageBookingStrategy:
                 form.schedule_id,
                 form.appointment_value,
             )
+            if policy and not policy.allows_submit(self.target, form):
+                return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
             check_leader()
             attempt_id = self.attempt_store.begin(booking_ref)
         except StoreBlocked:

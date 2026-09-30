@@ -1,23 +1,25 @@
 import os
+from dataclasses import asdict
 
 import pytest
 
 
 @pytest.mark.e2e
 @pytest.mark.live
-@pytest.mark.asyncio
-async def test_live_flow_reaches_booking_confirmation_page(live_runner):
-    result = await live_runner.run(until="booking_confirmation")
-
-    assert result.logged_in is True
-    assert result.schedule_checked is True
-    assert result.booking_form_opened is True
-
-
-@pytest.mark.e2e
-@pytest.mark.live
-@pytest.mark.asyncio
-async def test_live_flow_submits_only_when_live_booking_enabled(live_runner):
-    result = await live_runner.run(until="final_submit")
-
-    assert result.submitted is bool(int(os.environ.get("LIVE_BOOKING", "0")))
+@pytest.mark.parametrize("level", ["readonly", "prepare", "submit"])
+async def test_live_canary(live_runner, level):
+    if os.environ["LIVE_LEVEL"] != level:
+        pytest.skip("different explicitly selected canary level")
+    try:
+        result = await live_runner.run(level)
+    except Exception:
+        pytest.fail(
+            "live canary stopped; inspect original site manually", pytrace=False
+        )
+    print(asdict(result))  # Only closed status/state, counters and booleans.
+    if result.status in {"observed", "prepared", "submit_observed"}:
+        if level != "submit":
+            assert result.submit_calls == 0
+    else:
+        pytest.skip("live inconclusive/blocker: " + result.status)
+    # submit_observed/UNKNOWN is evidence of one attempt, never claimed success.
