@@ -234,7 +234,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 | S03 | 已完成（2026-09-30） | `9a8b33a`, `fcb4e18`, `c04ab7f`, `76bdc60`, `5c9e454`, `1e7dbeb`, `51e9f41`；记录提交见文件历史 | 最终 294 passed, 2 live skipped；contract/integration 39 passed（Chromium 19）；CI 同命令 294 passed, 2 deselected；Ruff/Node/离线锁定 sync 通过；review 2 P2 接受并修复 | 无 live adapter；S04/S05 发布 gate、Windows/远端 CI/frozen 未完成 |
 | S04 | 已完成（2026-09-30） | `d9cae53`, `519d83a`, `528f760`, `8199211`, `71afcd2`, `ad1489a`, `47804a5`；记录提交见文件历史 | 最终 449 passed, 2 live skipped；contract/integration 205 passed（Chromium 100）；CI 同命令 449 passed, 2 deselected；Ruff/Node/离线锁定 sync/whitespace 通过；review 1 P1 + 2 P2 接受并修复 | 无 live adapter；S05 发布 gate/跨平台/远端 CI/frozen 未验证 |
 | S05 | 已完成（2026-09-30） | `3cdadf4`, `96dea17`, `f0a010f`, `4385214`, `9ebb1dd`, `b13be72`, `f1545ca`；记录提交见历史 | 最终 477 passed, 2 live skipped；contract/integration 221（Chromium 116）；CI 同参数 477 passed, 2 deselected；Ruff/Node/锁定离线 sync/whitespace 通过；review 1 P1 + 3 P2 全接受并修复 | 无跨路径/profile/机器协调；live/跨平台/扩展/远端 CI/frozen 未验证 |
-| S06 | 未开始 | — | — | S05 |
+| S06 | 工具/离线已完成（2026-10-01）；live blocked | `b9e110a`, `2a20e9a`, `222dbba`, `44f8c03`, `575ed2f`, `82a7788`；记录提交见历史 | 最终 513 passed, 3 live skipped；contract/integration/canary 257（Chromium 129）；Ruff/Node/锁定离线 sync/whitespace 通过；只读 review 2 P2 全接受并修复 | 缺具体目标/profile/场景批准；两路径 live、真实 fixture/adapter、扩展 sandbox/Windows/远端 CI/frozen 未验证 |
 | S07 | 未开始 | — | — | S06 工具与可用证据 |
 | S08 | 未开始 | — | — | S07 |
 | S09 | 未开始 | — | — | S08 |
@@ -431,3 +431,45 @@ reviewer 还以真实 Chromium 确认正常导航事件顺序为 pagehide 后 vi
 contract/integration **221 passed**，其中真实本地 Chromium **116**，均在完整/CI 同参数检查实际执行。
 Ruff、userscript/Node harness 语法、锁定离线 dev sync、会话完整 diff whitespace 通过，uv.lock 未改。
 完成记录/架构及 README 进度另作文档提交，hash 见文件历史，避免自引用。
+
+### S06 会话证据（2026-10-01）
+
+会话起点 `46ddd41e6ab65d59027850dfb6251cb36c3cdba0`；已先读本计划与当前架构，核对 S05 完成记录、
+实际 leader/nonce/TTL/lease fencing，以及 S02 隐私、S03 consent/attempt、S04 readiness 合同。
+仅执行 S06，按 implement-in-stages 本地提交，不 push。未读取私有 config/profile/认证状态。
+
+1. `b9e110a`：Python bounded manual canary，显式 readonly/prepare/submit；ready 与完整目标解析；
+   具体场景批准与底层 scope gates；无号源/timeout/pending 明确终止；live harness 使用指定专用 profile、
+   browser 启动前获取实际全工具 leader。定向 **51 passed, 3 live skipped**；协调阶段复核 **24 passed, 3 skipped**。
+2. `2a20e9a`：userscript canary panel/有限 owner、跨刷新限制及最终审批；最小静态 DOM/normalized JSON
+   converter、schema fingerprint 与日期/路径/层级/source/覆盖；CLI 导出 synthetic 样例与 Chromium 双适配 parity。
+   定向 **84 passed**；更早提交/互斥 Chromium 相关 **112 passed**。所有网站 URL 均 route 到 synthetic 内容。
+3. `222dbba`：完整收集发现 canary/core 同名测试模块冲突；补 canary 包标记，联合 **44 passed**。
+   此处修正未完成阶段的验证安排，单独提交测试集成修复。
+4. `44f8c03`：[本机现场操作与证据](live-canary.md)，更新架构已实现事实与两路径现场 blocker。
+   修复前全套 **510 passed, 3 live skipped**，Ruff、userscript/Node harness 语法、锁定离线 dev sync、whitespace 通过。
+
+新鲜只读 subagent 按 delegated-change-review / review-agent 审查
+`46ddd41..44f8c03` 完整 diff、相关调用及文档；独立 canary **33 passed**、whitespace 通过。
+发现 **2 P2**，主实现者逐项独立复现并全部接受，无拒绝项；新增 regression 先证明缺陷：
+
+- 非法来源日期丢失 HTML blocker：snapshot 仍 date.conflict，但 renderer 丢弃后可能可准备。
+  `575ed2f` 对非法 sch_data/jzdate 来源日期拒绝导出，继续保留合法日期之间的冲突；相关 **20 passed**。
+- 空 time_range 被占位文本改变筛选：原始空值允许预约页进一步筛选，导出后提前被拒绝。
+  `82a7788` 保留空值；实际 Python 与 Node JS filter regression、converter/排班相关 **55 passed**。
+
+最终修复后全套 **513 passed, 3 live skipped**；contract/integration/canary **257 passed**，
+其中真实本地 Chromium **129**（既有 116 + 新增 13），均在全套实际执行。
+Ruff、userscript/Node harness 语法、锁定离线 dev sync、会话完整 diff whitespace 通过，uv.lock 未改。
+远端 CI 与 CI 同参数命令未运行。两项最终修复由主实现者验证，reviewer 独立检查覆盖修复前 target。
+普通日志/通知仍使用 S02 白名单；fixture 出错只给固定分类，新文件 no-follow/private 创建且不覆盖。
+现有 fixture 未被现场原文替换；新增样例 source=synthetic，static DOM 不复制网络/站点脚本。
+非 normalized sch provider JSON 暂无安全 converter，当前拒绝，不伪造现场 schema 或结果 adapter。
+
+现场层级/覆盖：Python 与 userscript 都**未执行 live**；未提供明确目标/profile/日期时段/就诊人及具体场景批准。
+用仅设置 LIVE_E2E=1 的命令核对 harness：**3 skipped**，固定 blocker 为缺显式 level/profile/doctor/date，
+浏览器启动前退出，无真实登录/请求/预约；这不是一次现场 readonly 取证。
+本地真实 Chromium 临时 context/local route 覆盖 docid-only→目标→号源、readonly 零表单写入/两低层级零最终动作、
+有效产品 consent 不能绕过层级、具体批准拒绝、次数/ready timeout 与迟到 fencing、pending/reload、实际 panel 事件。
+真实 fixture 刷新、两路径 live 结果/adapter、Tampermonkey 扩展 sandbox、Windows 人工 ready、远端 CI、
+frozen/release 均未验证；POSIX TTY 是当前 Python ready 能力边界。未执行 S07–S09。

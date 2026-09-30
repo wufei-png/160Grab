@@ -1,7 +1,7 @@
 # 当前架构与核验证据
 
 核验日期：2026-09-30；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具至 `2a20e9a`（2026-10-01），最终证据见下。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具/回归/review 修复至 `82a7788`（2026-10-01），最终证据见下。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -232,7 +232,7 @@ reviewer 独立相关 **44 passed**、Ruff/Node/whitespace；主实现者逐项 
   无自动换号/导航/follow-up；每次检查 owner 与单调 deadline。sessionStorage 只存固定 canary latch，
   当前标签导航/reload/Start/reset 不能恢复产品自动运行；批准内存有效，退出后不清 pending。
   原生 dialog 暂停 timer 时，恢复后仍以 deadline 拒绝超时动作。
-- converter 只重建已知 booking DOM/snapshot、normalized schedule JSON；非法来源日期/未知字段/schema 拒绝，
+- converter 只重建已知 booking DOM/snapshot、normalized schedule JSON；非法关联日期/未知字段/schema 拒绝，
   去除 script/嵌入 JSON、URL、事件正文，敏感值转 synthetic token；保留空值、关联、日期冲突与静态状态。
   输出含版本/日期/层级/路径/source/覆盖及只依赖结构的 fingerprint。no-follow/private 创建、不覆盖文件、
   错误不带原文；已有 synthetic fixture CLI 转换样例用于 Chromium 两适配 parity。
@@ -240,3 +240,13 @@ reviewer 独立相关 **44 passed**、Ruff/Node/whitespace；主实现者逐项 
 - [现场操作与证据](live-canary.md) 分别记录 Python/userscript 的现场 blocker；未提供具体目标/profile/批准，
   无真实网络登录/预约、真实 fixture 刷新或 live evidence adapter。原有 UNKNOWN 合同保留。
   Tampermonkey 扩展 sandbox、Windows ready、远端 CI/frozen/release 尚未验证。
+
+S06 最终全套 **513 passed, 3 live skipped**；contract/integration/canary **257 passed**，
+其中真实本地 Chromium **129**，均在全套实际运行。Ruff、两份 Node 语法、锁定离线 dev sync、
+完整 diff whitespace 通过，uv.lock 未改。显式 LIVE_E2E=1 无场景验证为 **3 skipped**，缺目标/profile/层级/日期，
+浏览器启动前停止；不算现场证据。
+
+新鲜只读 reviewer 比较 `46ddd41..44f8c03`，独立 canary **33 passed**、whitespace 通过；
+发现 **2 P2**，全部独立复核接受，无拒绝项。`575ed2f` 拒绝非法来源日期，防止 HTML 丢 date.conflict；
+相关 **20 passed**。`82a7788` 保留空 time_range，Python/JS filter/排班相关 **55 passed**。
+最终修复由主实现者验证，未声称 reviewer 再审修复提交。两路径现场与真实夹具/adapter 仍 blocked。

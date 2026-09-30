@@ -83,7 +83,7 @@ canary harness 本身不自动打开敏感 snapshot 开关。截图不能输入 
 替换成员/排班/卡号/病情/地区/标签等值，保留空值、关联相等性、日期冲突、控件数量/可操作性/
 checked/selected、必填 readiness。移除 script（含嵌入 JSON）、URL、事件 handler 及自由正文；
 仅保留严格时间范围，不保留原日期。sch_data 中只提取与唯一 schedule 关联的日期，再以脱敏日期重建。
-非法来源日期、未知表单字段/JSON 键拒绝导出。已知认证字段丢弃，工具自身面板配置不导出。
+非法 sch_data/jzdate 日期、未知表单字段/JSON 键拒绝导出。已知认证字段丢弃，工具自身面板配置不导出。
 
 ```bash
 uv run --locked python -m grab.canary.fixtures booking \
