@@ -18,6 +18,7 @@ SNAPSHOT_SCRIPT = """() => {
         if ('value' in node) copy.setAttribute('value', node.value);
         if (node.tagName === 'TEXTAREA') copy.textContent = node.value;
         if ('checked' in node) copy.toggleAttribute('checked', node.checked);
+        if (node.validity) copy.setAttribute('data-grab-valid', String(node.validity.valid));
         if (node.tagName === 'OPTION') copy.toggleAttribute('selected', node.selected);
         const style = getComputedStyle(node);
         const visible = Boolean(node.getClientRects().length) && style.visibility !== 'hidden';

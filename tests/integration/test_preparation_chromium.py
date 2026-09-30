@@ -40,6 +40,11 @@ async def load_case(page, case):
         });
     })();""")
     await page.goto("https://synthetic.invalid/booking")
+    if "native_required_valid" in case:
+        assert (
+            await page.locator("#suborder").evaluate("node => node.checkValidity()")
+            == case["native_required_valid"]
+        )
 
 
 def strategy_for(page, case, tmp_path):

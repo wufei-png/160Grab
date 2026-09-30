@@ -124,6 +124,38 @@ def field_key(n):
     return None
 
 
+def form_owner(n):
+    if n.attrs.get("form"):
+        return ("id", n.attrs["form"])
+    parent = n.parent
+    while parent and parent.tag != "form":
+        parent = parent.parent
+    return ("id", parent.attrs["id"]) if parent and parent.attrs.get("id") else parent
+
+
+def required_ready(n, nodes):
+    # Browser snapshots include native validity without firing invalid events.
+    if "data-grab-valid" in n.attrs:
+        return n.attrs["data-grab-valid"] == "true"
+    if "disabled" in n.attrs:
+        return True
+    if n.attrs.get("type") == "radio":
+        name = n.attrs.get("name")
+        return any(
+            "checked" in candidate.attrs
+            for candidate in nodes
+            if candidate is n
+            or name
+            and candidate.tag == "input"
+            and candidate.attrs.get("type") == "radio"
+            and candidate.attrs.get("name") == name
+            and form_owner(candidate) == form_owner(n)
+        )
+    if n.attrs.get("type") == "checkbox":
+        return "checked" in n.attrs
+    return bool(n.value())
+
+
 def snapshot_html(html):
     tree = Tree(html)
     result = {
@@ -254,11 +286,7 @@ def snapshot_html(html):
             "mid",
             "his_mem_id",
         }:
-            result["other_required"].append(
-                bool(n.value())
-                if a.get("type") not in {"radio", "checkbox"}
-                else "checked" in a
-            )
+            result["other_required"].append(required_ready(n, tree.nodes))
     # Only a single, unambiguous date in serialized schedule data is trusted.
     for n in tree.nodes:
         if n.attrs.get("name") == "sch_data" and len(result["schedule_ids"]) == 1:

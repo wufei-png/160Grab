@@ -1536,7 +1536,7 @@
           options:Array.from(n.options || []).map(o => ({value:o.value,label:compactText(o.textContent),disabled:o.disabled}))};
       });
     });
-    snapshot.other_required = all('[required]').filter(n => !known.has(n) && !['schedule_id','member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => ['radio','checkbox'].includes(n.type) ? n.checked : Boolean(n.value.trim()));
+    snapshot.other_required = all('[required]').filter(n => !known.has(n) && !['schedule_id','member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => n.validity ? n.validity.valid : Boolean(n.value?.trim()));
     all('[name="sch_data"]').forEach(n => {
       if (snapshot.schedule_ids.length === 1 && n.value.includes(`"${snapshot.schedule_ids[0]}";`)) {
         snapshot.dates.push(...Array.from(n.value.matchAll(/s:7:"to_date";s:10:"(\d{4}-\d{2}-\d{2})"/g), m => m[1]));

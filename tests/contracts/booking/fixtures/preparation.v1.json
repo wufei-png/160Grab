@@ -784,6 +784,29 @@
         },
         "submit_clicks": 0
       }
+    },
+    {
+      "id": "required-radio-group",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input type=\"radio\" name=\"synthetic-choice\" value=\"synthetic-a\" required checked><input type=\"radio\" name=\"synthetic-choice\" value=\"synthetic-b\" required></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 1
+      },
+      "native_required_valid": true
     }
   ]
 }
