@@ -100,6 +100,7 @@ async def live_runner(request):
         profile = load_profile(
             os.getenv("LIVE_PROFILES_ROOT", "~/.160grab/browser-profiles"),
             os.environ["LIVE_PROFILE"],
+            channel=config.browser.channel,
         )
         budget = int(os.getenv("LIVE_MAX_POLLS", "3"))
         timeout = float(os.getenv("LIVE_TIMEOUT_SECONDS", "120"))
@@ -110,7 +111,10 @@ async def live_runner(request):
     # Hold the production OS-user lock BEFORE launching the named profile.
     async with leader_scope():
         client = PlaywrightClient(
-            headless=False, persistent_context_enabled=True, user_data_dir=profile.path
+            headless=False,
+            channel=config.browser.channel,
+            persistent_context_enabled=True,
+            user_data_dir=profile.path,
         )
         try:
             await asyncio.wait_for(client.launch(), 30)

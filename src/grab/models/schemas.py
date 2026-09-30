@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from grab.utils.browser_channel import BrowserChannel
 from grab.utils.profile_name import validate_profile_name
 from grab.utils.runtime import normalize_hour_value
 from grab.utils.schedule_time import schedule_instant
@@ -43,6 +44,7 @@ class AuthConfig(BaseModel):
 
 
 class BrowserConfig(BaseModel):
+    channel: BrowserChannel = "chromium"
     stealth: bool = True
     launch_persistent_context: bool = True
     profile_name: str | None = None
@@ -173,7 +175,7 @@ class BookingConfig(BaseModel):
 
 
 class ScheduleConfig(BaseModel):
-    timezone: str = "Asia/Shanghai"
+    timezone: str = Field(default="Asia/Shanghai", validate_default=True)
     late_start_grace_seconds: float = Field(default=30, ge=0, allow_inf_nan=False)
 
     @field_validator("timezone")

@@ -318,3 +318,118 @@ async def test_interactive_manual_handoff_waits_before_browser_closes(
         await main_module.main([str(config)])
     assert exit.value.code == 2
     assert events == ["open", "handoff", "closed"]
+
+
+@pytest.mark.parametrize("channel", ["chromium", "chrome", "msedge"])
+async def test_create_warmup_uses_configured_channel(tmp_path, monkeypatch, channel):
+    from grab.models.schemas import GrabConfig
+    from grab.utils.profile_manager import load_profile
+
+    captured = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+            self.page = SimpleNamespace(goto=AsyncMock())
+            self.context = SimpleNamespace(wait_for_event=AsyncMock())
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(main_module, "PlaywrightClient", Client)
+    config = GrabConfig(
+        browser={"channel": channel, "profiles_root_dir": str(tmp_path)}
+    )
+    await main_module.run_create_profile_flow(
+        config=config, requested_profile_name="synthetic", debug_dir=None
+    )
+    profile = load_profile(tmp_path, "synthetic", channel=channel)
+    assert captured[0]["channel"] == channel
+    assert captured[0]["user_data_dir"] == profile.path
+    assert captured[0]["persistent_context_enabled"] is True
+
+
+@pytest.mark.parametrize("persistent", [False, True])
+@pytest.mark.parametrize("channel", ["chromium", "chrome", "msedge"])
+async def test_cli_forwards_configured_channel_to_run(
+    tmp_path, monkeypatch, channel, persistent
+):
+    from grab.utils.profile_manager import load_profile
+
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f"browser:\n  channel: {channel}\n  launch_persistent_context: {str(persistent).lower()}\n  profiles_root_dir: {tmp_path}/profiles\n"
+    )
+    captured = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(main_module, "PlaywrightClient", Client)
+    monkeypatch.setattr(
+        main_module,
+        "build_runner",
+        lambda *_a, **_kw: SimpleNamespace(
+            run=AsyncMock(return_value=RunResult(state="CONFIRMED_SUCCESS"))
+        ),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "build_run_reporter",
+        lambda _: SimpleNamespace(jsonl_path=None, emit_event=AsyncMock()),
+    )
+    with pytest.raises(SystemExit) as caught:
+        await main_module.main([str(config)])
+    assert caught.value.code == 0
+    assert captured[0]["channel"] == channel
+    if persistent:
+        assert (
+            load_profile(tmp_path / "profiles", "profile_1", channel=channel).path
+            == captured[0]["user_data_dir"]
+        )
+
+
+async def test_cli_reports_selected_browser_install_failure_safely(monkeypatch, capsys):
+    from grab.errors import BrowserLaunchError
+
+    monkeypatch.setattr(
+        main_module,
+        "_exclusive_main",
+        AsyncMock(side_effect=BrowserLaunchError("SYN_SECRET")),
+    )
+    with pytest.raises(SystemExit) as caught:
+        await main_module.main([])
+    assert caught.value.code == 1
+    output = capsys.readouterr()
+    assert "browser.channel" in output.out
+    assert "SYN_SECRET" not in output.out + output.err
+
+
+async def test_invalid_browser_channel_stops_before_any_browser_or_profile(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "config.yaml"
+    config.write_text("browser:\n  channel: chrome-beta\n")
+    monkeypatch.setattr(
+        main_module,
+        "PlaywrightClient",
+        lambda **_: pytest.fail("browser must not launch"),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "resolve_profile_for_run",
+        lambda **_: pytest.fail("profile must not resolve"),
+    )
+    with pytest.raises(SystemExit) as caught:
+        await main_module.main([str(config)])
+    assert caught.value.code == 1

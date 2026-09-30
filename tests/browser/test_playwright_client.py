@@ -388,3 +388,84 @@ async def test_snapshot_failure_does_not_record_exception_text(tmp_path, monkeyp
 
     client.page = Broken()
     assert_clean((await client.capture_snapshot("failure")).read_text())
+
+
+@pytest.mark.parametrize("channel", ["chromium", "chrome", "msedge"])
+@pytest.mark.parametrize("persistent", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+async def test_channel_launch_forwards_exactly_once_without_fallback(
+    tmp_path, monkeypatch, channel, persistent, fails
+):
+    from grab.utils.profile_manager import create_profile
+
+    context = FakeContext()
+    browser = FakeBrowser(context)
+    calls = []
+
+    class Launcher:
+        async def launch(self, **kwargs):
+            calls.append(("transient", kwargs))
+            if fails:
+                raise playwright_client_module.PlaywrightError("SYN_SECRET")
+            return browser
+
+        async def launch_persistent_context(self, **kwargs):
+            calls.append(("persistent", kwargs))
+            if fails:
+                raise playwright_client_module.PlaywrightError("SYN_SECRET")
+            return context
+
+    playwright = FakePlaywright(Launcher())
+    monkeypatch.setattr(
+        playwright_client_module,
+        "async_playwright",
+        lambda: FakePlaywrightManager(playwright),
+    )
+    profile = create_profile(tmp_path / "profiles", channel=channel)
+    client = PlaywrightClient(
+        channel=channel,
+        stealth_enabled=False,
+        persistent_context_enabled=persistent,
+        user_data_dir=profile.path,
+    )
+    if fails:
+        with pytest.raises(RuntimeError, match="installed and available") as caught:
+            await client.launch()
+        assert "SYN_SECRET" not in str(caught.value)
+        assert playwright.stop_calls == 1
+    else:
+        await client.launch()
+        await client.close()
+    expected = {"headless": True}
+    if persistent:
+        expected["user_data_dir"] = str(profile.path)
+    if channel != "chromium":
+        expected["channel"] = channel
+    assert calls == [("persistent" if persistent else "transient", expected)]
+
+
+@pytest.mark.parametrize(
+    "actual,requested",
+    [("chromium", "chrome"), ("chrome", "msedge"), ("msedge", "chromium")],
+)
+async def test_client_rejects_profile_channel_before_starting_driver(
+    tmp_path, monkeypatch, actual, requested
+):
+    from grab.utils.profile_manager import create_profile
+
+    profile = create_profile(tmp_path, channel=actual)
+    monkeypatch.setattr(
+        playwright_client_module,
+        "async_playwright",
+        lambda: pytest.fail("Driver must not start"),
+    )
+    client = PlaywrightClient(
+        channel=requested, persistent_context_enabled=True, user_data_dir=profile.path
+    )
+    with pytest.raises(ValueError, match="channel"):
+        await client.launch()
+
+
+def test_client_rejects_uncontrolled_channel():
+    with pytest.raises(ValueError, match="browser.channel"):
+        PlaywrightClient(channel="chrome-beta")

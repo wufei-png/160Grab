@@ -16,3 +16,7 @@ class UnknownSessionError(RuntimeError):
 
 class ReadRetryExhausted(RuntimeError):
     """Read-only consecutive failure budget exhausted; no submission was retried."""
+
+
+class BrowserLaunchError(RuntimeError):
+    """Selected browser failed to launch; no fallback is permitted."""

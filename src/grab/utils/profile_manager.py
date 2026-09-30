@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from grab.utils.browser_channel import validate_browser_channel
 from grab.utils.private_files import (
     absolute_path,
     ensure_private_directory,
@@ -19,6 +20,7 @@ PROFILE_MARKER_FILENAME = ".160grab-profile.json"
 class BrowserProfile:
     name: str
     path: Path
+    channel: str = "chromium"
 
     @property
     def marker_path(self) -> Path:
@@ -43,7 +45,10 @@ def ensure_profiles_root_dir(root_dir: str | Path) -> Path:
 def create_profile(
     root_dir: str | Path,
     profile_name: str | None = None,
+    *,
+    channel: str = "chromium",
 ) -> BrowserProfile:
+    validate_browser_channel(channel)
     resolved_root = ensure_profiles_root_dir(root_dir)
     if profile_name is None:
         profile_name = _next_auto_profile_name(resolved_root)
@@ -62,6 +67,7 @@ def create_profile(
     metadata = {
         "version": 1,
         "profile_name": profile_name,
+        "channel": channel,
         "created_at": datetime.now(UTC).isoformat(),
     }
     with private_directory(profile_dir, create=False) as directory:
@@ -69,7 +75,7 @@ def create_profile(
             PROFILE_MARKER_FILENAME,
             json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
         )
-    return BrowserProfile(name=profile_name, path=profile_dir)
+    return BrowserProfile(name=profile_name, path=profile_dir, channel=channel)
 
 
 def list_profiles(root_dir: str | Path) -> list[BrowserProfile]:
@@ -102,11 +108,26 @@ def list_profiles(root_dir: str | Path) -> list[BrowserProfile]:
         profile_name = str(metadata.get("profile_name") or "").strip()
         if not profile_name or profile_name != child.name:
             continue
-        profiles.append(BrowserProfile(name=child.name, path=child))
+        try:
+            channel = _marker_channel(metadata)
+        except ValueError:
+            continue
+        profiles.append(BrowserProfile(name=child.name, path=child, channel=channel))
     return profiles
 
 
-def load_profile(root_dir: str | Path, profile_name: str) -> BrowserProfile:
+def _marker_channel(metadata: dict) -> str:
+    if metadata.get("version") != 1:
+        raise ValueError("Unsupported profile marker version")
+    # Markers predating channels represent the bundled Chromium profile.
+    return validate_browser_channel(metadata.get("channel", "chromium"))
+
+
+def load_profile(
+    root_dir: str | Path, profile_name: str, *, channel: str | None = None
+) -> BrowserProfile:
+    if channel is not None:
+        validate_browser_channel(channel)
     resolved_root = ensure_profiles_root_dir(root_dir)
     validated_name = validate_profile_name(profile_name)
     profile_dir = resolved_root / validated_name
@@ -143,12 +164,18 @@ def load_profile(root_dir: str | Path, profile_name: str) -> BrowserProfile:
             f"marker content does not match the directory name."
         )
 
-    return BrowserProfile(name=validated_name, path=profile_dir)
+    marker_channel = _marker_channel(metadata)
+    if channel is not None and channel != marker_channel:
+        raise ValueError(
+            "Profile channel does not match browser.channel; create a separate profile"
+        )
+    return BrowserProfile(name=validated_name, path=profile_dir, channel=marker_channel)
 
 
 def resolve_profile_for_run(
     *,
     root_dir: str | Path,
+    channel: str = "chromium",
     configured_profile_name: str | None,
     config_path: str | Path,
     prompt_text: Callable[[str], str] = input,
@@ -156,16 +183,19 @@ def resolve_profile_for_run(
     is_interactive: bool = True,
     persist_profile_name: Callable[[str | Path, str], None] | None = None,
 ) -> ResolvedBrowserProfile:
+    validate_browser_channel(channel)
     resolved_root = ensure_profiles_root_dir(root_dir)
     if configured_profile_name is not None:
         return ResolvedBrowserProfile(
-            profile=load_profile(resolved_root, configured_profile_name),
+            profile=load_profile(
+                resolved_root, configured_profile_name, channel=channel
+            ),
             source="configured",
         )
 
-    profiles = list_profiles(resolved_root)
+    profiles = [p for p in list_profiles(resolved_root) if p.channel == channel]
     if not profiles:
-        profile = create_profile(resolved_root)
+        profile = create_profile(resolved_root, channel=channel)
         notify(f"ℹ️ 未检测到可用 profile，已自动创建: {profile.name} ({profile.path})")
         return ResolvedBrowserProfile(profile=profile, source="auto-created")
 

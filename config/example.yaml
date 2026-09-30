@@ -4,6 +4,8 @@
 auth:
   strategy: "manual"
 browser:
+  # chrome/msedge 须本机安装，失败不降级；每个 channel 使用独立 profile
+  channel: "chromium"
   launch_persistent_context: true
   profile_name:
   profiles_root_dir: "~/.160grab/browser-profiles"

@@ -13,6 +13,7 @@ from grab.browser.playwright_client import PlaywrightClient
 from grab.core.leader import LeaderLost, exclusive_operation
 from grab.core.runner import GrabRunner
 from grab.core.scheduler import Scheduler
+from grab.errors import BrowserLaunchError
 from grab.models.schemas import BookingState, GrabConfig
 from grab.observability import build_run_reporter
 from grab.observability.safe_logging import logger
@@ -171,11 +172,13 @@ def ensure_frozen_default_config(
 
 
 async def run_smoke_browser(*, debug_dir: Path | None) -> None:
+    config = GrabConfig()
     async with PlaywrightClient(
         headless=True,
         debug_dir=debug_dir,
         stealth_enabled=True,
         persistent_context_enabled=False,
+        channel=config.browser.channel,
     ) as client:
         await client.goto("about:blank")
 
@@ -183,6 +186,9 @@ async def run_smoke_browser(*, debug_dir: Path | None) -> None:
 async def main(argv: list[str] | None = None) -> None:
     try:
         await _exclusive_main(argv)
+    except BrowserLaunchError:
+        emit_console_message("所选浏览器启动失败，请检查 browser.channel 及本机安装。")
+        raise SystemExit(1) from None
     except LeaderLost:
         emit_console_message("本机已有运行或互斥已失效；自动操作暂停，请人工核对。")
         raise SystemExit(2) from None
@@ -283,6 +289,7 @@ async def _exclusive_main(argv: list[str] | None = None) -> None:
         if config.browser.launch_persistent_context:
             resolved_profile = resolve_profile_for_run(
                 root_dir=config.browser.profiles_root_dir,
+                channel=config.browser.channel,
                 configured_profile_name=config.browser.profile_name,
                 config_path=config_path,
                 prompt_text=input,
@@ -297,6 +304,7 @@ async def _exclusive_main(argv: list[str] | None = None) -> None:
 
         async with PlaywrightClient(
             headless=headless,
+            channel=config.browser.channel,
             debug_dir=debug_dir,
             include_sensitive_debug=config.logging.include_sensitive_debug,
             stealth_enabled=config.browser.stealth,
@@ -443,6 +451,7 @@ async def run_create_profile_flow(
     profile = create_profile(
         config.browser.profiles_root_dir,
         profile_name=requested_profile_name,
+        channel=config.browser.channel,
     )
     emit_console_message(f"✅ 已创建 profile: {profile.name}")
     emit_console_message(f"   路径: {profile.path}")
@@ -454,6 +463,7 @@ async def run_create_profile_flow(
 
     async with PlaywrightClient(
         headless=False,
+        channel=config.browser.channel,
         debug_dir=debug_dir,
         include_sensitive_debug=config.logging.include_sensitive_debug,
         stealth_enabled=config.browser.stealth,

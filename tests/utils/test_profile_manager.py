@@ -137,3 +137,69 @@ def test_create_profile_writes_expected_marker(tmp_path):
     )
     assert marker["profile_name"] == "alpha"
     assert marker["version"] == 1
+
+
+@pytest.mark.parametrize("channel", ["chromium", "chrome", "msedge"])
+def test_profile_channel_bound_on_create_load_and_resolve(tmp_path, channel):
+    profile = create_profile(tmp_path, channel=channel)
+    assert json.loads(profile.marker_path.read_text())["channel"] == channel
+    assert load_profile(tmp_path, profile.name, channel=channel) == profile
+    resolved = resolve_profile_for_run(
+        root_dir=tmp_path,
+        channel=channel,
+        configured_profile_name=None,
+        config_path=tmp_path / "config.yaml",
+        is_interactive=False,
+        notify=lambda _: None,
+    )
+    assert resolved.profile == profile
+
+
+def test_legacy_marker_is_chromium_and_not_rewritten(tmp_path):
+    profile = create_profile(tmp_path)
+    marker = json.loads(profile.marker_path.read_text())
+    del marker["channel"]
+    profile.marker_path.write_text(json.dumps(marker))
+    original = profile.marker_path.read_bytes()
+    assert load_profile(tmp_path, profile.name, channel="chromium") == profile
+    with pytest.raises(ValueError, match="channel"):
+        load_profile(tmp_path, profile.name, channel="chrome")
+    assert profile.marker_path.read_bytes() == original
+
+
+def test_resolution_creates_distinct_profile_in_same_root_for_other_channel(tmp_path):
+    old = create_profile(tmp_path, "old", channel="chrome")
+    resolved = resolve_profile_for_run(
+        root_dir=tmp_path,
+        channel="msedge",
+        configured_profile_name=None,
+        config_path=tmp_path / "config.yaml",
+        notify=lambda _: None,
+        is_interactive=False,
+    )
+    assert resolved.profile.channel == "msedge"
+    assert resolved.profile.path != old.path
+    assert old.path.exists()
+    with pytest.raises(ValueError, match="channel"):
+        resolve_profile_for_run(
+            root_dir=tmp_path,
+            channel="msedge",
+            configured_profile_name="old",
+            config_path=tmp_path / "config.yaml",
+            notify=lambda _: None,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value", [("channel", "chrome-beta"), ("channel", []), ("version", 999)]
+)
+def test_unknown_marker_fails_closed(tmp_path, field, value):
+    from grab.utils.profile_manager import list_profiles
+
+    profile = create_profile(tmp_path)
+    marker = json.loads(profile.marker_path.read_text())
+    marker[field] = value
+    profile.marker_path.write_text(json.dumps(marker))
+    with pytest.raises(ValueError):
+        load_profile(tmp_path, profile.name)
+    assert list_profiles(tmp_path) == []

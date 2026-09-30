@@ -18,13 +18,16 @@ from playwright.async_api import (
 )
 from playwright_stealth.stealth import Stealth
 
+from grab.errors import BrowserLaunchError
 from grab.observability.privacy import safe_data
 from grab.observability.safe_logging import logger
+from grab.utils.browser_channel import validate_browser_channel
 from grab.utils.private_files import (
     absolute_path,
     ensure_private_directory,
     private_directory,
 )
+from grab.utils.profile_manager import PROFILE_MARKER_FILENAME, load_profile
 from grab.utils.retention import cleanup_outputs
 
 
@@ -37,7 +40,9 @@ class PlaywrightClient:
         stealth_enabled: bool = True,
         persistent_context_enabled: bool = False,
         user_data_dir: str | Path | None = None,
+        channel: str = "chromium",
     ):
+        self.channel = validate_browser_channel(channel)
         self.headless = headless
         self.debug_dir = absolute_path(debug_dir) if debug_dir is not None else None
         env_debug = os.getenv("GRAB_DEBUG_DIR")
@@ -60,6 +65,33 @@ class PlaywrightClient:
         self._page_prepare_tasks: set[asyncio.Task] = set()
 
     async def launch(self) -> None:
+        try:
+            await self._launch()
+        except BaseException:
+            # __aexit__ is not called when __aenter__/launch fails.
+            await self.close()
+            raise
+
+    async def _launch(self) -> None:
+        if self.persistent_context_enabled:
+            if self.user_data_dir is None:
+                raise RuntimeError("user_data_dir is required for a persistent context")
+            marker = self.user_data_dir / PROFILE_MARKER_FILENAME
+            if marker.exists() or marker.is_symlink():
+                load_profile(
+                    self.user_data_dir.parent,
+                    self.user_data_dir.name,
+                    channel=self.channel,
+                )
+            elif self.channel != "chromium":
+                raise ValueError(
+                    "A channel-bound profile marker is required; create a separate profile"
+                )
+        # Omitting channel for Chromium preserves Playwright's bundled browser
+        # and headless-shell selection, including the frozen default smoke path.
+        channel_options = (
+            {} if self.channel == "chromium" else {"channel": self.channel}
+        )
         if self.debug_dir is not None:
             cleanup_outputs(
                 self.debug_dir,
@@ -79,15 +111,23 @@ class PlaywrightClient:
                     self.playwright.chromium.launch_persistent_context,
                     user_data_dir=str(self.user_data_dir),
                     headless=self.headless,
+                    **channel_options,
                 )
             except PlaywrightError as exc:
                 self._raise_persistent_launch_error(exc)
             logger.info("Persistent browser context launched.")
             self.browser = getattr(self.context, "browser", None)
         else:
-            self.browser = await self._private_launch(
-                self.playwright.chromium.launch, headless=self.headless
-            )
+            try:
+                self.browser = await self._private_launch(
+                    self.playwright.chromium.launch,
+                    headless=self.headless,
+                    **channel_options,
+                )
+            except PlaywrightError:
+                raise BrowserLaunchError(
+                    "Configured browser channel failed to launch; ensure it is installed and available."
+                ) from None
             logger.info("Browser launched")
             self.context = await self.browser.new_context()
 
@@ -355,9 +395,9 @@ class PlaywrightClient:
                 f"Profile at {self.user_data_dir} appears to be in use by another browser "
                 "instance. Close that browser before retrying."
             ) from exc
-        raise RuntimeError(
-            f"Failed to launch persistent browser context at {self.user_data_dir}: {exc}"
-        ) from exc
+        raise BrowserLaunchError(
+            "Configured browser channel failed to launch; ensure it is installed and available."
+        ) from None
 
     @staticmethod
     def _serialize_location(location: Any) -> dict[str, Any] | None:
