@@ -315,6 +315,30 @@
     };
   }
 
+  const LOG_SCHEMA = 1;
+  const SAFE_LOG_MESSAGES = new Set(["Diagnostic event.", "Submitted booking form; runner paused to avoid duplicate submit.", "Booking form did not become ready before submit.", "Controller is already active; not starting another loop.", "Failed to load stored settings; using defaults.", "Installed checkIdInfo blank-response JSON patch.", "Page fetch schedule request failed.", "Page jQuery schedule request failed; trying fetch.", "Selected member blocked before submit.", "Selected member has page warning attributes; continuing to submit.", "Waited for booking page initialization before submit."]);
+  const SAFE_DETAIL_COUNTS = new Set(["attempt", "pollAttempt", "delayMs", "slotCount", "count", "status"]);
+  const SAFE_DETAIL_FLAGS = new Set(["ready", "success", "ticketPresent", "randstrPresent"]);
+
+  function safeLogDetail(detail) {
+    if (!isPlainObject(detail)) return "";
+    const output = {};
+    for (const [key, value] of Object.entries(detail)) {
+      if (SAFE_DETAIL_COUNTS.has(key) && typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1e9) output[key] = value;
+      if (SAFE_DETAIL_FLAGS.has(key) && typeof value === "boolean") output[key] = value;
+    }
+    return JSON.stringify(output);
+  }
+
+  function safeLogEntry(entry) {
+    if (!isPlainObject(entry) || entry.schema !== LOG_SCHEMA) return null;
+    const ts = Date.parse(entry.ts);
+    if (!Number.isFinite(ts) || ts < Date.now() - 7 * 86400000 || ts > Date.now()) return null;
+    let detail = {};
+    try { detail = JSON.parse(entry.detail); } catch (_error) { /* discard */ }
+    return { schema: LOG_SCHEMA, ts: new Date(ts).toISOString(), level: LOG_LEVELS.includes(entry.level) ? entry.level : "info", message: SAFE_LOG_MESSAGES.has(entry.message) ? entry.message : "Diagnostic event.", detail: safeLogDetail(detail) };
+  }
+
   function readStoredValue(key, fallback) {
     try {
       if (typeof GM_getValue === "function") {
@@ -359,7 +383,7 @@
     try {
       return normalizeSettings(readStoredValue(SETTINGS_KEY, null));
     } catch (error) {
-      appendLog("error", "Failed to load stored settings; using defaults.", error.message);
+      console.error("[160Grab error] Failed to load stored settings; using defaults.");
       return normalizeSettings(null);
     }
   }
@@ -396,7 +420,12 @@
   function readState() {
     try {
       const raw = globalThis.sessionStorage?.getItem(STATE_KEY);
-      return raw ? { ...defaultState(), ...JSON.parse(raw) } : defaultState();
+      const state = raw ? { ...defaultState(), ...JSON.parse(raw) } : defaultState();
+      state.logs = Array.isArray(state.logs) ? state.logs.map(safeLogEntry).filter(Boolean) : [];
+      state.summary = safeLogEntry(state.summary);
+      // Persist the migration immediately, even when no new log is appended.
+      globalThis.sessionStorage?.setItem(STATE_KEY, JSON.stringify(state));
+      return state;
     } catch (_error) {
       return defaultState();
     }
@@ -407,7 +436,8 @@
       ...defaultState(),
       ...state,
       submitAttempts: { ...(state.submitAttempts ?? {}) },
-      logs: Array.isArray(state.logs) ? state.logs : [],
+      logs: Array.isArray(state.logs) ? state.logs.map(safeLogEntry).filter(Boolean) : [],
+      summary: safeLogEntry(state.summary),
     };
     globalThis.sessionStorage?.setItem(STATE_KEY, JSON.stringify(next));
     return next;
@@ -483,10 +513,11 @@
   function appendLog(level, message, detail = "") {
     const settings = readSettings();
     const entry = {
+      schema: LOG_SCHEMA,
       ts: new Date().toISOString(),
-      level,
-      message: compactText(message),
-      detail: typeof detail === "string" ? detail : JSON.stringify(detail),
+      level: LOG_LEVELS.includes(level) ? level : "info",
+      message: SAFE_LOG_MESSAGES.has(message) ? message : "Diagnostic event.",
+      detail: safeLogDetail(detail),
     };
     if (shouldLog(level, settings)) {
       const method = level === "error" ? "error" : level === "warn" ? "warn" : "log";
@@ -3675,6 +3706,10 @@
   }
 
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
+    appendLog,
+    readState,
+    writeState,
+    safeLogDetail,
     CONFIG_DEFAULTS,
     SETTINGS_KEY,
     STATE_KEY,

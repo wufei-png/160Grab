@@ -48,12 +48,12 @@ class BrokenSink:
 
 @pytest.mark.asyncio
 async def test_reporter_writes_structured_jsonl_events(tmp_path):
-    sink = JsonlEventSink(tmp_path, run_id="run123")
+    sink = JsonlEventSink(tmp_path, run_id="aaaaaaaaaaaa")
     reporter = RunReporter(
         sink=sink,
         notification_manager=FakeNotificationManager(),
         rate_limit_threshold=3,
-        run_id="run123",
+        run_id="aaaaaaaaaaaa",
     )
 
     await reporter.emit_event(
@@ -67,15 +67,15 @@ async def test_reporter_writes_structured_jsonl_events(tmp_path):
     assert len(lines) == 1
     payload = json.loads(lines[0])
     assert payload["event"] == "run_started"
-    assert payload["run_id"] == "run123"
+    assert payload["run_id"] == "aaaaaaaaaaaa"
     assert payload["phase"] == "startup"
     assert payload["message"] == "Run started."
-    assert payload["data"] == {"config_path": "config.yaml"}
+    assert payload["data"] == {}
 
 
 @pytest.mark.asyncio
 async def test_reporter_records_notification_delivery_failures(tmp_path):
-    sink = JsonlEventSink(tmp_path, run_id="run123")
+    sink = JsonlEventSink(tmp_path, run_id="aaaaaaaaaaaa")
     reporter = RunReporter(
         sink=sink,
         notification_manager=FakeNotificationManager(
@@ -88,7 +88,7 @@ async def test_reporter_records_notification_delivery_failures(tmp_path):
             ]
         ),
         rate_limit_threshold=3,
-        run_id="run123",
+        run_id="aaaaaaaaaaaa",
     )
 
     await reporter.emit_event(
@@ -113,12 +113,12 @@ async def test_reporter_records_notification_delivery_failures(tmp_path):
 @pytest.mark.asyncio
 async def test_reporter_rate_limit_threshold_notifies_once_until_reset(tmp_path):
     notifications = FakeNotificationManager()
-    sink = JsonlEventSink(tmp_path, run_id="run123")
+    sink = JsonlEventSink(tmp_path, run_id="aaaaaaaaaaaa")
     reporter = RunReporter(
         sink=sink,
         notification_manager=notifications,
         rate_limit_threshold=2,
-        run_id="run123",
+        run_id="aaaaaaaaaaaa",
     )
 
     await reporter.record_rate_limit(context="schedule_polling", message="访问次数过多")
@@ -151,7 +151,7 @@ async def test_reporter_disables_sink_after_write_failure_and_keeps_notifying():
         sink=sink,
         notification_manager=notifications,
         rate_limit_threshold=3,
-        run_id="run123",
+        run_id="aaaaaaaaaaaa",
     )
 
     await reporter.emit_event(

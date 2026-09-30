@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -15,6 +14,8 @@ from playwright.async_api import (
     Error as PlaywrightError,
 )
 from playwright_stealth.stealth import Stealth
+
+from grab.observability.safe_logging import logger
 
 
 class PlaywrightClient:
@@ -55,7 +56,7 @@ class PlaywrightClient:
                 )
             except PlaywrightError as exc:
                 self._raise_persistent_launch_error(exc)
-            logger.info("Persistent browser context launched at {}", self.user_data_dir)
+            logger.info("Persistent browser context launched.")
             self.browser = getattr(self.context, "browser", None)
         else:
             self.browser = await self.playwright.chromium.launch(headless=self.headless)
@@ -67,23 +68,19 @@ class PlaywrightClient:
 
         self.context.on("page", self._handle_new_page)
         self.page = await self._select_or_create_page()
-        logger.info(
-            "Browser page ready (stealth={}, persistent_context={})",
-            self.stealth_enabled,
-            self.persistent_context_enabled,
-        )
+        logger.info("Browser page ready.")
 
     async def goto(self, url: str) -> None:
         if self.page is None:
             raise RuntimeError("Call launch() first")
         await self.page.goto(url)
-        logger.info(f"Navigated to {url}")
+        logger.info("Diagnostic event.")
 
     async def screenshot(self, path: str) -> None:
         if self.page is None:
             raise RuntimeError("Call launch() first")
         await self.page.screenshot(path=path)
-        logger.info(f"Screenshot saved to {path}")
+        logger.info("Diagnostic event.")
 
     async def run_in_page(self, script: str, arg: dict | None = None):
         if self.page is None:
@@ -94,7 +91,7 @@ class PlaywrightClient:
         if self.page is None:
             raise RuntimeError("Call launch() first")
         if self.debug_dir is None:
-            logger.debug("Skipping page snapshot for {} because debug_dir is unset", label)
+            logger.debug("Skipping diagnostic snapshot.")
             return None
 
         self.debug_dir.mkdir(parents=True, exist_ok=True)
@@ -128,7 +125,7 @@ class PlaywrightClient:
             json.dumps(metadata, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        logger.info("Saved page snapshot to {}", metadata_path)
+        logger.info("Diagnostic snapshot saved locally.")
         return metadata_path
 
     async def collect_debug_state(self) -> dict[str, Any]:
@@ -249,7 +246,9 @@ class PlaywrightClient:
                 "kind": "console",
                 "type": getattr(message, "type", ""),
                 "text": getattr(message, "text", ""),
-                "location": self._serialize_location(getattr(message, "location", None)),
+                "location": self._serialize_location(
+                    getattr(message, "location", None)
+                ),
             }
         )
 
@@ -312,8 +311,7 @@ class PlaywrightClient:
         except PlaywrightError as exc:
             if self._is_closed_target_error(page, exc):
                 logger.debug(
-                    "Skipping page preparation because target closed before stealth finished: {}",
-                    exc,
+                    "Skipping page preparation because target closed before stealth finished."
                 )
                 return
             self._prepared_pages.discard(page_id)
@@ -334,7 +332,7 @@ class PlaywrightClient:
         except asyncio.CancelledError:
             return
         if exc is not None:
-            logger.opt(exception=exc).warning("New page preparation failed.")
+            logger.warning("New page preparation failed.")
 
     def _raise_persistent_launch_error(self, exc: Exception) -> None:
         if self.user_data_dir is None:

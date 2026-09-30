@@ -379,9 +379,7 @@ async def test_print_login_page_diagnostics_reports_missing_post_and_ticket(caps
     await service.print_login_page_diagnostics()
 
     output = capsys.readouterr().out
-    assert "没有看到 POST /login.html 响应" in output
-    assert "验证码票据: ticket=no, randstr=no" in output
-    assert "更像是验证码没有完成" in output
+    assert "仅记录安全 readiness" in output
 
 
 @pytest.mark.asyncio
@@ -412,7 +410,7 @@ async def test_print_login_page_diagnostics_emits_structured_event():
     await service.print_login_page_diagnostics()
 
     assert reporter.events[-1]["event"] == "login_page_diagnostics"
-    assert reporter.events[-1]["data"]["visible_messages"] == ["验证码错误"]
+    assert "visible_messages" not in reporter.events[-1]["data"]
 
 
 @pytest.mark.asyncio

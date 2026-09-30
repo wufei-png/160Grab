@@ -1369,3 +1369,29 @@ sandbox.document.querySelectorAll = () => [];
     )
 
     assert result["success"] is True
+
+
+def test_logs_and_legacy_migration_drop_synthetic_sensitive_values():
+    result = _run_hook("""(() => {
+      const poison = "SYN_NAME_Q|SYN_CERT_Q|SYN_PHONE_Q|SYN_MEMBER_Q|SYN_TOKEN_Q|SYN_CARD_Q|SYN_ADDRESS_Q";
+      const captured = [];
+      sandbox.console.log = sandbox.console.warn = sandbox.console.error = (...args) => captured.push(args);
+      sandbox.sessionStorage.setItem(hooks.STATE_KEY, JSON.stringify({
+        running: true, pendingBooking: { scheduleId: "synthetic-slot" },
+        logs: [{ ts: new Date().toISOString(), level: "info", message: poison, detail: poison }],
+        summary: { message: poison, detail: poison },
+      }));
+      const migrated = hooks.readState();
+      const storedMigration = JSON.parse(sandbox.sessionStorage.getItem(hooks.STATE_KEY));
+      const entry = hooks.appendLog("info", poison, {
+        memberId: poison, token: poison, selector: { value: poison },
+        message: poison, url: "https://example.test/?token=" + poison,
+        ready: true, count: 2, unknown: false,
+      });
+      return { entry, captured, migrated, storedMigration, state: hooks.readState() };
+    })()""")
+    assert "SYN_" not in json.dumps(result)
+    assert result["migrated"]["logs"] == []
+    assert result["storedMigration"]["summary"] is None
+    assert result["migrated"]["pendingBooking"]["scheduleId"] == "synthetic-slot"
+    assert json.loads(result["entry"]["detail"]) == {"ready": True, "count": 2}

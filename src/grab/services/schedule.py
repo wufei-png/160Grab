@@ -3,11 +3,10 @@ import time
 from datetime import date
 from typing import Any
 
-from loguru import logger
-
 from grab.browser.page_api import _is_destroyed_context_error
 from grab.errors import SessionExpiredError, TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
+from grab.observability.safe_logging import logger
 from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
 from grab.utils.runtime import parse_sleep_time
 
@@ -39,18 +38,11 @@ class ScheduleService:
     async def fetch_doctor_schedule(self, date: str) -> dict:
         if self.target is None:
             raise RuntimeError("Doctor page target has not been captured yet")
-        logger.info(
-            "Fetching doctor schedule: doctor_id={}, unit_id={}, dep_id={}, date={}",
-            self.target.doctor_id,
-            self.target.unit_id,
-            self.target.dept_id,
-            date,
-        )
+        logger.info("Fetching doctor schedule.")
         user_key = await self._resolve_schedule_user_key()
         if not user_key:
             logger.warning(
-                "Schedule polling could not resolve _user_key/access_hash. "
-                "Attempting aggressive session refresh before failing."
+                "Schedule polling could not resolve _user_key/access_hash. Attempting aggressive session refresh before failing."
             )
             refreshed_user_key = None
             try:
@@ -58,11 +50,9 @@ class ScheduleService:
                     aggressive=True,
                     reason="missing_schedule_user_key",
                 )
-            except TransientSessionRefreshError as exc:
+            except TransientSessionRefreshError:
                 logger.warning(
-                    "Aggressive session refresh failed while recovering missing "
-                    "_user_key/access_hash: {}",
-                    exc,
+                    "Aggressive session refresh failed while recovering missing _user_key/access_hash."
                 )
             user_key = refreshed_user_key or await self._resolve_schedule_user_key()
         if not user_key:
@@ -70,7 +60,9 @@ class ScheduleService:
                 "Could not resolve _user_key/access_hash for doctor schedule polling"
             )
         self._remember_schedule_user_key(user_key)
-        fetch_json = getattr(self.page_api, "get_json_via_page_ajax", self.page_api.get_json)
+        fetch_json = getattr(
+            self.page_api, "get_json_via_page_ajax", self.page_api.get_json
+        )
         payload = await asyncio.wait_for(
             fetch_json(
                 "https://gate.91160.com/guahao/v1/pc/sch/doctor",
@@ -87,13 +79,7 @@ class ScheduleService:
             timeout=20,
         )
         raise_if_rate_limited(payload, context="doctor schedule polling")
-        logger.info(
-            "Doctor schedule response received: code={}, result_code={}, has_sch={}, has_data_schedules={}",
-            payload.get("code"),
-            payload.get("result_code"),
-            "sch" in payload,
-            bool(payload.get("data", {}).get("schedules")),
-        )
+        logger.info("Doctor schedule response received.")
         return payload
 
     def parse_doctor_schedule(self, payload: dict) -> list[Slot]:
@@ -133,19 +119,24 @@ class ScheduleService:
 
         for path, item in self._walk_schedule_tree(payload.get("sch"), path=()):
             date_key = next(
-                (part for part in reversed(path) if isinstance(part, str) and len(part) == 10),
+                (
+                    part
+                    for part in reversed(path)
+                    if isinstance(part, str) and len(part) == 10
+                ),
                 item.get("to_date"),
             )
             half_key = next(
                 (
                     part
                     for part in reversed(path)
-                    if isinstance(part, str)
-                    and part.endswith(("_am", "_pm", "_em"))
+                    if isinstance(part, str) and part.endswith(("_am", "_pm", "_em"))
                 ),
                 "",
             )
-            day_period = item.get("day_period") or (half_key.rsplit("_", 1)[-1] if half_key else "")
+            day_period = item.get("day_period") or (
+                half_key.rsplit("_", 1)[-1] if half_key else ""
+            )
             weekday_label = weekday_labels.get(date_key, "")
             time_range = (
                 item.get("time_range")
@@ -162,9 +153,7 @@ class ScheduleService:
                     day_period=str(day_period),
                     hospital=str(item.get("unit_name") or ""),
                     department=str(
-                        item.get("schext_clinic_label")
-                        or item.get("dep_name")
-                        or ""
+                        item.get("schext_clinic_label") or item.get("dep_name") or ""
                     ),
                     doctor=str(item.get("doctor_name") or ""),
                     date=str(item.get("to_date") or date_key or ""),
@@ -172,7 +161,11 @@ class ScheduleService:
                     status=status,
                     unit_id=str(item.get("unit_id") or self.target.unit_id or ""),
                     dep_id=str(item.get("dep_id") or self.target.dept_id or ""),
-                    doc_id=str(item.get("doc_id") or item.get("doctor_id") or self.target.doctor_id),
+                    doc_id=str(
+                        item.get("doc_id")
+                        or item.get("doctor_id")
+                        or self.target.doctor_id
+                    ),
                 )
             )
         return slots
@@ -263,11 +256,7 @@ class ScheduleService:
                 slots = await self.poll_once()
             except RateLimitError as exc:
                 delay_ms = parse_sleep_time(self.config.rate_limit_sleep_time)
-                logger.warning(
-                    "Rate limit detected during schedule polling: {}. Cooling down for {} ms.",
-                    exc.message,
-                    delay_ms,
-                )
+                logger.warning("Rate limit detected during schedule polling.")
                 if self.reporter is not None:
                     await self.reporter.record_rate_limit(
                         context="schedule_polling",
@@ -282,12 +271,7 @@ class ScheduleService:
                     self.reporter.reset_rate_limit_streak()
                 yield slots
                 delay_ms = parse_sleep_time(self.config.sleep_time)
-                logger.info(
-                    "Polling attempt {} completed: {} matching slot(s). Next poll in {} ms.",
-                    attempt,
-                    len(slots),
-                    delay_ms,
-                )
+                logger.info("Polling attempt.")
                 if self.reporter is not None:
                     await self.reporter.emit_event(
                         "schedule_poll_completed",
@@ -336,19 +320,9 @@ class ScheduleService:
             days=self.config.days,
             hours=self.config.hours,
         )
-        logger.info(
-            "Polling parse result: {} raw slot(s), {} filtered slot(s), filters weeks={}, days={}, hours={}",
-            len(raw_slots),
-            len(filtered_slots),
-            self.config.weeks,
-            self.config.days,
-            self.config.hours,
-        )
+        logger.info("Polling parse result.")
         if self.config.hours and raw_slots and not filtered_slots:
-            logger.info(
-                "Hour filter mismatch details: raw slot time ranges={}",
-                sorted({slot.time_range for slot in raw_slots}),
-            )
+            logger.info("Hour filter mismatch detected.")
 
         return filtered_slots
 
@@ -381,9 +355,7 @@ class ScheduleService:
                 if not _is_destroyed_context_error(exc):
                     raise
                 logger.warning(
-                    "Could not read _user_key from page (navigation interrupted JS "
-                    "context); falling back to cookies / cached key: {}",
-                    exc,
+                    "Could not read _user_key from page (navigation interrupted JS context); falling back to cookies / cached key."
                 )
         if hasattr(self.page_api, "get_cookie_value"):
             user_key = user_key or await self.page_api.get_cookie_value(
@@ -413,8 +385,8 @@ class ScheduleService:
                 reason="periodic_keepalive",
                 refreshed_at=now,
             )
-        except TransientSessionRefreshError as exc:
-            logger.warning("Session keepalive failed but polling will continue: {}", exc)
+        except TransientSessionRefreshError:
+            logger.warning("Session keepalive failed but polling will continue.")
 
     async def _refresh_session(
         self,

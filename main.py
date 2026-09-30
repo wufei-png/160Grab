@@ -7,7 +7,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 
-from loguru import logger
 from pydantic import ValidationError
 
 from grab.browser.page_api import BrowserPageApi
@@ -16,6 +15,7 @@ from grab.core.runner import GrabRunner
 from grab.core.scheduler import Scheduler
 from grab.models.schemas import GrabConfig
 from grab.observability import build_run_reporter
+from grab.observability.safe_logging import logger
 from grab.services.auth import AuthService
 from grab.services.booking import BookingService, PageBookingStrategy
 from grab.services.schedule import ScheduleService
@@ -27,7 +27,6 @@ from grab.utils.profile_manager import (
     create_profile,
     resolve_profile_for_run,
 )
-from grab.version_info import resolve_version_string
 
 APP_NAME = "160Grab"
 CONFIG_FILENAME = "config.yaml"
@@ -160,7 +159,7 @@ async def run_smoke_browser(*, debug_dir: Path | None) -> None:
 async def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     debug_dir = _optional_path_env("GRAB_DEBUG_DIR")
-    logger.info("{} - 健康160自动挂号 | 版本 {}", APP_NAME, resolve_version_string())
+    logger.info("160Grab started.")
     if args.smoke_browser:
         await run_smoke_browser(debug_dir=debug_dir)
         raise SystemExit(0)
@@ -187,7 +186,7 @@ async def main(argv: list[str] | None = None) -> None:
 
     reporter = build_run_reporter(config)
     if reporter.jsonl_path is not None:
-        logger.info("Structured run events will be written to {}", reporter.jsonl_path)
+        logger.info("Structured run event output enabled.")
     else:
         logger.warning(
             "Structured run events are disabled because the JSONL sink could not be initialized"
@@ -208,7 +207,6 @@ async def main(argv: list[str] | None = None) -> None:
     runner_started = False
     try:
         selected_profile: BrowserProfile | None = None
-        profile_source = "transient"
         if config.browser.launch_persistent_context:
             resolved_profile = resolve_profile_for_run(
                 root_dir=config.browser.profiles_root_dir,
@@ -220,13 +218,7 @@ async def main(argv: list[str] | None = None) -> None:
                 persist_profile_name=write_browser_profile_name,
             )
             selected_profile = resolved_profile.profile
-            profile_source = resolved_profile.source
-            logger.info(
-                "Using persistent context with profile '{}' at {} (source={})",
-                selected_profile.name,
-                selected_profile.path,
-                profile_source,
-            )
+            logger.info("Using persistent browser profile.")
         else:
             logger.info("Using transient browser context (persistent disabled)")
 
@@ -235,7 +227,9 @@ async def main(argv: list[str] | None = None) -> None:
             debug_dir=debug_dir,
             stealth_enabled=config.browser.stealth,
             persistent_context_enabled=config.browser.launch_persistent_context,
-            user_data_dir=selected_profile.path if selected_profile is not None else None,
+            user_data_dir=selected_profile.path
+            if selected_profile is not None
+            else None,
         ) as client:
             runner = build_runner(config, client, reporter=reporter)
             runner_started = True
@@ -265,7 +259,7 @@ async def main(argv: list[str] | None = None) -> None:
                 "error": str(exc),
             },
         )
-        logger.exception("Run failed")
+        logger.error("Run failed")
         raise SystemExit(1) from exc
 
     await reporter.emit_event(
@@ -377,4 +371,8 @@ async def run_create_profile_flow(
 
 if __name__ == "__main__":
     setup_logging()
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception:
+        logger.error("Run failed")
+        raise SystemExit(1) from None

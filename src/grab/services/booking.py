@@ -2,10 +2,10 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Protocol, TypeVar
 
-from loguru import logger
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from grab.models.schemas import BookingForm, BookingResult, DoctorPageTarget, GrabConfig
+from grab.observability.safe_logging import logger
 from grab.utils.rate_limit import RateLimitError, raise_if_rate_limited
 from grab.utils.runtime import parse_sleep_time
 
@@ -67,30 +67,16 @@ class PageBookingStrategy:
         )
         invalid_reason = None
         if appointment_options:
-            logger.info(
-                "Booking page time options for schedule {}: {}",
-                schedule_id or "<missing>",
-                [label for _, label in appointment_options],
-            )
+            logger.info("Booking page time options found.")
         if self._requires_precise_appointment_selection():
             if appointment_label is not None:
-                logger.info(
-                    "Selected appointment time for schedule {}: {}",
-                    schedule_id or "<missing>",
-                    appointment_label,
-                )
+                logger.info("Appointment time selected.")
             elif not appointment_options:
                 logger.info(
-                    "Booking page exposed no appointment time options for schedule {} while filters {} were set",
-                    schedule_id or "<missing>",
-                    self.config.hours if self.config is not None else [],
+                    "Booking page exposed no appointment time options."
                 )
             else:
-                logger.info(
-                    "No appointment time matched filters {} for schedule {}",
-                    self.config.hours if self.config is not None else [],
-                    schedule_id or "<missing>",
-                )
+                logger.info("No appointment time matched filters.")
         if not schedule_id:
             invalid_reason = "missing_schedule_id"
         elif (
@@ -221,7 +207,7 @@ class PageBookingStrategy:
         if not hasattr(self.page, "evaluate"):
             return
 
-        selection_result = await self.page.evaluate(
+        await self.page.evaluate(
             """({ memberId, appointmentValue }) => {
                 const clickElement = (element) => {
                     if (!element) return false;
@@ -311,12 +297,7 @@ class PageBookingStrategy:
                 "appointmentValue": form.appointment_value,
             },
         )
-        logger.info(
-            "Booking form selection result: appointment_selected={}, member_selected={}, appointment_label={}",
-            selection_result.get("appointmentSelected"),
-            selection_result.get("memberSelected"),
-            form.appointment_label,
-        )
+        logger.info("Booking form selection completed.")
 
     async def _trigger_submit_control(self) -> dict:
         return await self.page.evaluate(
@@ -403,8 +384,7 @@ class PageBookingStrategy:
             await wait_for_load_state("domcontentloaded", timeout=timeout)
         except PlaywrightTimeoutError:
             logger.info(
-                "Booking submit navigation did not reach DOMContentLoaded within {} ms",
-                timeout,
+                "Booking submit navigation timed out."
             )
 
     async def _call_after_possible_submit_navigation(
@@ -419,10 +399,7 @@ class PageBookingStrategy:
             except Exception as exc:
                 last_error = exc
                 if _is_destroyed_context_error(exc) and attempt < 2:
-                    logger.info(
-                        "{} raced with booking submit navigation; retrying after page settles",
-                        label,
-                    )
+                    logger.info("Diagnostic event.")
                     await self._wait_for_submit_navigation_settle()
                     continue
                 raise
@@ -500,8 +477,7 @@ class PageBookingStrategy:
             if not _is_destroyed_context_error(exc):
                 raise
             logger.info(
-                "Booking submit diagnostics were unavailable because the page kept navigating: {}",
-                exc,
+                "Booking submit diagnostics were unavailable because the page kept navigating."
             )
             return {
                 "url": getattr(self.page, "url", ""),
@@ -559,11 +535,7 @@ class PageBookingStrategy:
         else:
             submit_result = await self._trigger_submit_control_tolerating_navigation()
 
-        logger.info(
-            "Booking submit trigger result: method={}, target={}",
-            submit_result.get("method"),
-            submit_result.get("target"),
-        )
+        logger.info("Booking submit control triggered.")
         await self._wait_for_submit_navigation_settle()
         try:
             followup_action = await self._evaluate_after_possible_submit_navigation(
@@ -599,21 +571,15 @@ class PageBookingStrategy:
             if not _is_destroyed_context_error(exc):
                 raise
             logger.info(
-                "Skipping booking submit follow-up checks because the page kept navigating: {}",
-                exc,
+                "Skipping booking submit follow-up checks because the page kept navigating."
             )
             followup_action = None
         if followup_action:
-            logger.info("Booking submit follow-up action: {}", followup_action)
+            logger.info("Booking submit follow-up action.")
         if submit_result.get("method") == "not-found":
             raise RuntimeError("Could not find a submit control on booking page")
         if submit_response is not None:
-            logger.info(
-                "Booking submit network response: status={}, ok={}, url={}",
-                getattr(submit_response, "status", None),
-                getattr(submit_response, "ok", None),
-                getattr(submit_response, "url", ""),
-            )
+            logger.info("Booking submit network response received.")
         if hasattr(self.page, "wait_for_function"):
             try:
                 await self.page.wait_for_function(
@@ -645,12 +611,7 @@ class PageBookingStrategy:
         diagnostics = await self._collect_booking_page_diagnostics_or_fallback()
         success = self._is_booking_success(before_url, diagnostics)
         if success:
-            logger.info(
-                "Booking page indicates success: schedule_id={}, appointment_label={}, url={}",
-                form.schedule_id,
-                form.appointment_label,
-                diagnostics.get("url"),
-            )
+            logger.info("Booking page indicates success.")
             if self.reporter is not None:
                 await self.reporter.emit_event(
                     "booking_succeeded",
@@ -674,17 +635,7 @@ class PageBookingStrategy:
                     notification_severity="info",
                 )
         else:
-            logger.info(
-                "Booking submit page diagnostics: url={}, title={}, has_booking_form={}, has_submit_button={}, selected_times={}, checked_members={}, hidden_fields={}, visible_messages={}",
-                diagnostics.get("url"),
-                diagnostics.get("title"),
-                diagnostics.get("hasBookingForm"),
-                diagnostics.get("hasSubmitButton"),
-                diagnostics.get("selectedTimes"),
-                diagnostics.get("checkedMembers"),
-                diagnostics.get("hiddenFields"),
-                diagnostics.get("visibleMessages"),
-            )
+            logger.info("Booking submit page diagnostics collected.")
             if self.debug_snapshot is not None:
                 await self.debug_snapshot("booking-submit-not-success")
             if self.reporter is not None:
@@ -753,11 +704,7 @@ class PageBookingStrategy:
                             },
                         )
                     if self._is_deterministic_invalid_form(form):
-                        logger.info(
-                            "Skipping booking retries for schedule {} because invalid_reason={} is deterministic",
-                            slot_id,
-                            form.invalid_reason,
-                        )
+                        logger.info("Skipping booking retries.")
                         break
                     if attempt < max_attempts:
                         await self._sleep_retry_gap(attempt)
@@ -767,12 +714,7 @@ class PageBookingStrategy:
                         success=True, attempts=attempt, slot_id=slot_id
                     )
             except RateLimitError as exc:
-                logger.warning(
-                    "Rate limit detected during booking attempt {} for slot {}: {}",
-                    attempt,
-                    slot_id,
-                    exc.message,
-                )
+                logger.warning("Rate limit detected during booking attempt.")
                 if self.reporter is not None:
                     await self.reporter.record_rate_limit(
                         context="booking",
@@ -846,7 +788,7 @@ class PageBookingStrategy:
         delay_ms = parse_sleep_time(delay_text)
         if delay_ms <= 0:
             return
-        logger.debug("Sleeping {} ms {}", delay_ms, reason)
+        logger.debug("Sleeping.")
         await self._sleep(delay_ms / 1000)
 
 

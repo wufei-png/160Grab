@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from loguru import logger
-
 from grab.observability.notifications import NotificationManager
+from grab.observability.privacy import project_event, safe_phase
+from grab.observability.safe_logging import logger
 
 
 class JsonlEventSink:
@@ -21,7 +21,7 @@ class JsonlEventSink:
 
     def write(self, payload: dict[str, Any]) -> None:
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False))
+            handle.write(json.dumps(project_event(payload), ensure_ascii=False))
             handle.write("\n")
 
 
@@ -49,7 +49,7 @@ class RunReporter:
         return self.sink.path
 
     def set_phase(self, phase: str) -> None:
-        self.current_phase = phase
+        self.current_phase = safe_phase(phase)
 
     def reset_rate_limit_streak(self) -> None:
         self._rate_limit_streak = 0
@@ -80,8 +80,8 @@ class RunReporter:
         if notify:
             await self._deliver_notifications(
                 title=notification_title or "160Grab",
-                message=message,
-                severity=notification_severity or level,
+                message=payload["message"],
+                severity=payload["level"],
                 payload=payload,
                 subtitle=notification_subtitle,
             )
@@ -176,13 +176,10 @@ class RunReporter:
 
         try:
             self.sink.write(payload)
-        except Exception as exc:
-            failed_path = self.sink.path
+        except Exception:
             self.sink = None
             logger.warning(
-                "Structured event sink at {} failed and will be disabled: {}",
-                failed_path,
-                exc,
+                "Structured event sink failed; JSONL disabled."
             )
 
     def _build_payload(
@@ -194,15 +191,15 @@ class RunReporter:
         data: dict[str, Any] | None,
         phase: str | None,
     ) -> dict[str, Any]:
-        return {
-            "ts": datetime.now(UTC).isoformat(),
-            "run_id": self.run_id,
-            "level": level,
-            "event": event,
-            "phase": phase or self.current_phase,
-            "message": message,
-            "data": _serialize_value(data or {}),
-        }
+        return project_event(
+            {
+                "run_id": self.run_id,
+                "event": event,
+                "level": level,
+                "phase": phase or self.current_phase,
+                "data": data,
+            }
+        )
 
     def _log(self, level: str, message: str) -> None:
         log_method = getattr(logger, level, logger.info)
@@ -214,11 +211,9 @@ def build_run_reporter(config) -> RunReporter:
     sink = None
     try:
         sink = JsonlEventSink(config.logging.jsonl_dir, run_id=run_id)
-    except Exception as exc:
+    except Exception:
         logger.warning(
-            "Failed to initialize structured event sink at {}: {}. Continuing without JSONL event output.",
-            config.logging.jsonl_dir,
-            exc,
+            "Structured event sink initialization failed; JSONL disabled."
         )
     notification_manager = NotificationManager.from_config(config.notifications)
     return RunReporter(
@@ -227,15 +222,3 @@ def build_run_reporter(config) -> RunReporter:
         rate_limit_threshold=config.notifications.rate_limit_threshold,
         run_id=run_id,
     )
-
-
-def _serialize_value(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {str(key): _serialize_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_serialize_value(item) for item in value]
-    return value

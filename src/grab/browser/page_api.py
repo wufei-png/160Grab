@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any
 
-from loguru import logger
+from grab.observability.safe_logging import logger
 
 
 def _is_destroyed_context_error(exc: BaseException) -> bool:
@@ -13,9 +13,7 @@ class BrowserPageApi:
         self.page = page
         self.base_url = base_url
 
-    async def get_json(
-        self, path: str, params: dict[str, str] | None = None
-    ) -> dict:
+    async def get_json(self, path: str, params: dict[str, str] | None = None) -> dict:
         request_params = {"path": path, "params": params or {}}
         try:
             return await self.page.evaluate(
@@ -155,11 +153,8 @@ class BrowserPageApi:
             if callable(wait):
                 try:
                     await wait("domcontentloaded", timeout=8_000)
-                except Exception as exc:
-                    logger.warning(
-                        "Page.wait_for_load_state failed: {}",
-                        exc,
-                    )
+                except Exception:
+                    logger.warning("Page.wait_for_load_state failed.")
             try:
                 return await self.page.evaluate(expression, arg)
             except Exception as exc:

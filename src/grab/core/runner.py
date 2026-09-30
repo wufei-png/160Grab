@@ -1,9 +1,8 @@
 import asyncio
 
-from loguru import logger
-
 from grab.errors import SessionExpiredError
 from grab.models.schemas import BookingResult, RunResult
+from grab.observability.safe_logging import logger
 
 
 class GrabRunner:
@@ -46,14 +45,10 @@ class GrabRunner:
             or target.dept_id is None
             or target.dept_id == "0"
         ):
-            raise ValueError("Could not resolve full doctor page target from current page")
-        logger.info(
-            "Captured doctor target: doctor_id={}, unit_id={}, dept_id={}, needs_resolution={}",
-            target.doctor_id,
-            target.unit_id,
-            target.dept_id,
-            target.needs_resolution,
-        )
+            raise ValueError(
+                "Could not resolve full doctor page target from current page"
+            )
+        logger.info("Captured doctor target.")
         if self.reporter is not None:
             await self.reporter.emit_event(
                 "target_captured",
@@ -70,7 +65,7 @@ class GrabRunner:
 
         self._set_phase("resolve_member")
         member_id = await self.session_service.resolve_member_id()
-        logger.info("Resolved member_id={}", member_id)
+        logger.info("Member selection resolved.")
         if self.reporter is not None:
             await self.reporter.emit_event(
                 "member_resolved",
@@ -91,11 +86,7 @@ class GrabRunner:
                 slots
             )
             if result.success:
-                logger.info(
-                    "Booking succeeded. booked_slot_id={}, attempts={}",
-                    result.slot_id,
-                    result.attempts,
-                )
+                logger.info("Booking succeeded.")
                 return RunResult(success=True, booked_slot_id=result.slot_id)
             self._set_phase("schedule_polling")
 
@@ -107,11 +98,7 @@ class GrabRunner:
         *,
         attempt: int,
     ) -> None:
-        logger.warning(
-            "Session expired during schedule polling: {}. Starting recovery attempt {}.",
-            exc,
-            attempt,
-        )
+        logger.warning("Session expired during schedule polling.")
         if self.reporter is not None:
             await self.reporter.emit_event(
                 "session_recovery_required",
@@ -126,14 +113,10 @@ class GrabRunner:
             )
         cooldown_seconds = self._get_session_recovery_cooldown_seconds()
         if attempt > 1 and cooldown_seconds > 0:
-            logger.warning(
-                "Cooling down for {} second(s) before session recovery attempt {}.",
-                cooldown_seconds,
-                attempt,
-            )
+            logger.warning("Rate limit cooldown started.")
             await self._sleep(cooldown_seconds)
         await self._ensure_login_and_prepare_target()
-        logger.info("Session recovered on attempt {}. Resuming schedule polling.", attempt)
+        logger.info("Session recovered; resuming schedule polling.")
 
     def _get_session_recovery_max_attempts(self) -> int:
         return self.session_service.config.browser.session_recovery_max_attempts

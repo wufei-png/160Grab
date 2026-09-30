@@ -2,9 +2,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
-from loguru import logger
-
 from grab.models.schemas import GrabConfig
+from grab.observability.safe_logging import logger
 
 
 class Scheduler:
@@ -42,5 +41,5 @@ class Scheduler:
         while self._now() < self.config.appoint_time:
             remaining = int((self.config.appoint_time - self._now()).total_seconds())
             delay = min(5, remaining)
-            logger.info(f"Waiting {delay}s until appoint time")
+            logger.info("Diagnostic event.")
             await self._sleep(delay)

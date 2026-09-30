@@ -3,13 +3,14 @@ import math
 import re
 from urllib.parse import urlparse, urlunparse
 
-from loguru import logger
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from grab.browser.page_api import BrowserPageApi
 from grab.errors import TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, MemberProfile
+from grab.observability.privacy import safe_data
+from grab.observability.safe_logging import logger
 
 
 def _strip_url_query_and_fragment(url: str) -> str:
@@ -73,7 +74,7 @@ class SessionCaptureService:
             )
 
         booking_match = re.search(
-            r'/guahao/ystep1/uid-(?P<unit_id>[^/]+)/depid-(?P<dept_id>[^/]+)/schid-',
+            r"/guahao/ystep1/uid-(?P<unit_id>[^/]+)/depid-(?P<dept_id>[^/]+)/schid-",
             html,
         )
         if booking_match is not None:
@@ -82,7 +83,7 @@ class SessionCaptureService:
                 self._prefer_meaningful_id(booking_match.group("dept_id")),
             )
 
-        dept_page_match = re.search(r'/dep/show/depid-(?P<dept_id>[^/.]+)\.html', html)
+        dept_page_match = re.search(r"/dep/show/depid-(?P<dept_id>[^/.]+)\.html", html)
         schedule_row_match = re.search(
             r'<li[^>]+class="[^"]*liClassData[^"]*"[^>]+id="(?P<dept_id>[^"_]+)_[^"]+"',
             html,
@@ -115,14 +116,12 @@ class SessionCaptureService:
 
         try:
             await self._goto_member_page()
-        except Exception as exc:
-            print(f"⚠️ Could not probe member.html for login state: {exc}")
+        except Exception:
+            print("页面状态已更新；请在浏览器中核对。")
             return None
 
         if self.page.url.endswith("member.html"):
-            print(
-                "ℹ️ 登录态已经建立，但站点把你留在了登录页或又跳回了登录页。"
-            )
+            print("ℹ️ 登录态已经建立，但站点把你留在了登录页或又跳回了登录页。")
             print("   现在页面已切到 member.html，请继续手动导航到医生详情页。")
             return True
 
@@ -130,7 +129,7 @@ class SessionCaptureService:
             print("   探测 member.html 后仍回到登录页，更像是本次登录并未成功。")
             return False
 
-        print(f"   探测 member.html 后进入了意外页面: {self.page.url}")
+        print("页面状态已更新；请在浏览器中核对。")
         return None
 
     async def print_login_page_diagnostics(self) -> None:
@@ -139,108 +138,18 @@ class SessionCaptureService:
 
         try:
             state = await self.debug_state_provider()
-        except Exception as exc:
-            print(f"⚠️ Could not inspect login page diagnostics: {exc}")
+        except Exception:
+            print("页面状态已更新；请在浏览器中核对。")
             return
 
-        login_form = state.get("login_form") or {}
-        events = state.get("events") or []
-        login_related_events = [
-            event
-            for event in events
-            if any(
-                token in (event.get("url") or "")
-                for token in (
-                    "login.html",
-                    "member.html",
-                    "TCaptcha",
-                    "captcha",
-                    "turing.captcha",
-                    "qcloud.com",
-                )
-            )
-        ]
-        login_post_events = [
-            event
-            for event in login_related_events
-            if event.get("kind") == "response"
-            and event.get("method") == "POST"
-            and "login.html" in (event.get("url") or "")
-        ]
-        captcha_failures = [
-            event
-            for event in login_related_events
-            if event.get("kind") == "requestfailed"
-            and "captcha" in (event.get("url") or "").lower()
-        ]
-        page_errors = [
-            event.get("text")
-            for event in events
-            if event.get("kind") == "pageerror" and event.get("text")
-        ]
-        visible_messages = login_form.get("visible_messages") or []
-
-        print("   登录页诊断:")
-        if visible_messages:
-            print("   - 页面提示: " + " | ".join(visible_messages))
-        if page_errors:
-            print("   - 页面脚本错误: " + " | ".join(page_errors[-2:]))
-        if login_post_events:
-            last_post = login_post_events[-1]
-            print(
-                "   - 最近登录提交: "
-                f"{last_post.get('method')} {last_post.get('url')} -> "
-                f"{last_post.get('status')}"
-            )
-        else:
-            print("   - 最近登录提交: 没有看到 POST /login.html 响应")
-        print(
-            "   - 验证码票据: "
-            f"ticket={'yes' if login_form.get('ticket_present') else 'no'}, "
-            f"randstr={'yes' if login_form.get('randstr_present') else 'no'}"
-        )
-        print(
-            "   - 表单目标: "
-            f"target={login_form.get('target_value') or '<empty>'}, "
-            f"error_num={login_form.get('error_num') or '<empty>'}"
-        )
-        if captcha_failures:
-            print(
-                "   - 验证码请求失败: "
-                + " | ".join(event.get("url") or "" for event in captcha_failures[-2:])
-            )
-
-        inference = None
-        if not login_post_events and not login_form.get("ticket_present"):
-            inference = "更像是验证码没有完成，或登录表单根本没有真正提交。"
-            print(f"   - 推断: {inference}")
-        elif login_post_events and visible_messages:
-            inference = "表单提交过，但页面返回了前端可见的错误提示。"
-            print(f"   - 推断: {inference}")
-        elif login_post_events:
-            inference = "表单提交过，但还需要结合快照或网络响应继续判断。"
-            print(f"   - 推断: {inference}")
-
+        data = safe_data(state.get("login_form") or {})
+        print("   登录页诊断：仅记录安全 readiness；请在浏览器中核对登录/验证码提示。")
         if self.reporter is not None:
             await self.reporter.emit_event(
                 "login_page_diagnostics",
                 level="warning",
-                message="Collected login page diagnostics while waiting for doctor page.",
-                data={
-                    "visible_messages": visible_messages,
-                    "page_errors": page_errors,
-                    "login_post_status": (
-                        login_post_events[-1].get("status") if login_post_events else None
-                    ),
-                    "ticket_present": login_form.get("ticket_present"),
-                    "randstr_present": login_form.get("randstr_present"),
-                    "target_value": login_form.get("target_value"),
-                    "error_num": login_form.get("error_num"),
-                    "captcha_failures": [
-                        event.get("url") for event in captcha_failures[-2:]
-                    ],
-                    "inference": inference,
-                },
+                message="Login diagnostics collected.",
+                data=data,
             )
 
     def parse_doctor_page_url(self, url: str) -> DoctorPageTarget:
@@ -309,7 +218,7 @@ class SessionCaptureService:
                     "   检测到医生详情页在另一标签页（常见于搜索/列表点击后新开标签），"
                     "已把自动化切换到该标签。"
                 )
-                print(f"   该页 URL: {p.url}")
+                print("页面状态已更新；请在浏览器中核对。")
             self._set_page(p)
             return target
         if last_error is not None:
@@ -351,12 +260,9 @@ class SessionCaptureService:
             try:
                 return await self._wait_for_doctor_target()
             except ValueError as e:
-                print(f"❌ {e}")
-                print(f"   程序当前读到的地址栏 URL: {self.page.url}")
+                print("❌ 未找到支持的医生详情页；请在浏览器中核对。")
                 if len(self.page.context.pages) > 1:
-                    print("   当前所有标签页 URL（检查医生页是否新开在别的标签）:")
-                    for i, p in enumerate(self.page.context.pages):
-                        print(f"     [{i + 1}] {p.url}")
+                    print("   当前有多个标签页，请确认医生详情页已打开。")
                 if "www.91160.com/doctors/index/" not in self.page.url:
                     print(
                         "   提示：必须在「本程序自动打开的浏览器窗口」里进入医生页；"
@@ -368,13 +274,17 @@ class SessionCaptureService:
                         await self.debug_snapshot("login-page-before-member-probe")
                     login_state = await self.probe_logged_in_state_from_login_page()
                     if login_state is False:
-                        print("   这更像是验证码未过、密码错误，或站点直接拒绝了本次登录。")
+                        print(
+                            "   这更像是验证码未过、密码错误，或站点直接拒绝了本次登录。"
+                        )
                     elif login_state is None:
                         print(
                             "   当前还停留在登录页，但仅凭 URL 不能断定登录一定失败。"
                         )
                 elif "/guahao/ystep1/" in self.page.url:
-                    print("   当前已经到了预约页，不是医生详情页，请返回医生详情页后重试。")
+                    print(
+                        "   当前已经到了预约页，不是医生详情页，请返回医生详情页后重试。"
+                    )
                 elif "/member.html" in self.page.url:
                     print("   当前停留在就诊人页面，先回到医生详情页再按 Enter。")
                 if self.debug_snapshot is not None:
@@ -575,9 +485,7 @@ class SessionCaptureService:
                 )
 
             if resolved_unit_id and resolved_dept_id:
-                print(
-                    f"✅ Resolved from page: unit_id={resolved_unit_id}, dept_id={resolved_dept_id}"
-                )
+                print("页面状态已更新；请在浏览器中核对。")
                 return DoctorPageTarget(
                     unit_id=str(resolved_unit_id),
                     dept_id=str(resolved_dept_id),
@@ -590,7 +498,9 @@ class SessionCaptureService:
                 if not resolved_unit_id:
                     print("   - unit_id not found in page")
                 if not resolved_dept_id:
-                    print("   - dept_id not found in page or still stayed at placeholder 0")
+                    print(
+                        "   - dept_id not found in page or still stayed at placeholder 0"
+                    )
                 if self.reporter is not None:
                     await self.reporter.emit_event(
                         "target_resolution_failed",
@@ -606,7 +516,7 @@ class SessionCaptureService:
                 return target
 
         except Exception as e:
-            print(f"⚠️ Error resolving unit_id/dept_ids: {e}")
+            print("页面状态已更新；请在浏览器中核对。")
             if self.reporter is not None:
                 await self.reporter.emit_event(
                     "target_resolution_failed",
@@ -677,13 +587,7 @@ class SessionCaptureService:
                 }
             )
 
-        logger.info(
-            "Session keepalive completed: reason={}, aggressive={}, recovered_user_key={}, touches={}",
-            reason,
-            aggressive,
-            bool(recovered_user_key),
-            final_urls,
-        )
+        logger.info("Session keepalive completed.")
         if self.reporter is not None:
             await self.reporter.emit_event(
                 "session_keepalive_completed",
@@ -804,11 +708,7 @@ class SessionCaptureService:
 
         if len(members) == 1:
             only_member = members[0]
-            print(
-                "ℹ️ 当前账号下只有一个就诊人，自动选中: "
-                f"{only_member.member_id}: {only_member.name}"
-                + ("" if only_member.certified else "（未认证）")
-            )
+            print("ℹ️ 当前账号下只有一个就诊人，已自动选择；请在浏览器中核对。")
             return only_member.member_id
 
         member_lines = [

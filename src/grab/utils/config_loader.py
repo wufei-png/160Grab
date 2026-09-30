@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from loguru import logger
 from ruamel.yaml import YAML
 
 from grab.models.schemas import GrabConfig
+from grab.observability.safe_logging import logger
 
 
 def load_config(path: str | Path) -> GrabConfig:
@@ -13,8 +13,10 @@ def load_config(path: str | Path) -> GrabConfig:
     for field in ("username", "password", "ocr"):
         if getattr(config, field):
             logger.warning(
-                "Deprecated top-level config field '{}' is ignored by manual login; "
-                "remove it from your configuration.",
-                field,
+                {
+                    "username": "Deprecated top-level config field 'username' is ignored by manual login; remove it from your configuration.",
+                    "password": "Deprecated top-level config field 'password' is ignored by manual login; remove it from your configuration.",
+                    "ocr": "Deprecated top-level config field 'ocr' is ignored by manual login; remove it from your configuration.",
+                }[field]
             )
     return config
