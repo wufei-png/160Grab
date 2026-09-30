@@ -358,6 +358,7 @@
     "Submit attempts exhausted; manual action required.",
     "Submitted booking form.",
     "Submitted booking form; runner paused to avoid duplicate submit.",
+    "Submission outcome unknown; verify original site records.",
     "This userscript only supports 91160 doctor detail and ystep1 pages.",
     "Triggered booking follow-up action.",
     "Unsupported booking page URL.",
@@ -448,6 +449,105 @@
     return readSettings();
   }
 
+  const JOURNAL_KEY = "grab160.submissionJournal.v1";
+  const POLICY_VERSION = "submit-v1";
+  const UNRESOLVED = new Set(["SUBMITTING", "OUTCOME_UNKNOWN"]);
+  const TERMINAL = new Set(["CONFIRMED_SUCCESS", "CONFIRMED_NO_EFFECT"]);
+
+  function randomRef(bytes = 16) {
+    return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  function validateJournal(journal) {
+    const keys = (value, expected) => isPlainObject(value) && Object.keys(value).sort().join() === expected.sort().join();
+    if (!keys(journal, ["version", "salt", "attempts", "consents", "audit"]) || journal.version !== 1 ||
+        !/^[a-f0-9]{64}$/.test(journal.salt) || !Array.isArray(journal.attempts) || !Array.isArray(journal.consents) || !Array.isArray(journal.audit)) throw new Error("storage");
+    for (const r of journal.attempts) {
+      if (!keys(r, ["attempt_id", "booking_ref", "state", "created_at", "updated_at", "evidence_type", "failure_class", "human_action_required"]) ||
+          !/^[a-f0-9]{32}$/.test(r.attempt_id) || !/^[a-f0-9]{64}$/.test(r.booking_ref) ||
+          !(UNRESOLVED.has(r.state) || TERMINAL.has(r.state)) ||
+          !Number.isFinite(Date.parse(r.created_at)) || !Number.isFinite(Date.parse(r.updated_at)) ||
+          !["none", "matched_business", "human_verified"].includes(r.evidence_type) ||
+          ![null, "post_submit", "business_rejected", "interrupted"].includes(r.failure_class) || typeof r.human_action_required !== "boolean") throw new Error("storage");
+    }
+    for (const r of journal.consents) {
+      if (!keys(r, ["binding_ref", "policy_version"]) || !/^[a-f0-9]{64}$/.test(r.binding_ref) || r.policy_version !== POLICY_VERSION) throw new Error("storage");
+    }
+    for (const r of journal.audit) {
+      if (!keys(r, ["attempt_id", "state", "at"]) || !/^[a-f0-9]{32}$/.test(r.attempt_id) || !TERMINAL.has(r.state) || !Number.isFinite(Date.parse(r.at))) throw new Error("storage");
+    }
+  }
+
+  function writeJournal(journal) {
+    validateJournal(journal);
+    const raw = JSON.stringify(journal);
+    if (!globalThis.localStorage) throw new Error("storage");
+    // One synchronous atomic storage item, with read-back; never fall back to a
+    // different namespace or silently create a fresh journal after an error.
+    localStorage.setItem(JOURNAL_KEY, raw);
+    if (localStorage.getItem(JOURNAL_KEY) !== raw) throw new Error("storage");
+  }
+
+  function readJournal() {
+    if (!globalThis.localStorage) throw new Error("storage");
+    const raw = localStorage.getItem(JOURNAL_KEY);
+    if (raw !== null) {
+      const journal = JSON.parse(raw);
+      validateJournal(journal);
+      return journal;
+    }
+    const journal = { version: 1, salt: randomRef(32), attempts: [], consents: [], audit: [] };
+    const legacyRaw = globalThis.sessionStorage?.getItem(STATE_KEY);
+    const legacy = legacyRaw ? JSON.parse(legacyRaw) : null;
+    if (legacy?.submittingBooking) {
+      const now = new Date().toISOString();
+      journal.attempts.push({ attempt_id: randomRef(), booking_ref: randomRef(32), state: "OUTCOME_UNKNOWN", created_at: now, updated_at: now, evidence_type: "none", failure_class: "interrupted", human_action_required: true });
+    }
+    writeJournal(journal);
+    return journal;
+  }
+
+  function submissionBlocked() {
+    try { return readJournal().attempts.some((r) => UNRESOLVED.has(r.state)); }
+    catch (_error) { return true; }
+  }
+
+  async function journalReference(parts) {
+    const journal = readJournal();
+    const salt = Uint8Array.from(journal.salt.match(/../g), (v) => parseInt(v, 16));
+    const key = await crypto.subtle.importKey("raw", salt, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(JSON.stringify(parts)));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function beginAttempt(parts) {
+    const bookingRef = await journalReference(parts);
+    const journal = readJournal();
+    if (journal.attempts.some((r) => UNRESOLVED.has(r.state) || r.booking_ref === bookingRef)) throw new Error("blocked");
+    const now = new Date().toISOString();
+    const record = { attempt_id: randomRef(), booking_ref: bookingRef, state: "SUBMITTING", created_at: now, updated_at: now, evidence_type: "none", failure_class: null, human_action_required: true };
+    journal.attempts.push(record);
+    writeJournal(journal);
+    return record;
+  }
+
+  function finishAttempt(attemptId, outcome, human = false) {
+    if (!(TERMINAL.has(outcome) || outcome === "OUTCOME_UNKNOWN")) throw new Error("storage");
+    const journal = readJournal();
+    const record = journal.attempts.find((r) => r.attempt_id === attemptId);
+    if (!record || !UNRESOLVED.has(record.state)) throw new Error("storage");
+    Object.assign(record, { state: outcome, updated_at: new Date().toISOString(), evidence_type: human ? "human_verified" : TERMINAL.has(outcome) ? "matched_business" : "none", failure_class: outcome === "OUTCOME_UNKNOWN" ? "post_submit" : outcome === "CONFIRMED_NO_EFFECT" ? "business_rejected" : null, human_action_required: outcome === "OUTCOME_UNKNOWN" });
+    if (human) journal.audit.push({ attempt_id: attemptId, state: outcome, at: new Date().toISOString() });
+    writeJournal(journal);
+  }
+
+  function resolvePending(booked) {
+    if (!globalThis.confirm("请先在原站预约记录核对每个未决预约。确认核对结果为" + (booked ? "已预约" : "未预约") + "？")) return;
+    for (const r of readJournal().attempts.filter((r) => UNRESOLVED.has(r.state))) finishAttempt(r.attempt_id, booked ? "CONFIRMED_SUCCESS" : "CONFIRMED_NO_EFFECT", true);
+    stopRun();
+    renderPanel();
+  }
+
   function defaultState() {
     return {
       version: 2,
@@ -470,6 +570,12 @@
     try {
       const raw = globalThis.sessionStorage?.getItem(STATE_KEY);
       const state = raw ? { ...defaultState(), ...JSON.parse(raw) } : defaultState();
+      const blocked = submissionBlocked();
+      let latest = null;
+      try { latest = readJournal().attempts.at(-1); } catch (_error) { /* fail closed */ }
+      state.outcome = blocked ? "OUTCOME_UNKNOWN" : latest?.state ?? "DISCOVERED";
+      if (blocked) { state.running = false; state.submittingBooking = { state: "OUTCOME_UNKNOWN" }; }
+      else { state.submittingBooking = null; }
       state.logs = Array.isArray(state.logs) ? state.logs.map(safeLogEntry).filter(Boolean) : [];
       state.summary = safeLogEntry(state.summary);
       // Persist the migration immediately, even when no new log is appended.
@@ -515,11 +621,13 @@
   }
 
   function isControllerActive(controllerId) {
+    if (submissionBlocked()) return false;
     const state = readState();
     return Boolean(controllerId && state.running && state.controllerId === controllerId);
   }
 
   function claimPageController(kind) {
+    if (submissionBlocked()) return null;
     const state = readState();
     if (!state.running) {
       return null;
@@ -537,6 +645,7 @@
   }
 
   function prepareManualControllerStart(kind) {
+    if (submissionBlocked()) return null;
     const controllerId = makeControllerId(kind);
     activeControllerId = controllerId;
     patchState((next) => ({
@@ -589,6 +698,7 @@
   }
 
   function panelPhase(state = readState(), summary = state.summary) {
+    if (state.outcome === "OUTCOME_UNKNOWN") return "error";
     const message = compactText(summary?.message).toLowerCase();
     if (
       summary?.level === "error" ||
@@ -2046,63 +2156,15 @@
   }
 
   function findSubmitControl() {
-    for (const selector of [
-      "#suborder #submitbtn",
-      "#submitbtn",
-      "#submit_booking",
-      "#submitBooking",
-      "#sub",
-      "#submit",
-      '#suborder button[type="submit"]',
-      '#suborder input[type="submit"]',
-      'button[type="submit"]',
-      'input[type="submit"]',
-      "button.btn_submit",
-      "button.sub-btn",
-      "input.sub-btn",
-    ]) {
-      const element = document.querySelector(selector);
-      if (isVisible(element)) {
-        return { method: "selector", target: selector, element };
-      }
-    }
-    const textCandidates = Array.from(
-      document.querySelectorAll('button, input[type="button"], input[type="submit"], a'),
-    ).filter((element) => {
-      const text = compactText(element.textContent || element.value);
-      return isVisible(element) && /确认预约|提交预约|提交|预约|下一步/.test(text);
-    });
-    if (textCandidates.length > 0) {
-      return {
-        method: "text-match",
-        target: compactText(textCandidates[0].textContent || textCandidates[0].value),
-        element: textCandidates[0],
-      };
-    }
-    const form = document.querySelector("form");
-    if (form) {
-      if (typeof form.requestSubmit === "function") {
-        return { method: "requestSubmit", target: "form", form };
-      }
-      return { method: "submit", target: "form", form };
-    }
-    return { method: "not-found", target: null };
+    const selector = '#submitbtn, #submit_booking, #submitBooking, #suborder button[type="submit"], #suborder input[type="submit"]';
+    const candidates = Array.from(document.querySelectorAll(selector));
+    if (candidates.length !== 1 || !isVisible(candidates[0]) || candidates[0].disabled || typeof candidates[0].click !== "function") return { method: "not-found", target: null };
+    return { method: "selector", target: selector, element: candidates[0] };
   }
 
   function triggerSubmitControl(control = findSubmitControl()) {
-    if (control.method === "not-found") {
-      return { method: "not-found", target: null };
-    }
-    if (control.method === "requestSubmit") {
-      control.form.requestSubmit();
-      return { method: "requestSubmit", target: control.target };
-    }
-    if (control.method === "submit") {
-      control.form.submit();
-      return { method: "submit", target: control.target };
-    }
-    const activation = activateSubmitElement(control.element);
-    return { method: control.method, target: control.target, activation };
+    if (control.method !== "selector") return { method: "not-found", target: null };
+    return { method: control.method, target: control.target, activation: activateSubmitElement(control.element) };
   }
 
   function activateSubmitElement(element) {
@@ -2115,62 +2177,36 @@
       element.click();
       return { method: "native-click" };
     }
-    element.dispatchEvent?.(
-      new MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: globalThis,
-        button: 0,
-      }),
-    );
-    return { method: "dispatch-click" };
+    throw new Error("manual control required");
   }
 
-  function markSubmitInProgress(formState, memberSelection, fillResult, attemptCount) {
-    const detail = {
-      scheduleId: formState.scheduleId,
-      appointmentValue: formState.appointmentValue,
-      appointmentLabel: formState.appointmentLabel,
-      memberId: memberSelection.memberId,
-      address: fillResult.addressSelection,
-      clinicId: fillResult.clinicIdSelection,
-      scheduleDate: fillResult.scheduleDateSelection,
-      checkIdInfoPatch: fillResult.checkIdInfoPatch,
-      attemptCount,
-      startedAt: new Date().toISOString(),
-    };
+  async function markSubmitInProgress(formState, memberSelection, _fillResult, _attemptCount, target = readState().lastTarget) {
+    const record = await beginAttempt([target?.unitId, target?.depId, target?.doctorId, memberSelection.memberId, formState.scheduleId, formState.appointmentValue]);
     activeControllerId = null;
-    patchState((next) => ({
-      ...next,
-      running: false,
-      controllerId: null,
-      pendingBooking: null,
-      submittingBooking: detail,
-    }));
-    setSummary(
-      "info",
-      "Submitted booking form; runner paused to avoid duplicate submit.",
-      detail,
-      { force: true },
-    );
-    return detail;
+    patchState((next) => ({ ...next, running: false, controllerId: null, pendingBooking: null, submittingBooking: record }));
+    return record;
   }
 
-  async function clickFollowupControl() {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const sure = document.querySelector("#sure");
-      if (isVisible(sure)) {
-        clickElement(sure);
-        return "paymethod-sure";
+  async function submitTransaction(control, formState, memberSelection, target, authorized = false, evidenceAdapter = null) {
+    if (submissionBlocked()) return "OUTCOME_UNKNOWN";
+    if (!authorized || control.method !== "selector") return "AWAITING_MANUAL_CONFIRMATION";
+    let record;
+    try { record = await markSubmitInProgress(formState, memberSelection, null, 1, target); }
+    catch (_error) { return "OUTCOME_UNKNOWN"; }
+    let outcome = "OUTCOME_UNKNOWN";
+    try {
+      triggerSubmitControl(control);
+      // No live evidence/follow-up adapter is verified. Unknown controls, terms,
+      // security checks and payment remain manual. Never repeat a click.
+      if (evidenceAdapter) {
+        const evidence = await evidenceAdapter();
+        const expected = [target.unitId, target.depId, target.doctorId, memberSelection.memberId, formState.scheduleId, formState.appointmentValue];
+        if (evidence && TERMINAL.has(evidence.state) && JSON.stringify(evidence.selection) === JSON.stringify(expected)) outcome = evidence.state;
       }
-      const okButton = document.querySelector("#ok_btn");
-      if (isVisible(okButton)) {
-        clickElement(okButton);
-        return "disease-ok";
-      }
-      await sleepMs(300);
-    }
-    return null;
+    } catch (_error) { outcome = "OUTCOME_UNKNOWN"; }
+    try { finishAttempt(record.attempt_id, outcome); }
+    catch (_error) { outcome = "OUTCOME_UNKNOWN"; }
+    return outcome;
   }
 
   function visibleMessagesSnapshot() {
@@ -2193,9 +2229,8 @@
     );
     const visibleMessages = visibleMessagesSnapshot();
     return {
-      success:
-        currentUrl !== beforeUrl && !currentUrl.includes("/guahao/ystep1/") ||
-        (!hasBookingForm && !hasSubmitButton),
+      success: false,
+      state: "OUTCOME_UNKNOWN",
       currentUrl,
       hasBookingForm,
       hasSubmitButton,
@@ -2556,65 +2591,10 @@
       stopRun("Could not find a submit control on the booking page.");
       return;
     }
-    const attemptCount = recordSubmitAttempt(
-      formState.scheduleId,
-      formState.appointmentValue,
-    );
-    markSubmitInProgress(
-      formState,
-      memberSelection,
-      { ...fillResult, checkIdInfoPatch },
-      attemptCount,
-    );
-    const submitResult = triggerSubmitControl(submitControl);
-    setSummary("info", "Submitted booking form.", { submitResult, attemptCount });
-    const followupAction = await clickFollowupControl();
-    if (followupAction) {
-      appendLog("info", "Triggered booking follow-up action.");
-    }
-
-    let inspection = inspectBookingPage(beforeUrl);
-    for (const checkpoint of [400, 900, 1600, 2400]) {
-      if (inspection.success || inspection.rateLimitMessage) {
-        break;
-      }
-      await sleepMs(checkpoint);
-      inspection = inspectBookingPage(beforeUrl);
-    }
-
-    if (inspection.success) {
-      patchState((next) => ({
-        ...next,
-        running: false,
-        pendingBooking: null,
-        submittingBooking: null,
-      }));
-      setSummary("info", "Booking succeeded.", {
-        appointmentLabel: formState.appointmentLabel,
-        url: inspection.currentUrl,
-      });
-      renderPanel();
-      return;
-    }
-
-    const reason =
-      inspection.rateLimitMessage ||
-      inspection.visibleMessages.join(" | ") ||
-      `Booking page stayed on ${inspection.currentUrl}`;
-    if (!settings.booking.autoReturnAfterSubmitFailure) {
-      patchState((next) => ({ ...next, running: false }));
-      setSummary("warn", "Booking submit failed; staying on page.", reason);
-      renderPanel();
-      return;
-    }
-    patchState((next) => ({ ...next, running: true, submittingBooking: null }));
-    await returnToDoctorAfterCurrentAttempt(
-      target,
-      "Booking submit failed.",
-      inspection.rateLimitMessage
-        ? settings.pacing.rateLimitCooldownMs
-        : settings.pacing.bookingRetryMs,
-    );
+    const outcome = await submitTransaction(submitControl, formState, memberSelection, target);
+    patchState((next) => ({ ...next, running: false }));
+    setSummary("warn", outcome === "OUTCOME_UNKNOWN" ? "Submission outcome unknown; verify original site records." : "Booking form prepared; waiting for manual submit.");
+    renderPanel();
   }
 
   function normalizePanelPosition(position) {
@@ -3308,8 +3288,8 @@
             <strong data-panel-attempts>${state.pollAttempt}</strong>
           </div>
           <div class="grab160-watch-card">
-            <span>运行</span>
-            <strong data-panel-running>${state.running ? "运行中" : "已停止"}</strong>
+            <span>提交状态</span>
+            <strong data-panel-running>${htmlEscape(state.outcome ?? "DISCOVERED")}</strong>
           </div>
           <div class="grab160-watch-card">
             <span>自动提交</span>
@@ -3332,10 +3312,14 @@
         <button type="button" data-action="settings">Settings</button>
         <button type="button" data-action="logs">Logs</button>
         <button type="button" data-action="reset-state">Reset State</button>
+        <button type="button" data-action="resolve-booked">核对：已预约</button>
+        <button type="button" data-action="resolve-not-booked">核对：未预约</button>
       </div>
       ${state.activeView === "settings" ? renderSettingsView(settings) : ""}
       ${state.activeView === "logs" ? renderLogsView(state, settings) : ""}
     `;
+    body.querySelector('[data-action="resolve-booked"]')?.addEventListener("click", () => resolvePending(true));
+    body.querySelector('[data-action="resolve-not-booked"]')?.addEventListener("click", () => resolvePending(false));
     body.querySelector('[data-action="start"]')?.addEventListener("click", startRun);
     body.querySelector('[data-action="stop"]')?.addEventListener("click", () => stopRun());
     body.querySelector('[data-action="main"]')?.addEventListener("click", () => setActiveView("main"));
@@ -3758,6 +3742,7 @@
   }
 
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
+    JOURNAL_KEY, readJournal, writeJournal, submissionBlocked, beginAttempt, finishAttempt, submitTransaction, resolvePending, startRun, stopRun, resetRuntimeState,
     appendLog,
     setSummary,
     panelPhase,
@@ -3818,7 +3803,7 @@
     return;
   }
 
-  if (readSettings().runtime.autoStart && !readState().running) {
+  if (!submissionBlocked() && readSettings().runtime.autoStart && !readState().running) {
     patchState((state) => ({ ...state, running: true }));
   }
   bootstrapController();

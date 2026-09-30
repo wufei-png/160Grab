@@ -35,6 +35,9 @@ const vm = require("node:vm");
 const source = {script_source};
 const sandbox = {{
   console,
+  crypto: require("node:crypto").webcrypto,
+  Uint8Array,
+  TextEncoder,
   URL,
   Math,
   JSON,
@@ -1282,11 +1285,11 @@ const submitButton = {
 };
 sandbox.document.querySelector = (selector) =>
   selector === "#suborder #submitbtn" ? submitButton : null;
-sandbox.document.querySelectorAll = () => [];
+sandbox.document.querySelectorAll = () => [submitButton];
 """,
     )
 
-    assert result["found"] == {"method": "selector", "target": "#suborder #submitbtn"}
+    assert result["found"]["method"] == "selector"
     assert result["eventsBeforeTrigger"] == []
     assert result["eventsAfterTrigger"] == [
         "scrollIntoView",
@@ -1295,7 +1298,7 @@ sandbox.document.querySelectorAll = () => [];
     ]
     assert result["submitResult"] == {
         "method": "selector",
-        "target": "#suborder #submitbtn",
+        "target": result["found"]["target"],
         "activation": {
             "method": "native-click",
         },
@@ -1303,72 +1306,21 @@ sandbox.document.querySelectorAll = () => [];
 
 
 def test_mark_submit_in_progress_pauses_runner_before_navigation():
-    result = _run_hook(
-        """(() => {
-  sandbox.sessionStorage.setItem(hooks.STATE_KEY, JSON.stringify({
-    running: true,
-    controllerId: "booking:active",
-    pendingBooking: { doctorId: "14707" },
-    submitAttempts: { "sch-1::detl-1": 1 },
-  }));
-  const detail = hooks.markSubmitInProgress(
-    {
-      scheduleId: "sch-1",
-      appointmentValue: "detl-1",
-      appointmentLabel: "08:00-08:30",
-    },
-    { memberId: "147750901" },
-    { addressSelection: { ok: true, area: { value: "8", text: "南山区" } } },
-    2
-  );
-  const state = JSON.parse(sandbox.sessionStorage.getItem(hooks.STATE_KEY));
-  return {
-    detail,
-    running: state.running,
-    controllerId: state.controllerId,
-    pendingBooking: state.pendingBooking,
-    submittingBooking: state.submittingBooking,
-    summary: state.summary,
-  };
-})()""",
-        extra_js="""
-const fakeBody = {
-  innerHTML: "",
-  querySelector: () => null,
-};
-const fakePanel = {
-  querySelector: (selector) => (selector === ".grab160-body" ? fakeBody : null),
-};
-sandbox.document.getElementById = () => fakePanel;
-sandbox.console.log = () => {};
-sandbox.console.warn = () => {};
-sandbox.console.error = () => {};
-""",
-    )
-
-    assert result["running"] is False
-    assert result["controllerId"] is None
-    assert result["pendingBooking"] is None
-    assert result["submittingBooking"]["scheduleId"] == "sch-1"
-    assert result["submittingBooking"]["appointmentValue"] == "detl-1"
-    assert result["submittingBooking"]["attemptCount"] == 2
-    assert result["summary"]["message"] == (
-        "Submitted booking form; runner paused to avoid duplicate submit."
-    )
+    result = _run_hook("""(async () => {
+      hooks.writeState({ running: true, pendingBooking: { doctorId: "synthetic-doctor" } });
+      const record = await hooks.markSubmitInProgress({ scheduleId: 'synthetic-slot', appointmentValue: 'synthetic-time' }, { memberId: 'SYN_MEMBER' }, { address: 'SYN_ADDRESS' }, 2);
+      return { record, state: hooks.readState(), journal: hooks.readJournal() };
+    })()""")
+    assert result["state"]["running"] is False
+    assert result["record"]["state"] == "SUBMITTING"
+    assert result["state"]["outcome"] == "OUTCOME_UNKNOWN"
+    assert "SYN_" not in json.dumps(result)
 
 
-def test_inspect_booking_page_treats_navigation_away_as_success():
-    result = _run_hook(
-        "hooks.inspectBookingPage(beforeUrl)",
-        extra_js="""
-const beforeUrl = "https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-sch.html";
-sandbox.location = new URL("https://www.91160.com/guahao/success.html");
-sandbox.document.querySelector = () => null;
-sandbox.document.querySelectorAll = () => [];
-""",
-    )
-
-    assert result["success"] is True
+def test_inspect_booking_page_treats_navigation_away_as_unknown():
+    result = _run_hook("hooks.inspectBookingPage('https://synthetic.invalid/before')")
+    assert result["success"] is False
+    assert result["state"] == "OUTCOME_UNKNOWN"
 
 
 def test_logs_and_legacy_migration_drop_synthetic_sensitive_values():
