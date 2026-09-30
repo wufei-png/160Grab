@@ -2959,21 +2959,21 @@
             <div class="grab160-grid grab160-grid-3">
               ${renderField(
                 "Province",
-                "预约页所在城市的省份。若就诊人资料自带地区 ID，会优先使用资料里的值。",
+                "填写完整省份名称或地区 ID；已有值或成员资料与配置冲突时交人工。",
                 `<input data-setting="address.province" value="${htmlEscape(
                   settings.address.province ?? "",
                 )}">`,
               )}
               ${renderField(
                 "City",
-                "预约页所在城市的城市名称。默认用于三级地址选择。",
+                "填写完整城市名称或地区 ID；留空保留站点或成员资料已有值。",
                 `<input data-setting="address.city" value="${htmlEscape(
                   settings.address.city ?? "",
                 )}">`,
               )}
               ${renderField(
                 "Area",
-                "预约页所在城市的区县名称。默认用于三级地址选择。",
+                "填写完整区县名称或地区 ID；留空保留站点或成员资料已有值。",
                 `<input data-setting="address.area" value="${htmlEscape(
                   settings.address.area ?? "",
                 )}">`,

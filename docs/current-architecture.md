@@ -1,7 +1,7 @@
 # 当前架构与核验证据
 
 核验日期：2026-09-30；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -16,7 +16,7 @@ S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回�
 
 已有：独立持久化 profile、创建/选择及部分配置写回；profile 名校验；`_user_key/access_hash` 解析、
 缓存 key、周期保活和 bounded 人工恢复；随机节流/限频冷却；heartbeat、JSONL、桌面/webhook；
-Windows/macOS 打包、frozen browser smoke、默认配置 bootstrap；JS card/address/date/disease/readiness/native click 修补。
+Windows/macOS 打包、frozen browser smoke、默认配置 bootstrap；两路径严格 card/address/date/disease/readiness 填表。
 
 ## 缺口定位
 
@@ -25,8 +25,8 @@ Python 路径相对 `src/grab/`，JS 指上述 userscript。
 | 缺口 | 入口 |
 |---|---|
 | S03 提交事务与授权已实现；无已验证 live 结果 adapter | `transactions/store.py/consent.py/evidence.py`；`services/booking.py`；runner/main；JS journal/controller |
-| 假病情/单 radio fallback；Python 缺 card/address/date；JS 默认地区/通用病情；未决提交不受 reset 影响 | Python `fill_booking_form`；JS `CONFIG_DEFAULTS`、fill/readiness、start/stop/reset |
-| 最终控件已收窄且唯一；填表及 checkIdInfo patch 的严格审计仍待 S04 | Python `fill_booking_form/_submit_control`；JS fill/readiness/checkIdInfo；未验证 follow-up 已交人工 |
+| S04 真实值/冲突/readiness 已实现；现场字段与选择语义仍待 canary | Python `booking/form.py/page.py`、`fill_booking_form`；JS snapshot/decision/preparation |
+| 最终控件唯一且可操作；无安全证明的 checkIdInfo patch 已移除 | Python `fill_booking_form/_submit_control`；JS readiness/submit guard；未验证 follow-up 已交人工 |
 | 隐私 sink 已按 S02 收口；Windows 权限能力仍未实测 | `observability/privacy.py/safe_logging.py/reporter.py/notifications.py`；`utils/private_files.py/retention.py`；JS `appendLog/state` |
 | 缓存 key 失效判断不足、一般网络异常退出 | `ScheduleService._resolve_schedule_user_key/fetch_doctor_schedule/poll` |
 | 时间 naive；只有 profile 锁/页面 controller，无业务互斥；无 channel | `core/scheduler.py`、schedule 日期；profile manager、JS sessionStorage；`PlaywrightClient.launch` |
@@ -146,3 +146,35 @@ CI 同命令 **294 passed, 2 deselected**。Ruff、Node 两份语法、锁定离
 没有声称 reviewer 再审修复提交。
 无真实登录/预约或现场 adapter 证据；远端 CI、Windows/Linux/frozen/release 未运行。
 S04 填表/身份/日期/readiness 合同和 S05 原子互斥尚未完成，默认 auto 的发布 gate 仍关闭。
+
+## S04 已实现事实
+
+- 仅新增必要的 `booking/form.py` 纯 HTML snapshot/decision 与 `booking/page.py` Playwright seam。
+  Browser snapshot 克隆 DOM 并读取 live value/checked/selected/可操作性，避免 outerHTML 默认属性滞后。
+  Python/JS snapshot 结构、decision/blockers、成员/slot/time、字段来源共用 preparation.v1.json 的 36 个期望。
+  JS 纯决策在 Node 执行，两个 DOM adapter 在临时本地 Chromium context 逐场景运行。
+- Python 删除数字病情和任意单 radio fallback；JS 删除默认地区/通用病情、宽松地区匹配、
+  hidden member 写回与合成选择事件。两个适配保留已有值，冲突/多候选/身份警告交人工。
+  显式 card/病情/address 配置默认为空，值与快照不进入日志或 journal。card 不从证件复制。
+- 日期与 selected slot、序列化 schedule data/指定日期 UI 核对，无歧义才能填空值；冲突/非法日期交人工。
+  PHP serialized array 按字节长度/深度/节点预算解析，仅唯一当前 schedule record 能提供日期；
+  其他 record、重复 key、坏长度或 unsupported object/reference 不提供日期。optgroup 与原生 required radio
+  组/disabled validity 纳入两路径 parity。最多三个准备 pass 覆盖延迟 card/disabled 按钮/异步地区级联。
+  requested schedule 在 fetch 返回后、任何选择之前绑定；必填 blocker 贯通 service，不换号。
+  Python 精确 Locator，JS native click。最终等待后重新核对字段、选择、控件与授权；S03 pending 保护继续有效。
+- 站点协议 checkbox 不自动接受。checkIdInfo patch 缺少证明不会跳过身份校验/警告的现场依据，已完全移除，
+  Chromium synthetic 回归证明原 AJAX 函数和空响应保持原样。
+- JS settingsVersion=4 清除旧自动默认值同名字段；历史来源不可分辨，需重新明确输入。
+  卡号输入和完整精确 memberLabel 在面板可配置；Python 字段示例见 config/example.yaml。
+- 修复后全套 **449 passed, 2 live skipped**；contract/integration **205 passed**（其中 Chromium **100**，
+  均作为全套实际执行）；CI 同参数本地命令 **449 passed, 2 deselected**；
+  Ruff、Node 两份语法、锁定离线 sync、whitespace 通过。
+  现场没有运行；snapshot 对 card/address/date/disease 的已知控件按存在视为必填，未知现场字段/选择语义
+  保守交人工。互斥仍属 S05，默认 auto 发布 gate 仍关闭。
+
+S04 新鲜只读 review 比较 `a1bfdf6..528f760` 及证据草稿，发现 **1 P1 + 2 P2**，全部独立复核接受：
+错误 schedule 日期关联、required radio 组误判、Python optgroup 遗漏。分别在 `47804a5`、`71afcd2`、`ad1489a`
+修复并执行定向 regression（日期 28 + serialized 8；radio 20；optgroup 20）。无拒绝项。
+主实现者另发现 requested schedule 在 fill 后才核对，`8199211` 提前绑定并证明零选择/零提交；相关 5 passed。
+reviewer 独立相关 **230 passed**、Ruff/Node/whitespace；独立审阅 `8199211` 并验证相关 Chromium **2 passed**。
+其余三项最终修复由主实现者验证，未声称 reviewer 再审。uv.lock 未变；远端 CI/live/Windows/Linux/frozen/release 未运行。

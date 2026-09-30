@@ -48,3 +48,12 @@ booking_strategy: "page"
 booking:
   # auto 仍须首次明确授权；manual_confirm 仅准备后交人工
   submit_mode: "auto"
+  # 仅填真实信息；留空保留站点已有值，必填缺失/冲突交人工
+  disease_description:
+  clinic_card:
+  address:
+    # 地区只接受唯一的精确 option value 或完整显示文字
+    province:
+    city:
+    area:
+    detail:

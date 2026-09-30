@@ -232,7 +232,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 | S01 | 已完成（2026-09-30） | `4dc188f`, `e57aa95`, `89bc2ce`；记录提交见文件历史 | Ruff/Node 通过；完整 197 passed, 2 live skipped；contract/integration 16 passed（含 Chromium 5）；只读 review: No findings，独立复核 48 passed | 远端 CI/live/跨平台 release/frozen 未验证；后续安全 gate 仍属 S02–S05 |
 | S02 | 已完成（2026-09-30） | `8c167c9`, `f3d0a47`, `c9cd962`, `d81b350`, `040b911`；记录提交见文件历史 | 完整 222 passed, 2 live skipped；contract/integration 17 passed（Chromium 6）；Ruff/Node/锁定离线 sync 通过；只读 review 1 P2 接受并修复，相关 62 passed | Windows/远端 CI/live/frozen 未验证；后续授权/提交/互斥 gate 属于 S03–S05 |
 | S03 | 已完成（2026-09-30） | `9a8b33a`, `fcb4e18`, `c04ab7f`, `76bdc60`, `5c9e454`, `1e7dbeb`, `51e9f41`；记录提交见文件历史 | 最终 294 passed, 2 live skipped；contract/integration 39 passed（Chromium 19）；CI 同命令 294 passed, 2 deselected；Ruff/Node/离线锁定 sync 通过；review 2 P2 接受并修复 | 无 live adapter；S04/S05 发布 gate、Windows/远端 CI/frozen 未完成 |
-| S04 | 未开始 | — | — | S03 |
+| S04 | 已完成（2026-09-30） | `d9cae53`, `519d83a`, `528f760`, `8199211`, `71afcd2`, `ad1489a`, `47804a5`；记录提交见文件历史 | 最终 449 passed, 2 live skipped；contract/integration 205 passed（Chromium 100）；CI 同命令 449 passed, 2 deselected；Ruff/Node/离线锁定 sync/whitespace 通过；review 1 P1 + 2 P2 接受并修复 | 无 live adapter；S05 发布 gate/跨平台/远端 CI/frozen 未验证 |
 | S05 | 未开始 | — | — | S04 |
 | S06 | 未开始 | — | — | S05 |
 | S07 | 未开始 | — | — | S06 工具与可用证据 |
@@ -347,3 +347,34 @@ reviewer 独立检查 **111 passed**（含真实本地 Chromium 11）、Ruff/Nod
 CI 同命令 **294 passed, 2 deselected**。Ruff、Node 两份语法、差异空白检查通过。
 未决阻断/人工核对/撤销和非交互 gate 均保持；本会话仅 S03，未执行后续实现或真实预约。
 完成记录/架构证据另作文档提交，hash 见本文件历史，避免自引用。
+
+### S04 会话证据（2026-09-30）
+
+起始 review 基线 `a1bfdf6`；依赖 S03 记录/实现已核对。本会话仅执行 S04，不扩展互斥/canary/session/time/channel。
+初始 README、future-improvements 和 implementation-prompts 的既有工作树改动均保留，不纳入提交。
+
+1. `d9cae53`：必要纯 booking snapshot/decision seam 与 32 个共享准备场景，合同相关 57 passed。
+2. `519d83a`：Python 精确成员/Locator、真实 card/date/病情/address、required blockers 与最终复核。
+   相关 75 passed（含新增 Chromium 35）；全套暴露的旧 transaction fake 缺快照已补齐，合同/事务 72 passed。
+3. `528f760`：JS 严格同合同适配、旧假值迁移、移除未获证明的 checkIdInfo patch；Node/Chromium parity、
+   异步地区级联、延迟 card/按钮、最终字段变化阻断。旧宽松填表 helper 的 mock tests 换为共享真实浏览器回归。
+
+最终修复后全套 **449 passed, 2 skipped**（LIVE_E2E 未启用）；Ruff、userscript/Node harness 语法、
+`uv sync --locked --offline --extra dev`、`git diff --check` 通过，uv.lock 未变化。
+修复后 CI 同参数本地命令 `pytest -q -m "not live" --browser chromium` 为 **449 passed, 2 deselected**。
+review 由一位新鲜只读 reviewer 按 `$delegated-change-review` 对 `a1bfdf6..528f760` 及完成证据草稿执行。
+独立检查 **230 passed**、Ruff/Node/whitespace；返回 1 P1 + 2 P2，全部接受，无拒绝项：
+
+- P1 日期关联：仅确认整个 sch_data 含目标 ID 后扫全部日期会取错 sibling schedule。`47804a5`
+  改为 bounded serialized array 解析及唯一当前 record 提取，bad length/duplicate/object/reference fail closed；
+  新增两个共享日期场景，日期 28 passed、独立 Python/Node parser 8 passed。
+- P2 required radio：每个 checked 再 all 会把原生合法组判缺失。`71afcd2` 按 native validity（离线按 form/name）
+  处理，包含 disabled 语义；共享回归先证明旧失败，再验证 20 passed。
+- P2 optgroup：Python 漏嵌套 option 与选中值。`ad1489a` 统一递归 options/disabled group，新增共享回归，20 passed。
+
+主实现者另发现错误 requested slot 在 fill 后才绑定；`8199211` 移到 fetch 返回、任何选择前，相关 5 passed。
+reviewer 独立审阅此修复及 Chromium 2 passed。其余三项修复由主实现者验证，没有声称重新委派审查。
+最终共享准备场景 **36**；contract/integration **205 passed**，其中真实本地 Chromium **100**，均在全套实际执行。
+完成记录/架构及显式空值配置示例另作文档提交，hash 见文件历史，避免自引用。
+未执行真实登录/预约、未读取/复制用户认证状态；本地浏览器只用临时 synthetic context/local routes。
+无现场字段与成功 adapter；未知现场选择语义仍交人工，S05 互斥发布 gate 尚未完成。
