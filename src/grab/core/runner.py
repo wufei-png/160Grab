@@ -1,5 +1,6 @@
 import asyncio
 
+from grab.core.leader import LeaderLost, check_leader, exclusive_operation
 from grab.errors import SessionExpiredError
 from grab.models.schemas import BookingResult, BookingState, RunResult
 from grab.observability.safe_logging import logger
@@ -77,9 +78,11 @@ class GrabRunner:
         self.schedule_service.set_target(target)
         self.booking_service.prepare(target, member_id)
 
+    @exclusive_operation
     async def _poll_and_book(self) -> RunResult:
         self._set_phase("schedule_polling")
         async for slots in self.schedule_service.poll():
+            check_leader()
             if slots:
                 self._set_phase("booking")
             result: BookingResult = await self.booking_service.try_book_first_available(
@@ -131,6 +134,7 @@ class GrabRunner:
     def _get_session_recovery_cooldown_seconds(self) -> int:
         return self.session_service.config.browser.session_recovery_cooldown_seconds
 
+    @exclusive_operation
     async def run(self) -> RunResult:
         try:
             check = getattr(self.booking_service, "blocked_result", None)
@@ -139,6 +143,7 @@ class GrabRunner:
                 return RunResult(
                     state=blocked.state, failure_class=blocked.failure_class
                 )
+            check_leader()
             await self._ensure_login_and_prepare_target()
 
             self._set_phase("wait_until_ready")
@@ -161,6 +166,8 @@ class GrabRunner:
                         exc,
                         attempt=session_recovery_attempts,
                     )
+        except LeaderLost:
+            return RunResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
         except Exception as exc:
             if self.reporter is not None:
                 await self.reporter.emit_event(

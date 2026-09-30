@@ -9,6 +9,7 @@ from grab.booking.page import (
     read_decision,
     selected_member_ready,
 )
+from grab.core.leader import check_leader, exclusive_operation
 from grab.models.schemas import (
     BookingForm,
     BookingResult,
@@ -192,8 +193,10 @@ class PageBookingStrategy:
         filter_start, filter_end = filter_range
         return slot_start < filter_end and slot_end > filter_start
 
+    @exclusive_operation
     async def fetch_booking_form(self, slot_id: str) -> BookingForm:
         await self._sleep_page_action("opening booking form")
+        check_leader()
         await self.page.goto(self.build_booking_url(slot_id))
         html = await self.page.content()
         raise_if_rate_limited(html, context="booking form page")
@@ -212,12 +215,13 @@ class PageBookingStrategy:
             f"uid-{self.target.unit_id}/depid-{self.target.dept_id}/schid-{slot_id}.html"
         )
 
+    @exclusive_operation
     async def fill_booking_form(self, form: BookingForm) -> None:
         # Three bounded DOM preparation passes; deterministic conflicts stop now.
         for attempt in range(3):
             snapshot, decision = await read_decision(self.page, form, self.config)
             if decision["can_prepare"]:
-                await apply_decision(self.page, snapshot, decision)
+                await apply_decision(self.page, snapshot, decision, guard=check_leader)
                 snapshot, decision = await read_decision(self.page, form, self.config)
             form.blockers = decision["blockers"]
             if not form.blockers and selected_member_ready(snapshot, decision):
@@ -255,6 +259,7 @@ class PageBookingStrategy:
             return None
         return control
 
+    @exclusive_operation
     async def submit_booking_via_page(self, form: BookingForm) -> BookingResult:
         blocked = self.blocked_result()
         if blocked:
@@ -299,6 +304,7 @@ class PageBookingStrategy:
                 form.schedule_id,
                 form.appointment_value,
             )
+            check_leader()
             attempt_id = self.attempt_store.begin(booking_ref)
         except StoreBlocked:
             self._run_blocked = True
@@ -310,6 +316,7 @@ class PageBookingStrategy:
         # including a timeout raised by Locator.click itself or cancelled navigation.
         outcome = BookingState.OUTCOME_UNKNOWN
         try:
+            check_leader()
             await control.click(timeout=5000)
             # No live evidence adapter has been verified yet. Page disappearance,
             # HTTP status, redirects and follow-up/payment controls prove nothing.
@@ -356,6 +363,7 @@ class PageBookingStrategy:
                 pass
         return result
 
+    @exclusive_operation
     async def open_booking_form(self, slot_id: str) -> BookingForm:
         form = await self.fetch_booking_form(slot_id)
         if form.is_valid:
@@ -372,9 +380,11 @@ class PageBookingStrategy:
                 )
         return form
 
+    @exclusive_operation
     async def submit_open_form(self, form: BookingForm) -> BookingResult:
         return await self.submit_booking_via_page(form)
 
+    @exclusive_operation
     async def submit_with_retry(
         self, slot_id: str, max_attempts: int = 3
     ) -> BookingResult:
@@ -477,9 +487,11 @@ class BookingService:
             slot_id=None,
         )
 
+    @exclusive_operation
     async def open_booking_form(self, slot) -> BookingForm:
         self.page_strategy.expected_date = slot.date or None
         return await self.page_strategy.open_booking_form(slot.schedule_id)
 
+    @exclusive_operation
     async def submit_open_form(self, form: BookingForm) -> BookingResult:
         return await self.page_strategy.submit_open_form(form)

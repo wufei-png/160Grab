@@ -4,6 +4,7 @@ from datetime import date
 from typing import Any
 
 from grab.browser.page_api import _is_destroyed_context_error
+from grab.core.leader import check_leader, exclusive_operation
 from grab.errors import SessionExpiredError, TransientSessionRefreshError
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
 from grab.observability.safe_logging import logger
@@ -35,6 +36,7 @@ class ScheduleService:
     def set_target(self, target: DoctorPageTarget) -> None:
         self.target = target
 
+    @exclusive_operation
     async def fetch_doctor_schedule(self, date: str) -> dict:
         if self.target is None:
             raise RuntimeError("Doctor page target has not been captured yet")
@@ -63,6 +65,7 @@ class ScheduleService:
         fetch_json = getattr(
             self.page_api, "get_json_via_page_ajax", self.page_api.get_json
         )
+        check_leader()
         payload = await asyncio.wait_for(
             fetch_json(
                 "https://gate.91160.com/guahao/v1/pc/sch/doctor",

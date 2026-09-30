@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from grab.browser.page_api import BrowserPageApi
 from grab.browser.playwright_client import PlaywrightClient
+from grab.core.leader import LeaderLost, exclusive_operation
 from grab.core.runner import GrabRunner
 from grab.core.scheduler import Scheduler
 from grab.models.schemas import BookingState, GrabConfig
@@ -180,6 +181,15 @@ async def run_smoke_browser(*, debug_dir: Path | None) -> None:
 
 
 async def main(argv: list[str] | None = None) -> None:
+    try:
+        await _exclusive_main(argv)
+    except LeaderLost:
+        emit_console_message("本机已有运行或互斥已失效；自动操作暂停，请人工核对。")
+        raise SystemExit(2) from None
+
+
+@exclusive_operation
+async def _exclusive_main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     debug_dir = _optional_path_env("GRAB_DEBUG_DIR")
     logger.info("160Grab started.")
@@ -310,6 +320,8 @@ async def main(argv: list[str] | None = None) -> None:
                     )
                 except EOFError:
                     pass
+    except LeaderLost:
+        raise
     except Exception as exc:
         if not runner_started:
             await reporter.emit_event(

@@ -70,7 +70,7 @@ def exact_attribute(name, value):
     return f'[ {name}="{escaped}" ]'
 
 
-async def apply_decision(page, snapshot, decision):
+async def apply_decision(page, snapshot, decision, guard=lambda: None):
     if not decision["can_prepare"]:
         return
     # Index is from the full radio set, validated by exact identity above.
@@ -81,6 +81,7 @@ async def apply_decision(page, snapshot, decision):
         if await member.count() != 1:
             return
         if not await member.is_checked():
+            guard()
             await member.check(timeout=1000)
     if decision["appointment_value"]:
         matches = [
@@ -94,6 +95,7 @@ async def apply_decision(page, snapshot, decision):
             )
             if await time.count() != 1:
                 return
+            guard()
             await time.click(timeout=1000)
     for write in decision["writes"]:
         # Re-read after each event: cascading selects can change asynchronously,
@@ -105,13 +107,16 @@ async def apply_decision(page, snapshot, decision):
         if existing and not (write["kind"] == "select" and existing == "0"):
             continue
         if write["kind"] == "select":
+            guard()
             await control.select_option(value=write["value"], timeout=1000)
         elif await control.get_attribute("type") == "hidden":
+            guard()
             await control.evaluate(
                 "(node, value) => { node.value = value; node.dispatchEvent(new Event('input', {bubbles:true})); node.dispatchEvent(new Event('change', {bubbles:true})); }",
                 write["value"],
             )
         else:
+            guard()
             await control.fill(write["value"], timeout=1000)
 
 

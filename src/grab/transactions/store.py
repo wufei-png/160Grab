@@ -11,6 +11,7 @@ import secrets
 from datetime import UTC, datetime
 from pathlib import Path
 
+from grab.core.leader import check_active_leader
 from grab.models.schemas import BookingState
 from grab.utils.private_files import private_directory
 
@@ -34,6 +35,7 @@ class AttemptStore:
         self.root = root
 
     def read(self):
+        check_active_leader()
         try:
             with private_directory(self.root) as directory:
                 try:
@@ -130,6 +132,7 @@ class AttemptStore:
             datetime.fromisoformat(event["at"])
 
     def write(self, state):
+        check_active_leader()
         try:
             self._validate(state)
             with private_directory(self.root) as directory:
