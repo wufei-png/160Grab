@@ -1,0 +1,789 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "scenarios": [
+    {
+      "id": "existing-values",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input id=\"hismemid\" value=\"synthetic-card\"><textarea name=\"disease_input\">synthetic-existing</textarea><input name=\"address\" value=\"synthetic-address\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "card": "existing",
+          "disease_input": "existing",
+          "address.detail": "existing"
+        },
+        "submit_clicks": 1
+      }
+    },
+    {
+      "id": "explicit-values",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input id=\"hismemid\"><textarea name=\"disease_input\"></textarea><input name=\"address\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {
+        "card": "synthetic-card",
+        "disease_input": "synthetic-config",
+        "address.detail": "synthetic-address"
+      },
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "card": "config",
+          "disease_input": "config",
+          "address.detail": "config"
+        },
+        "submit_clicks": 1
+      }
+    },
+    {
+      "id": "card-missing",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input id=\"hismemid\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "card.required"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "card": "missing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "disease-missing",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><textarea name=\"disease_input\"></textarea></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "disease_input.required"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "disease_input": "missing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "disease-conflict",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><textarea name=\"disease_input\">synthetic-existing</textarea></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {
+        "disease_input": "synthetic-config"
+      },
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "disease_input.conflict"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "disease_input": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "address-detail-missing",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input name=\"address\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "address.detail.required"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "address.detail": "missing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "address-detail-conflict",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input name=\"address\" value=\"synthetic-existing\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {
+        "address.detail": "synthetic-config"
+      },
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "address.detail.conflict"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "address.detail": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "address-absent",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 1
+      }
+    },
+    {
+      "id": "region-missing",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><select id=\"useraddress_province\"><option value=\"0\">Choose</option><option value=\"synthetic-region\">Synthetic province</option></select></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "address.province.required"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "address.province": "missing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "region-config",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><select id=\"useraddress_province\"><option value=\"0\">Choose</option><option value=\"synthetic-region\">Synthetic province</option></select></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {
+        "address.province": "Synthetic province"
+      },
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "address.province": "config"
+        },
+        "submit_clicks": 1
+      }
+    },
+    {
+      "id": "region-conflict",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><select id=\"useraddress_province\"><option value=\"0\">Choose</option><option selected value=\"synthetic-region\">Synthetic province</option></select></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {
+        "address.province": "synthetic-other"
+      },
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "address.province.option"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "region-ambiguous",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><select id=\"useraddress_province\"><option value=\"0\">Choose</option><option value=\"synthetic-region\">Synthetic province</option><option value=\"synthetic-other\">Synthetic province</option></select></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {
+        "address.province": "Synthetic province"
+      },
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "address.province.option"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "single-wrong-radio",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-wrong\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "member.mismatch"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "multiple-members-explicit",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input type=\"radio\" name=\"mid\" value=\"synthetic-other\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 1
+      }
+    },
+    {
+      "id": "duplicate-member",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "member.mismatch"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "member-disabled",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input disabled type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "member.blocked"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "member-warning",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input need_check=\"1\" data-title=\"Synthetic warning\" type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "member.blocked"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "missing-member-no-fallback",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"unrelated\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "member.mismatch"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "time-no-match",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-other",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "time.mismatch"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-other",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "duplicate-time",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "time.mismatch"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "date-missing",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": null
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "date.required"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "missing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "date-config",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "schedule"
+        },
+        "submit_clicks": 1
+      }
+    },
+    {
+      "id": "date-conflict",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-03"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "date.conflict"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "date-invalid",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-02-30\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": null
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "date.conflict"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "date-serialized-conflict",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input name=\"sch_data\" value='s:14:\"synthetic-slot\";a:1:{s:7:\"to_date\";s:10:\"2030-01-03\";}'></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "date.conflict"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "rules-not-accepted",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input name=\"accept\" value=\"1\" type=\"checkbox\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "accept.required"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "accept": "missing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "rules-existing",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input name=\"accept\" value=\"1\" type=\"checkbox\" checked></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "PREPARED",
+        "blockers": [],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing",
+          "accept": "existing"
+        },
+        "submit_clicks": 1
+      }
+    },
+    {
+      "id": "unknown-required",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input name=\"synthetic-extra\" required></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "other.required"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "two-submit",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><button id=\"submit_booking\">Second</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "submit.control"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "disabled-submit",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button disabled id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "submit.control"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "hidden-submit",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button style=\"display:none\" id=\"submitbtn\" type=\"button\">Submit synthetic</button></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "submit.control"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    },
+    {
+      "id": "duplicate-field",
+      "html": "<!doctype html><html><body><form id=\"suborder\"><input name=\"schedule_id\" value=\"synthetic-slot\"><input type=\"radio\" name=\"mid\" value=\"synthetic-member\"><ul id=\"delts\"><li val=\"synthetic-time\">09:00-09:30</li></ul><input id=\"sch_date\" value=\"2030-01-02\"><button id=\"submitbtn\" type=\"button\">Submit synthetic</button><input id=\"hismemid\"><input name=\"hismemid\"></form></body></html>",
+      "selection": {
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "date": "2030-01-02"
+      },
+      "values": {},
+      "expected": {
+        "state": "AWAITING_MANUAL_CONFIRMATION",
+        "blockers": [
+          "card.ambiguous"
+        ],
+        "member_id": "synthetic-member",
+        "schedule_id": "synthetic-slot",
+        "appointment_value": "synthetic-time",
+        "sources": {
+          "date": "existing"
+        },
+        "submit_clicks": 0
+      }
+    }
+  ]
+}
