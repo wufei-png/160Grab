@@ -345,7 +345,9 @@ S07 已记录的基线双页面用例本次全套通过，但不宣称其不稳�
   已迁到当前合同，新增 D01–D06/迁移/未覆盖 gate 索引。示例配置只改注释，不改默认值或打包行为。
 
 完整 **656 passed, 5 skipped**（3 live、2 Edge）；Ruff/Node/锁定离线 dev sync/whitespace、
-变更文档链接和示例配置语义一致性通过。新鲜只读 review 结论见 [S09 会话证据](implementation-plan-2026-09-30.md#s09-会话证据2026-10-01)。
+变更文档链接和示例配置语义一致性通过。新鲜只读 reviewer 审查 `ec8dd5c..2cacc1a`，
+结论 **No findings**，无接受/拒绝项或待修复 finding；独立新增 **7 passed**、两组 CI 同命令
+**397 + 259 passed**，Ruff/Node/whitespace/YAML/43 个本地链接/配置 parity 通过。会话完成记录见 [S09 会话证据](implementation-plan-2026-09-30.md#s09-会话证据2026-10-01)。
 本轮无 live、真实 fixture/adapter、Tampermonkey 扩展 sandbox、Windows/Linux/远端 CI/release；
 Edge 未安装；不重跑 unchanged frozen，S08 macOS arm64 证据仅为历史。既有双页面用例偶发问题
 仍按 S07 边界保留。本文不把本地回归当成现场预约成功，也不提供跨路径/profile/机器互斥。

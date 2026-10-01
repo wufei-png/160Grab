@@ -237,7 +237,7 @@ create/warmup/packaged 一致，不扩 flags/locale/stealth。
 | S06 | 工具/离线已完成（2026-10-01）；live blocked | `b9e110a`, `2a20e9a`, `222dbba`, `44f8c03`, `575ed2f`, `82a7788`；记录提交见历史 | 最终 513 passed, 3 live skipped；contract/integration/canary 257（Chromium 129）；Ruff/Node/锁定离线 sync/whitespace 通过；只读 review 2 P2 全接受并修复 | 缺具体目标/profile/场景批准；两路径 live、真实 fixture/adapter、扩展 sandbox/Windows/远端 CI/frozen 未验证 |
 | S07 | 已完成（2026-10-01） | `7284c72`, `6ee5743`, `eed7282`, `b52da53`, `69ad4ba`, `4c81780`；记录提交见历史 | 最终完整 563 passed, 3 live skipped；Ruff/Node/锁定离线 sync/whitespace 通过；review 3 P2 全接受修复；独立合同/集成/canary 270 passed, 1 既有不稳定用例 failed，单独复验 1 passed；详情见下 | 基线可复现互斥测试偶发零 click；两路径 live schema/扩展/跨平台/远端 CI/frozen 未验证 |
 | S08 | 已完成（2026-10-01） | `1c461bb`, `4b17437`, `dc6af72`, `d3e61c0`, `7b5c27f`, `d777208`；记录提交见历史 | 最终 649 passed, 5 skipped（3 live / 2 Edge）；Ruff/Node/离线锁定 sync/whitespace 通过；review 两项问题接受修复、最终复核 No findings；Chromium/Chrome 两种 launch 及 macOS arm64 frozen smoke/bootstrap 通过 | Edge 未安装；Windows/Linux、真实登录/预约、扩展 sandbox、远端 CI 未验证；既有双页面用例不稳定性仍保留 |
-| S09 | 实现/离线验收收口中（2026-10-01）；review 待执行 | `76a0230`, `c67d12e`；文档提交见历史 | 新增 Chromium 7 passed；CI 同命令 397 passed, 3 live deselected + 259 passed, 2 Edge skipped；完整检查及 review 见本会话证据 | 两路径 live/真实 fixture/adapter、扩展 sandbox、Windows/Linux、Edge、远端 CI/release 未验证；既有双页面不稳定性保留 |
+| S09 | 已完成（2026-10-01）；live pending 保留 | `76a0230`, `c67d12e`, `2cacc1a`；完成记录提交见历史 | 完整 656 passed, 5 skipped（3 live / 2 Edge）；新增 Chromium 7 passed；CI 两组 397 + 259 passed；Ruff/Node/锁定离线 sync/whitespace/链接/配置 parity 通过；新鲜只读 review: No findings | 两路径 live/真实 fixture/adapter、扩展 sandbox、Windows/Linux、Edge、远端 CI/release 未验证；既有双页面不稳定性保留 |
 
 完成时记录实际 commit、检查/review 结果、skip 原因及 live 层级/日期/覆盖；更新架构中的已实现事实。
 若证据改变已确认产品决策，再与用户确认该决策。
@@ -599,11 +599,11 @@ S01–S08 代码/离线前置已完成；S06 工具完成及 live blocker 符合
 2. `c67d12e`：CI/release 双 live 开关关闭，Ruff/两份 Node/离线和 contract/Chromium 独立
    mandatory gates；YAML 解析检查通过，同命令两组分别 **397 passed, 3 live deselected**
    和 **259 passed, 2 Edge skipped**。没有触发远端 CI/release。
-3. 文档提交见历史：README/配置注释/booking/security/canary/架构/release 说明迁移收口，
+3. `2cacc1a`：README/配置注释/booking/security/canary/架构/release 说明迁移收口，
    [集成验收索引](integration-acceptance.md) 映射 D01–D06、合同闭环和所有未覆盖 gate。
    完整 **656 passed, 5 skipped**（3 live 未启用、2 Edge 未安装），14 个固定 naive 时间迁移提示；
    Ruff/Node 两份语法/锁定离线 dev sync/whitespace、变更文档本地链接、示例 YAML 语义一致性
-   全部通过。新鲜只读 review 待执行，结论在收尾后记录。
+   全部通过。完整套件已实际运行 Chromium/已安装 Chrome 两种 launch，Edge 两项 skip。
 
 授权/人工 ready/成员传输用 synthetic seam，实际浏览器只访问 route 生成的内容；
 不复制认证状态、不打开私有本地 config/profile，不归档原始 HTML/图/response。Node、Chromium
@@ -613,3 +613,12 @@ S09 不涉及打包行为，未重跑 frozen，S08 macOS arm64 frozen 是历史�
 剩余：两路径 live schema/结果 adapter/真实 fixture、真实扩展 sandbox、Windows/Linux/Windows
 ACL/ready、Edge 未安装、远端 CI/release 未验证；既有双页面用例偶发零 click/UNKNOWN 根因
 未声称解决。无现场输入与具体批准，live blocker 不因 S09 文档迁移解除。
+
+review：使用 delegated-change-review/review-agent，一个新鲜只读 subagent（fork_turns=none）
+审查精确 `ec8dd5c..2cacc1a` 三阶段完整变更、全部 13 路径和相关调用链，结论 **No findings**。
+无 P0–P3 finding，接受/拒绝项均无，因此无需修复。reviewer 独立新增 Chromium **7 passed**、
+CI 两组 **397 passed, 3 live deselected** 与 **259 passed, 2 Edge skipped**，Ruff/两份 Node/
+完整 diff whitespace/workflow YAML gate/示例配置语义 parity/43 个变更文档本地链接通过。
+收尾仅更新完成状态与已取得证据，完成记录提交见本文件 Git 历史，避免自引用。
+最终交付 13 个明确路径，无私有输入或认证状态；working tree 清理到本会话提交后的干净状态，
+uv.lock/产品/打包代码未改。本地同参数验证不冒称远端 CI、现场或跨平台发布。

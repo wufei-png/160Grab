@@ -55,7 +55,10 @@ uv run --locked pytest -q
 CI/release 前置显式 LIVE_E2E=0/LIVE_BOOKING=0、排除 live，两份语法和两组测试必须通过；
 PR 不请求真实站点。release 另保留平台构建、frozen smoke/config bootstrap。
 本次 CI 同命令本机两组 **397 passed, 3 live deselected** 与 **259 passed, 2 Edge skipped**。
-完整检查/review 最终结果写入实施计划，不把本机命令当成远端 CI/release 证据。
+完整 **656 passed, 5 skipped**（3 live / 2 Edge），14 个固定 naive 迁移提示；
+Ruff/两份 Node/锁定离线 dev sync/whitespace、文档链接/示例 YAML parity 通过。
+新鲜只读 review `ec8dd5c..2cacc1a`：**No findings**，无需修复；独立复核两组同参数检查
+和新增七个 Chromium 用例通过。详情见实施计划，不把本机命令当成远端 CI/release 证据。
 
 ## 尚未覆盖的 gate
 
