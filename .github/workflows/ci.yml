@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# These workflows never authorize real site requests or booking.
+env:
+  LIVE_E2E: "0"
+  LIVE_BOOKING: "0"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,5 +32,9 @@ jobs:
         run: uv run --locked ruff check .
       - name: Check userscript syntax
         run: node --check userscripts/91160-doctor-page-poller.user.js
-      - name: Run unit, contract and local Chromium tests
-        run: uv run --locked pytest -q -m "not live" --browser chromium
+      - name: Check Node contract harness syntax
+        run: node --check tests/contracts/booking/node_harness.cjs
+      - name: Run unit and offline canary tests
+        run: uv run --locked pytest -q -m "not live" --ignore=tests/contracts --ignore=tests/integration
+      - name: Run shared contracts and local Chromium acceptance
+        run: uv run --locked pytest -q tests/contracts/ tests/integration/ -m "not live" --browser chromium
