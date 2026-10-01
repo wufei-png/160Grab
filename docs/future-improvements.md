@@ -8,7 +8,8 @@
 本文旧“推荐推进顺序”不再作为执行计划。
 
 通知、JSONL、持久化会话与 bounded 人工恢复、profile 选择写回、打包和配置 bootstrap 已实现。
-本轮优先做数据安全、授权及预约事务、严格真实值填表、互斥与 canary，之后做 session/轮询、时间和 channel。
+S01–S09 已落实数据安全、授权及预约事务、严格真实值填表、互斥、canary 工具、session/轮询、时间和 channel；
+离线验收和未覆盖 gate 见 [integration-acceptance.md](integration-acceptance.md)，两路径现场仍 pending。
 第二通道等待漏号证据；init 只考虑剩余增量；auto CAPTCHA 不进入本轮实现。
 用户已选择两路径默认自动提交，但必须首次明确确认并保存本地授权；报告建议的默认人工提交未采用。
 

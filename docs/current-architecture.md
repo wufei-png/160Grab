@@ -1,7 +1,9 @@
 # 当前架构与核验证据
 
 核验日期：2026-10-01；初始代码基线：`16bc71089f34e43ef825f91c28d8413a82f484d0`；
-S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具/回归/review 修复至 `82a7788`（2026-10-01）；S07 分类/退避及 review 修复至 `4c81780`；S08 时间/channel/收尾及 review 修复至 `d777208`，最终证据见下。
+S01 代码核验至 `89bc2ce`；S02 代码核验至 `040b911`；S03 代码/回归核验至 `51e9f41`；S04 代码/回归核验至 `47804a5`；S05 互斥/集成/review 修复至 `f1545ca`；S06 工具/回归/review 修复至 `82a7788`（2026-10-01）；S07 分类/退避及 review 修复至 `4c81780`；S08 时间/channel/收尾及 review 修复至 `d777208`，最终证据见下；S09 会话基线 `ec8dd5c`，新增闭环 `76a0230`、CI gates `c67d12e`。
+本文各 S 编号保留当时的历史证据，早期的“尚未完成”不覆盖后续章节。
+当前覆盖/迁移/未验证 gate 统一见 [集成验收索引](integration-acceptance.md)。
 本文记录已实现事实；目标、依赖、验收见 [实施计划](implementation-plan-2026-09-30.md)。
 
 ## 运行路径与已有能力
@@ -322,3 +324,28 @@ Tampermonkey 扩展 sandbox、Windows/远端 CI/frozen/release 未验证。既�
 **288 passed, 2 Edge skipped**；14 warnings 是固定 naive 迁移提示。Ruff/Node 两份语法/锁定离线 sync/whitespace 通过。
 最新代码再次 macOS arm64 frozen build/smoke/bootstrap 成功。uv.lock 仅新增 tzdata，原依赖未升级。
 S07 已记录的基线双页面用例本次全套通过，但不宣称其不稳定性已消除；S09 未执行。
+
+## S09 集成与文档收口（2026-10-01）
+
+- S01–S08 代码/离线验收前置满足，S06 两路径 live pending 独立保留。新增七个本地 Chromium
+  synthetic 闭环用例，Python 实际 `main.build_runner` 串起 schedule/page AJAX、filter、booking
+  parser/准备、consent、leader、journal、RunResult 与安全输出。人工登录/ready 和成员页传输
+  使用本地 seam，未访问真实站点；接受/拒绝/非交互/人工模式及 confirmed expired 恢复重新绑定均覆盖。
+- JS 实际 Start/doctor controller 查询→ystep1 navigation/handoff→准备→明确授权→SUBMITTING
+  已持久化时 native click 一次→UNKNOWN 停止；Stop/reset/撤销/reload/新 Start 均不解除 pending。
+  人工核对已预约/未预约分别保留 human_verified audit，不自动恢复操作。Python 新 run 重获 leader
+  仍在登录/poll 前阻断，解决后新非交互 run 无授权不能重提。
+- 两路径在真实值 DOM 准备/提交/恢复的 synthetic 注入中检查直接日志、JSONL、通知及通知失败、
+  JS console/持久日志和 journal 零明文。普通配置/表单/直接用户确认与安全输出分离，未归档私有输入。
+  新闭环不替代原有损坏存储、重启、canary、权限/link/retention 等独立合同。
+- PR/push 与 release 验证前置显式关闭两个 live 开关并排除现场测试，强制 Ruff、两份 Node 语法、
+  unit/offline canary 和 contract/Chromium 两组检查；本机同命令 **397 passed, 3 deselected**
+  与 **259 passed, 2 Edge skipped**。已有 Chromium harness 强制实际运行，Node 缺失失败。
+- README、示例配置注释、booking/security/canary、release bundle 操作说明、历史建议状态入口
+  已迁到当前合同，新增 D01–D06/迁移/未覆盖 gate 索引。示例配置只改注释，不改默认值或打包行为。
+
+完整 **656 passed, 5 skipped**（3 live、2 Edge）；Ruff/Node/锁定离线 dev sync/whitespace、
+变更文档链接和示例配置语义一致性通过。新鲜只读 review 结论见 [S09 会话证据](implementation-plan-2026-09-30.md#s09-会话证据2026-10-01)。
+本轮无 live、真实 fixture/adapter、Tampermonkey 扩展 sandbox、Windows/Linux/远端 CI/release；
+Edge 未安装；不重跑 unchanged frozen，S08 macOS arm64 证据仅为历史。既有双页面用例偶发问题
+仍按 S07 边界保留。本文不把本地回归当成现场预约成功，也不提供跨路径/profile/机器互斥。

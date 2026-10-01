@@ -1,7 +1,8 @@
 # 两路径预约业务合同
 
 合同版本：1；确认日期：2026-09-30。适用于 Python/Playwright 与 Tampermonkey。
-本文固化已确认的目标行为，不表示所有保护已实现。实施顺序与交付记录见
+S01–S09 已落实代码与离线/本地浏览器保护；现场结果 adapter 仍未验证。
+实施顺序与交付记录见
 [实施计划](implementation-plan-2026-09-30.md)，当前能力见 [当前架构](current-architecture.md)。
 两路径共享规则及 synthetic JSON/HTML 期望，交互适配各自实现，无运行时跨语言依赖。
 
@@ -38,7 +39,8 @@ DISCOVERED -> PREPARED -> AWAITING_MANUAL_CONFIRMATION
 ## 授权与互斥
 
 目标配置为 Python `booking.submit_mode` / JS `booking.submitMode` 的
-`auto | manual_confirm`，默认 auto **只能在授权 gate 和发布前置保护完成后启用**。
+`auto | manual_confirm`，当前默认 auto 仍须授权 gate；本地发布前置回归见
+[集成验收索引](integration-acceptance.md)，远端/现场未覆盖 gate 单独保留。
 旧 JS `autoSubmit=false` 保留人工模式，true 迁为 auto 但不构成新授权。
 
 授权各存两路径的本地运行状态，不允许以仓库配置 `consent=true` 绕过确认。
@@ -69,12 +71,12 @@ Python 使用本机进程互斥，userscript 使用同浏览器跨标签互斥�
 场景记录 member/schedule/date/time、字段来源、必填 blockers、submit 候选数、期望状态及 click 次数。
 `schema_version` 描述场景格式；`contract_version` 描述本合同。格式改变须明确升级版本。
 
-S01 只执行解析层：Python 现有 parser、Node JS hooks、Chromium 中的 Python HTML 解析与
+历史 S01 只执行解析层：Python 现有 parser、Node JS hooks、Chromium 中的 Python HTML 解析与
 JS DOM hooks 共用一组解析期望。状态声明为 `DISCOVERED`，因为 harness 未准备或提交预约；
 零 click 在 Node/Chromium 被捕获。解析通过不代表身份、字段或提交 readiness 已满足。
 此套件不调用现有 submit/retry 路径，不证明现有提交安全。
 
-后续能力实现时随之增加可执行 regression，不能用已知红灯测试充当 S01 完成证据：
+S03–S05 已增加以下可执行 regression；不能用已知红灯测试充当完成证据：
 
 | 会话 | 必须增加的场景 |
 |---|---|
@@ -112,3 +114,16 @@ Python 纯解析器与 JS 纯 decision 分别执行；Chromium 再比较两适�
   即使旧值曾由用户输入也须重新核实。v4 明确填写的同名真实值保留。
 
 上述证据全为本地 synthetic；没有访问真实登录/预约页面、复制认证状态或取得现场 adapter。
+
+## S09 集成验收与恢复
+
+`tests/integration/test_acceptance_chromium.py` 补充两路径闭环：实际 CLI 服务组装/JS doctor
+controller → 排班解析与筛选 → 预约准备 → 明确授权 → durable 单次提交 → UNKNOWN 停止 →
+新 run/reload、Stop/reset、撤销仍阻断 → 人工核对解决及最小 audit。Python 还覆盖 confirmed expired
+人工恢复后重新绑定目标/成员/授权。人工登录/成员页传输使用 synthetic seam，不构成现场认证验证。
+
+恢复不是重试提交。没有结果 adapter 时仍 UNKNOWN；人工解决不重启自动操作，
+已提交过的同一 booking_ref 不自动再次 click。Python CLI 与 JS 面板的核对/撤销操作见
+[README](../README.md#未决提交与退出码)。checkIdInfo patch 继续保持删除，条款/验证/支付交人工。
+
+D01–D06 覆盖映射、配置迁移及所有未覆盖 gate 统一见 [集成验收索引](integration-acceptance.md)。

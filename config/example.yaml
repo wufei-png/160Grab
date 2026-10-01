@@ -1,4 +1,5 @@
-# Copy this file to config.yaml before local runs.
+# Copy this file to config.yaml before local runs. Keep private inputs out of Git.
+# Migration, acceptance and pending gates: docs/integration-acceptance.md
 # Default flow: the script opens the login page, you log in manually,
 # navigate to a doctor detail page, then press Enter in the terminal.
 auth:
@@ -9,7 +10,7 @@ browser:
   launch_persistent_context: true
   profile_name:
   profiles_root_dir: "~/.160grab/browser-profiles"
-  # 轮询期间后台保活登录态的间隔(秒)，0 表示禁用
+  # 兼容旧配置；有效轮询不再周期保活，缺 key 仅必要低频诊断（至少 60s）
   session_refresh_interval_seconds: 240
   # 登录态恢复最多重试次数；超过后直接结束运行
   session_recovery_max_attempts: 3
@@ -35,7 +36,7 @@ weeks: []
 days: []
 hours:
   - "8-9"
-# 刷号轮询间隔(ms)，范围或固定值；觉得慢可调低如 "1500-2500"
+# 刷号轮询间隔(ms)，范围或固定值；实际下限 3000ms，遵守更长 Retry-After
 sleep_time: "3000-5000"
 # 打开预约页、提交前随机停顿(ms)
 page_action_sleep_time: "400-900"

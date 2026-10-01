@@ -1,352 +1,175 @@
-> **重要提示（运行方式与会话）**
->
-> 当前仓库同时提供两条主路径：Python/Playwright 主程序适合配置文件、结构化日志、通知和打包运行；Tampermonkey 浏览器脚本适合已在真实浏览器登录后，直接在医生详情页右上角值守。
->
-> 两条路径都坚持“手动登录接管 + 真实浏览器会话”模型，不引入账号密码与 OCR 自动登录链路；浏览器脚本会尽量复用页面里的 `_user_key` / `access_hash`，减少外部轮询会话和真人页面状态割裂。
-
 # 160Grab
 
-健康160自动挂号脚本，默认采用“手动登录接管 + 自动刷号/预约”的 Playwright 流程。
+健康160医生页预约辅助工具。维护 Python/Playwright 与 Tampermonkey 两条路径：人工登录和 CAPTCHA，读取医生页排班，筛选时段，只使用明确配置或站点已有的真实值准备表单。两路径共享业务和安全合同，交互适配各自实现。
 
-## 项目定位
+默认 `auto` 须明确授权后才能点击一次最终提交；也可选择 `manual_confirm`。目前没有已验证的现场结果 adapter，点击后的弱页面变化、超时、导航或限频一律是 `OUTCOME_UNKNOWN`，必须在原站核对预约记录。禁止两路径、多个 browser profile 或多机器混跑同一目标。
 
-本项目的参考项目是 [pengpan/91160-cli](https://github.com/pengpan/91160-cli)。
+S01–S09 的代码/离线验收进度见 [实施计划](docs/implementation-plan-2026-09-30.md#完成记录)，现场 pending 单独保留。当前只支持医生详情页通道；科室 fallback 须先取得漏号证据。参考项目：[pengpan/91160-cli](https://github.com/pengpan/91160-cli)。
 
-但 `160Grab` 并不是对 `91160-cli` 的逐行移植，也不是简单把 Java 改写成 Python。它的核心目标更聚焦：
-
-- 保留“刷号 + 条件过滤 + 预约提交”这条真正有价值的主链路
-- 把高风险、最像真人的环节交还给用户自己处理，例如登录、切换账号、进入目标医生页
-- 把重复、耗时、容易出错的环节交给脚本，例如轮询排班、筛选时段、打开预约页、回填表单、提交重试
-
-换句话说，这个项目的设计重点不是“尽可能全自动”，而是“尽量像真实浏览器用户，同时保留脚本在重复操作上的效率优势”。
-
-## 参考项目与演进思路
-
-`91160-cli` 很完整，覆盖了 `init/register` 命令、`config.properties` 生成、OCR 打码、代理、双通道刷号、Docker 打包等一整套 CLI 工作流。
-
-`160Grab` 继承的是它对业务链路的理解，但在实现策略上主动做了取舍：
-
-- 运行时从 `Java + OkHttp/Retrofit` 切到 `Python + Playwright`
-- 默认登录模型从“账号密码 + OCR 自动登录”切到“手动登录接管”
-- 核心请求尽量放回真实浏览器上下文，而不是让浏览器外部 HTTP 客户端长期独立刷接口
-- 当前优先打磨医生详情页主链路，而不是先把初始化工具、代理池、通知系统全部补齐
-
-这个演进方向对应的原始设计想法很明确：**用 Playwright 和真实浏览器会话降低反爬风险，用人工操作接管最敏感的部分，再用脚本完成重复刷号和提交流程。**
-
-## 与 91160-cli 的差异
-
-| 维度 | `91160-cli` | `160Grab` |
-| --- | --- | --- |
-| 技术栈 | Java 8 + Spring + OkHttp/Retrofit | Python 3.11 + Playwright |
-| 默认登录方式 | 自动登录，依赖验证码/OCR 能力 | 手动登录接管，`auto` 入口暂保留为 TODO |
-| 运行介质 | 以 CLI + HTTP 请求为主 | 以真实 Chromium 浏览器会话为主 |
-| 刷号方式 | 支持通道 1 / 通道 2 轮询，可配代理 | 当前只聚焦医生详情页通道，排班查询尽量走浏览器上下文内请求 |
-| 抗风控思路 | 代理、重试、配置驱动 | `playwright-stealth`、持久化 profile、人工登录、页面内请求、随机节流和退避 |
-| 配置体验 | `init` 生成 `config.properties`，需要先准备较多 ID | 手写 `config.yaml`，并通过“用户手动打开医生详情页”减少前置配置负担 |
-| 预约执行 | 以 CLI 主流程发起 | 先打开真实预约页，再按页面结构回填和提交 |
-| 当前目标范围 | 功能面更宽，含 OCR / 代理 / Docker / 初始化 | 主链路更窄，但更强调浏览器真实会话和人工接管 |
-
-这也意味着两者不是简单的新旧替代关系：
-
-- 如果你更看重“完整 CLI 工具箱”，`91160-cli` 的覆盖面更广
-- 如果你更看重“真人参与 + 真实浏览器 + 尽量贴近页面行为”，`160Grab` 更适合继续迭代
-
-## 设计思路
-
-当前版本的核心设计原则如下：
-
-1. **浏览器优先，而不是浏览器外强行模拟。**  
-   登录、Cookie、LocalStorage、页面跳转、预约提交都尽量留在真实 Chromium 环境中完成，减少“脚本会话”和“真人会话”割裂带来的不稳定。
-
-2. **把最敏感的步骤交给人。**  
-   用户自己登录、自己进入目标医生详情页，脚本只在用户确认后读取一次当前 URL 并接管后续流程。这样既减少了自动登录和页面导航的脆弱性，也更符合“人工操作结合脚本挂号”的初衷。
-
-3. **把最重复的步骤交给脚本。**  
-   一旦目标医生页和就诊人确定，脚本负责轮询、筛选、打开预约页、选择时段、回填表单和失败重试，避免手工高频刷新。
-
-4. **抗风控不是单点技巧，而是整条链路的组合。**  
-   这里只把 `playwright-stealth` 当作底层补丁之一；真正有意义的是“持久化 profile + 真实浏览器上下文 + 人工登录 + 页面内请求 + 随机节流 + 访问过多冷却退避”一起工作。
-
-## 使用亮点
-
-- **手动登录接管**：默认不要求把账号、密码、OCR 服务地址写进仓库配置，敏感步骤留给用户自己完成
-- **持久化浏览器 profile**：可以长期复用登录状态、Cookie 和常用浏览器环境，减少每次运行的准备成本
-- **医生详情页直接接管**：你只需要手动打开目标医生页并按一次 Enter，脚本就能从当前 URL 提取目标信息
-- **浏览器上下文内刷号**：排班查询尽量复用真实页面会话，避免把核心轮询完全退回浏览器外部
-- **页面级预约提交**：命中条件后打开真实预约页，按页面中的真实表单结构选择时段并提交
-- **成员自动校验/选择**：未配置 `member_id` 时，程序会自动读取 `member.html` 并提示你选择当前账号下的就诊人
-- **节流与退避可配置**：`sleep_time`、`page_action_sleep_time`、`booking_retry_sleep_time`、`rate_limit_sleep_time` 可以分别控制轮询、页面动作、重试和风控冷却
-- **调试证据可落盘**：通过 `GRAB_DEBUG_DIR` 可以保存 HTML、截图和最近的页面事件，便于定位真实站点变化
-
-## 后续改进
-
-2026-09-30 已按当前代码重新核验 portfolio 报告。通知、JSONL、持久化会话和人工恢复已有实现；
-下一轮计划先统一两条路径的业务合同，处理数据安全、授权和单次提交、严格真实值填表、互斥及 canary，
-再完善 session/轮询、时间与 browser channel。科室 fallback 等待可复现漏号证据。
-
-整体设计已于 2026-09-30 确认，S01–S05 已完成；各会话最新进度和验证边界以实施计划的完成记录为准。执行文档：
+## 文档入口
 
 - [当前架构与证据边界](docs/current-architecture.md)
-- [核心决策与 9 个实现会话](docs/implementation-plan-2026-09-30.md)
+- [两路径预约业务合同](docs/booking-contract.md)
+- [日志、隐私、权限与清理](docs/security-and-privacy.md)
+- [本机人工 canary 与脱敏夹具](docs/live-canary.md)
+- [集成验收、配置迁移与未覆盖 gate](docs/integration-acceptance.md)
 - [逐会话启动提示词](docs/implementation-session-prompts-2026-09-30.md)
-- [历史改进建议及状态说明](docs/future-improvements.md)
+- [历史改进建议](docs/future-improvements.md)（历史原文不作为当前操作说明）
 
-## 环境要求
+## Python 快速开始
 
-- Python 3.11+
-- uv (包管理)
-- Chromium (Playwright 浏览器)
-
-## 快速开始
+需要 Python 3.11+、uv 和 Playwright Chromium；开发验收还需要 Node（CI 使用 Node 22）。
 
 ```bash
-uv sync
-uv run playwright install chromium
+uv sync --locked --extra dev
+uv run --locked playwright install chromium
 cp config/example.yaml config.yaml
-uv run python main.py config.yaml --create-profile
-uv run python main.py config.yaml
+uv run --locked python main.py config.yaml --create-profile
+uv run --locked python main.py config.yaml
 ```
 
-`config.yaml` 只用于本地运行核心链路。默认模式下，不需要把账号、密码或 OCR 地址写进仓库；程序会优先复用持久化浏览器 profile，然后打开登录页，由用户手动登录并导航到目标医生页。
+`config.yaml` 是已忽略的本地私有输入，勿提交账号、就诊人、诊疗信息或认证资料。专用 profile 不复制系统 Chrome 登录态。首次运行可自动创建同 channel 的 `profile_1`；已有多个 profile 时提示选择，也可用 `--profile-name` 创建指定 profile。
 
-## 配置说明
+程序在 profile/browser 创建前取得全工具 leader，换 profile 不能绕过。本机只允许一个 Python 自动运行。
 
-`config/example.yaml` 覆盖当前支持的核心字段：
+1. 用户在程序打开的浏览器内登录，完成验证码，进入医生详情页，然后在终端按 Enter。
+2. 程序捕获目标；docid-only 或 `dep_id-0` 须补全 unit/department，无法验证就停止。
+3. 读取 `member.html` 校验配置的就诊人；未配置时唯一成员可自动选择，多成员交用户明确选择。
+4. 保持 leader，按配置时区等待启动，然后在页面内查询排班。
+5. 命中后准备预约页；精确核对成员、schedule、日期、时段、字段和唯一可操作提交控件。缺必填信息或冲突交人工，不换号绕过。
+6. `auto` 首次展示绑定对象与行为，输入 `AUTHORIZE` 才取得本地授权。无法可靠区分账号时授权仅本次运行有效；重启/重新登录重新确认。拒绝保留人工选择，非交互无授权零提交。
+7. 最终复核授权、readiness 和 owner，先写 durable `SUBMITTING`，再点击一次。UNKNOWN 停整个 run，不继续提交、换号或轮询。
 
-- `auth.strategy`: 默认是 `manual`，程序会打开登录页并等待用户在目标医生页按 Enter 确认；`auto` 只保留占位，点击文字验证码尚未实现
-- `browser.launch_persistent_context`: 默认是 `true`，主链路优先复用持久化 profile；设为 `false` 时退回旧的临时浏览器上下文
-- `browser.profile_name`: 可选；为空时会自动检测唯一 profile，或在多 profile 情况下提示你选择
-- `browser.profiles_root_dir`: profile 根目录，默认是 `~/.160grab/browser-profiles`
-- `browser.session_refresh_interval_seconds`: 轮询期间后台保活登录态的间隔秒数；默认每 240 秒触发一次共享会话保活，设为 `0` 可禁用
-- `browser.session_recovery_max_attempts`: 登录态失效后允许进入人工恢复流程的最大次数；超过后程序直接失败退出
-- `browser.session_recovery_cooldown_seconds`: 连续第 2 次及以后进入恢复流程前的冷却秒数
-- `browser.stealth`: 默认是 `true`，启动后会应用 `playwright-stealth` 补丁；如遇兼容性问题可以手动关闭
-- `logging.jsonl_dir`: 结构化运行事件日志目录，默认是 `~/.160grab/logs`
-- `logging.heartbeat_interval_seconds`: 长时间刷号时输出轮询心跳摘要的间隔秒数
-- `notifications.desktop`: 是否启用桌面通知；会自动检测当前系统并在 Windows / macOS 上尝试发送本地通知
-- `notifications.rate_limit_threshold`: 连续命中限频多少次后触发“持续限频”通知
-- `notifications.webhook.url`: 可选；配置后会在成功、致命失败、持续限频时发送 JSON webhook
-- `notifications.webhook.timeout_seconds` / `notifications.webhook.headers`: webhook 超时和请求头配置
-- 配置读写统一走 `ruamel.yaml`，其中 profile 回写会尽量保留原注释和格式
-- `member_id`: 可选；若留空，程序会在登录后读取 `member.html`，列出当前账号下的就诊人并让用户选择
-- `doctor_ids` / `weeks` / `days` / `hours`: 刷号过滤条件，留空表示不限制
-- `sleep_time`: 刷号间隔，支持固定值或范围值，例如 `3000`、`3000-5000`
-- `page_action_sleep_time`: 页面动作间隔，用于打开预约页、点击提交前增加随机停顿
-- `booking_retry_sleep_time`: 同一号源重试间隔，避免 `goto/click` 短时间连续突发
-- `rate_limit_sleep_time`: 命中“访问次数过多”提示后的冷却时间
-- `hours` 支持整点/半小时区间写法，例如 `08:00-08:30`、`8-9`、`9.5-10`、`9:30-10`
-- `hours` 会在预约页按真实可约时间点做区间匹配；例如 `9-19` 会命中 `09:00-09:30`、`09:30-10:00` 等时间点，并优先提交第一个匹配项
-- `enable_appoint` / `appoint_time`: 是否等待到指定时间再开始刷号
-- `booking_strategy`: 首版固定为 `page`
+人工等待时，交互终端会保留浏览器页面，按 Enter 结束交接后关闭；非交互运行返回退出码 2。站点协议、安全验证、支付和未验证 follow-up 始终交人工。
 
-## Profile 创建
+## 配置说明与迁移
 
-首次使用持久化 profile 时，先运行：
+完整示例见 [config/example.yaml](config/example.yaml)。
+
+| 字段 | 当前行为 |
+|---|---|
+| `auth.strategy` | 仅 `manual`；`auto`/未知值在浏览器启动前失败。旧 username/password/ocr 有值仅给无敏感值弃用提示，不用于登录 |
+| `browser.channel` | `chromium`（默认）/`chrome`/`msedge`；后两者须本机安装，启动失败不降级 |
+| `browser.launch_persistent_context` | 默认 true；false 使用临时 context |
+| `browser.profile_name` / `profiles_root_dir` | 独立 profile，默认根 `~/.160grab/browser-profiles`；marker 绑定 channel，旧 marker 视 Chromium，禁止跨 channel 复用或移动认证状态 |
+| `browser.session_refresh_interval_seconds` | 保留旧字段；正常有效轮询不再周期保活。缺 key 时仅必要低频诊断，至少 60 秒一轮 |
+| `browser.session_recovery_max_attempts` / `session_recovery_cooldown_seconds` | 仅 confirmed expired 才 bounded 人工恢复；恢复后重新捕获目标/成员/授权并核对 pending |
+| `browser.stealth` | 保留默认补丁，可关闭；不替代站点协议与限频边界 |
+| `member_id` / `doctor_ids` / `weeks` / `days` / `hours` | 就诊人和号源过滤；hours 支持整点/半小时区间，如 `8-9`、`09:00-09:30`，预约页再次精确匹配 |
+| `sleep_time` | 默认 `3000-5000` ms；轮询下限 3 秒，更小配置不能缩短该下限 |
+| `page_action_sleep_time` | 打开/提交前停顿，默认 `400-900` ms |
+| `booking_retry_sleep_time` | 仅提交前打开/准备瞬态失败间隔，默认 `2000-4000` ms，最多三次；不重试最终 click |
+| `rate_limit_sleep_time` | 只读限频冷却下限，默认 `15000-25000` ms；遵守更长 Retry-After |
+| `schedule.timezone` / `late_start_grace_seconds` | 默认 `Asia/Shanghai`/30 秒；刷号日期按此时区取当天 |
+| `enable_appoint` / `appoint_time` | 推荐 offset ISO（如 `2030-01-01T08:00:00+08:00`）；旧 naive 按配置时区解释并提示迁移。DST 歧义/不存在拒绝；迟到 ≤30 秒开始，超时须人工确认，非交互停止 |
+| `booking.submit_mode` | 默认 `auto`，本地明确授权独立于配置；`manual_confirm` 仅准备后交人工 |
+| `booking.clinic_card` / `disease_description` / `address` | 默认为空；只填空控件，已有值保留，冲突交人工；card 不从证件复制，地区只认唯一精确 option value/完整文字 |
+| `logging.jsonl_dir` / `heartbeat_interval_seconds` | 默认 `~/.160grab/logs`/300 秒，输出固定消息与白名单字段 |
+| `logging.include_sensitive_debug` | 默认 false；原始快照还需 `GRAB_DEBUG_DIR` 双开关，只落本机 |
+| `notifications.desktop` / `rate_limit_threshold` | 本地通知、持续限频阈值；消息无个人/页面值 |
+| `notifications.webhook.url` / `timeout_seconds` / `headers` | 最小安全事件外发；失败不改变预约状态，不能发送整个响应/异常/表单 |
+
+只读 session 分类为 VALID/EXPIRED/TRANSIENT_FAILURE/RATE_LIMITED/UNKNOWN。timeout/5xx/限频连续失败最多 5 次，第 5 次停下；full jitter base 1s/cap 30s，与轮询/冷却/Retry-After 取最大值。有效业务响应才重置预算；缺 key、旧 cookie 或未知 schema 不等于过期或无号源，UNKNOWN 停下告警。取消不发额外请求。
+
+配置迁移不要求全局 config_version；字段默认和弃用提示独立验收。配置授权开关不能替代实际确认。回滚可切人工模式、Chromium、doctor-only；旧二进制回滚前须人工核对未决记录，不能清 journal 或恢复盲重试、弱成功、伪造字段。
+
+## 未决提交与退出码
+
+| 结果 | CLI exit | 行为 |
+|---|---|---|
+| CONFIRMED_SUCCESS | 0 | 有匹配结果证据才算成功 |
+| CONFIRMED_NO_EFFECT | 1 | 有明确业务拒绝/无副作用证据 |
+| AWAITING_MANUAL_CONFIRMATION | 2 | 等待人工操作 |
+| OUTCOME_UNKNOWN | 3 | 停止整个 run；先在原站核对 |
+
+Python journal 为 `~/.160grab/transactions/journal.json`，只存不透明引用和最小状态。未解决 SUBMITTING 重启按 UNKNOWN 展示，存储损坏/未知版本 fail closed，retention 和撤销授权不能清 pending。
 
 ```bash
-uv run python main.py config.yaml --create-profile
+uv run --locked python main.py config.yaml --pending-attempts
+# 先在原站核对，再使用输出中的不透明 attempt ID；交互输入 VERIFIED
+uv run --locked python main.py config.yaml --resolve-attempt ATTEMPT_ID --resolution booked
+uv run --locked python main.py config.yaml --resolve-attempt ATTEMPT_ID --resolution not-booked
+uv run --locked python main.py config.yaml --revoke-consent
 ```
 
-也可以显式指定 profile 名：
+人工解决保留 audit。已提交过的相同 booking_ref 不自动再次 click；false success 也不表示可重试。两路径的 journal 和授权独立，互斥不覆盖跨路径/profile/机器。
+
+## Tampermonkey
+
+导入 [userscript](userscripts/91160-doctor-page-poller.user.js)，在已登录的医生页打开右上角 Settings。配置保存于 Tampermonkey storage（无 GM 能力时使用本地 storage）；授权/attempt journal 单独存同 origin localStorage，不与 Python 共享。
+
+1. 明确配置 `memberId` 或完整、唯一的 `memberLabel`；唯一正确候选才可选择，多候选/身份警告交人工。
+2. card、病情、Province/City/Area/详细地址默认全空，只用已知真实值。已有非空值不覆盖；未接受的协议不自动勾选。
+3. 设置 weeks/days/hours、Appointment From（查询起点）和 Start At（启动时间）；时区默认 Asia/Shanghai，Start At 保存带 offset 的 ISO，DST 需 offset 消歧。迟到的 Auto Start/reload 停下，只允许本 document 新 Start 确认。
+4. `booking.submitMode` 默认 auto；旧 `autoSubmit=false` 迁人工，true 迁 auto 仍须新授权。首次验证可选人工模式或本机 readonly/prepare canary。
+5. 点 Start 后取得同 browser profile、同 origin 的 Web Lock，解析目标并查询；命中导航到 ystep1，目标文档重新 acquire。
+6. 精确准备后，auto 弹出目标/就诊人和行为确认；授权仅本次页面运行有效，拒绝切人工。先 durable SUBMITTING 再 native click 一次，无现场 adapter 时 UNKNOWN 停下。
+
+面板有 Start/Stop、Overview/Settings/Logs、Reset State、撤销授权和人工核对已预约/未预约。Stop/reset/刷新/重启都不清 durable pending；Reset 不清配置，也不重置连续只读失败预算或缩短冷却。后台隐藏、pagehide、失锁或过期暂停；无 Web Locks 禁自动运行。
+
+settingsVersion=5：旧版自动生成的广东/深圳/南山区、通用病情等来源不可区分，迁移时清除后需明确重新输入；v4 已明确的真实字段保留。旧 maxSubmitAttempts 只迁到最多三次的 pre-submit 预算。`autoReturnAfterSubmitFailure` 不能绕过 UNKNOWN，字段/时段不匹配或必填缺失不换号绕过。
+
+缺 key/未知 schema 停下人工核对；明确 10021/login redirect 清缓存并停下等待人工登录后按 Start，不能自动刷新重试。轮询预算/取消/冷却和 Python 合同一致。真实 Tampermonkey sandbox 仍待现场验证。
+
+## 日志与本机调试
+
+普通 JSONL、直接日志、JS console/持久日志、通知只输出固定安全消息、不透明引用、状态、计数和 readiness；不输出姓名、证件、member id、card、地址、诊疗信息、cookie/token、URL query、HTML 或异常正文。
 
 ```bash
-uv run python main.py config.yaml --create-profile --profile-name profile_1
+GRAB_DEBUG_DIR="$HOME/.160grab/debug" uv run --locked python main.py config.yaml
 ```
 
-create-profile 流程会：
+上例仅生成安全结构 JSON。只有同时设置 `logging.include_sensitive_debug: true` 才生成原始 HTML/截图；它们只留本机 24 小时，不能直接加入 Git 或上传。新 POSIX 目录/文件为 0700/0600；已有 profile 不递归改权限、不复制，Windows mode 不等于 ACL。详情见 [数据合同](docs/security-and-privacy.md)。
 
-- 创建 profile 目录和 marker 文件
-- 用 `launch_persistent_context` 打开该 profile
-- 默认打开空白页，供你自行做少量暖机
-- 不强制要求登录 160，也不建议把登录 Chrome 账号当作必要步骤
-
-如果直接运行主程序且当前机器还没有任何 profile，程序现在会自动创建一个 `profile_1` 并继续主流程，不再因为“缺少 profile”直接退出；`--create-profile` 仍然适合想先单独暖机的人。
-
-## 默认交互流程
-
-1. 程序打开 `https://user.91160.com/login.html`
-2. 用户手动完成登录
-3. 用户手动导航到支持的医生详情页，例如：
-   `https://www.91160.com/doctors/index/unit_id-21/dep_id-0/docid-14765.html`
-4. 用户回到终端按 Enter
-5. 程序只在这一刻读取一次当前 URL，提取 `unit_id` / `dep_id` / `docid`
-6. 程序读取 `https://user.91160.com/member.html` 校验或选择就诊人
-7. 程序开始浏览器上下文内刷号，并在命中条件后打开预约页和提交
-
-当前版本的节流策略：
-
-- 刷号轮询继续使用 `sleep_time`
-- 打开预约页、点击提交前会插入 `page_action_sleep_time` 随机停顿
-- 同一号源重试失败后会等待 `booking_retry_sleep_time`
-- 如果接口或页面包含“您单位时间内访问次数过多”等提示，会触发 `rate_limit_sleep_time` 冷却退避
-
-当前版本的登录态保活策略：
-
-- 刷号轮询期间会按 `browser.session_refresh_interval_seconds` 周期，用同一个浏览器上下文后台访问 `member.html` 保活登录态，不打断当前主页面
-- 如果某次轮询前发现 `_user_key` / `access_hash` 缺失，程序会先自动补做一次更激进的后台刷新，再重试读取会话 key
-- 只有自动刷新后仍拿不到会话 key，才会回退到当前 Playwright 窗口里的人工重新登录流程，而不是直接因为异常退出
-- 连续恢复会受 `browser.session_recovery_max_attempts` 和 `browser.session_recovery_cooldown_seconds` 约束，避免在会话持续异常时无限循环
-
-当前只支持医生详情页通道；科室排班页通道仍是 TODO。
-
-## Tampermonkey 真实浏览器脚本
-
-仓库现在额外提供了一个面向真实浏览器页面的 Tampermonkey userscript：
-
-- 脚本文件：`userscripts/91160-doctor-page-poller.user.js`
-- 只支持两类页面：
-  - `https://www.91160.com/doctors/index/...` 医生详情页
-  - 由命中号源后跳转进入的 `https://www.91160.com/guahao/ystep1/...` 预约页
-- 不接 `config.yaml`；默认配置写在脚本内，日常配置通过页面右上角面板的 `Settings` 保存到 Tampermonkey storage
-
-这个脚本的行为和当前 CLI 主链路保持一致，但宿主从 Playwright 切成了你自己的真实浏览器页面：
-
-- **更适合用 Tampermonkey 脚本的情况**：你已经习惯在自己的 Chrome/Edge 里手动登录 91160，想直接在医生详情页右上角值守，不想额外启动 Python 进程或独立 Playwright 浏览器；你更看重“复用当前真实浏览器会话”和“命中后在当前标签页接着操作”。
-- **更适合用 Python/Playwright 主程序的情况**：你要可重复的本地配置文件、结构化日志、桌面/ webhook 通知、独立持久化 profile、打包后的跨平台可执行文件，或者后续要继续接自动化测试和发布包。
-- 两条路径的核心取舍是：Tampermonkey 更贴近你正在操作的真实页面，启动成本低，但配置和诊断能力更轻；Python/Playwright 更像一个完整工具链，适合长期维护、打包和自动化验证，但需要单独启动运行环境。
-
-1. 在 Tampermonkey 中导入 `userscripts/91160-doctor-page-poller.user.js`
-2. 登录 91160，并打开目标医生详情页
-3. 在右上角面板点 `Settings`
-   - `memberId` / `memberLabel` 可留空；如果预约页只有一个明确就诊人候选，脚本会自动选中
-   - `Province` / `City` / `Area` 用于预约页“所在城市”三级选择；默认是 `广东 / 深圳 / 南山区`，如果就诊人资料自带 `province_id / city_id / area_id` 会优先使用资料里的地址 id
-   - 目标医生由当前医生详情页 URL 和页面 DOM 自动识别，常规 UI 不再要求填写 `unit_id` / `dep_id` / `doctor_id`
-   - `weeks / days / hours / Appointment From / Start At` 对齐 CLI 的过滤语义；`Appointment From` 是号源查询起点，`Start At` 是脚本开始轮询时间；`hours` UI 固定半小时粒度
-   - `autoSubmit` 默认关闭；首次 smoke 建议保持关闭，确认后再显式开启
-4. 回到主面板点 `Start`
-5. 如果当前是 `dep_id-0` 或 `docid-only` 页面，脚本会先跳到完整医生详情页
-6. 脚本会在页面内请求 `https://gate.91160.com/guahao/v1/pc/sch/doctor`
-7. 命中后在当前标签页跳到 `ystep1`，自动选择就诊人、时间段、勾选规则
-8. `autoSubmit=false` 时停在提交前等待手动确认；`autoSubmit=true` 时会点击提交，成功后停止运行
-
-右上角面板提供：
-
-- `Start` / `Stop`
-- `Overview` / `Settings` / `Logs`
-- `Reset State`
-
-面板默认显示“挂号值守”状态：首页能直接看到 `待命 / 轮询 / 命中 / 提交 / 冷却 / 异常` 阶段、医生目标识别状态、轮询次数、自动提交状态和会话恢复次数。`Settings` 按“就诊人与地址 / 筛选时间 / 自动提交 / Advanced”分组；模糊字段旁边的 `?` 会在 hover 或键盘 focus 时显示中文解释。
-
-`Settings` 会保存配置，但 `Reset State` 只清运行状态、pending booking、提交计数和日志，不会清配置。日志级别默认为 `info`，可在 `Advanced` 中改为 `debug` / `warn` / `error`。
-
-几个限制要提前知道：
-
-- 必须运行在真实、已登录浏览器里；脚本不接管账号密码、验证码或 OCR
-- 第一版仍然只支持医生详情页主链路，不支持科室排班页
-- 如果预约页暴露了多个就诊人，而你没有配置 `memberId` 或 `memberLabel`，脚本会停在页面上等待你补充配置，而不是盲选
-- 如果医院要求填写地址信息，脚本会在提交前选择 `Province` / `City` / `Area` 并填充 `addressId`；找不到对应选项时会停在预约页，不会继续自动提交
-- 如果预约页时间段和 `hours` 不匹配，脚本不会把整个 `schedule_id` 长期跳过，而是回医生页继续轮询；提交失败计数按 `schedule_id + detlid` 记录
-- 轮询期间如果 `_user_key` 消失或接口返回 `10021`，脚本会按配置刷新医生页并自动重试；超过恢复次数后才停机提示人工重新登录
-- `autoSubmit=true` 且提交失败时默认停在预约页保留错误现场；如需失败后自动回医生页，可在 `Settings` 开启对应选项
-
-## 浏览器调试
-
-如果登录后页面没有跳转到医生详情页，可以把页面证据落盘，方便直接看真实 DOM 和截图：
+普通日志保留 7 天；debug 保留 24 小时。退出后无后台清理服务，原始快照应在 24 小时内手动删除或运行：
 
 ```bash
-GRAB_DEBUG_DIR=artifacts/browser-debug uv run python main.py config.yaml
+GRAB_DEBUG_DIR="$HOME/.160grab/debug" uv run --locked python main.py config.yaml --cleanup-data --dry-run
+GRAB_DEBUG_DIR="$HOME/.160grab/debug" uv run --locked python main.py config.yaml --cleanup-data
 ```
 
-当脚本在非医生详情页继续等待时，会自动保存：
+只清应用拥有的常规输出，不越界删除 profile/未决记录。真实 fixture 只能经 [canary converter](docs/live-canary.md#夹具转换与刷新) 和人工安全检查导出脱敏最小场景；本仓库目前无新现场 fixture。
 
-- 当前 URL 和标题
-- 页面 HTML
-- 全页截图
-- 最近的 console / pageerror / requestfailed 事件
+## 开发验收
 
-除页面快照外，程序现在还会在 `logging.jsonl_dir` 下写入结构化 JSONL 运行事件，便于回放一次运行中的关键阶段、限频命中、预约失败诊断和通知投递结果。
+```bash
+uv sync --locked --extra dev
+uv run --locked playwright install chromium
+uv run --locked ruff check .
+node --check userscripts/91160-doctor-page-poller.user.js
+node --check tests/contracts/booking/node_harness.cjs
+uv run --locked pytest -q -m "not live" --ignore=tests/contracts --ignore=tests/integration
+uv run --locked pytest -q tests/contracts/ tests/integration/ -m "not live" --browser chromium
+```
+
+已有环境可用 `--offline --no-sync`。Node 缺失不能跳过 JS 验收；临时 Chromium context 和 synthetic route 不读取用户 profile，不访问真实站点。完整检查可执行 `uv run --locked pytest -q`，未显式启用 live 时三个现场层级跳过。
+
+PR/push CI 与 release 验证前置安装 Node/Chromium，强制 Ruff、两份 Node 语法、单元/离线 canary、contract/本地 Chromium，设置 LIVE_E2E=0/LIVE_BOOKING=0 并排除 live。本地同命令通过不代表远端 CI 已执行，最新结果见 [验收索引](docs/integration-acceptance.md)。
 
 ## 打包与发布
 
-仓库现在提供了基于 PyInstaller 的跨平台打包入口，目标是保留当前“终端交互 + headed Chromium”的运行方式，同时让目标机器不需要预装 Python。
-
-如果你只是想直接使用，可以从 [GitHub Releases](https://github.com/wufei-png/160Grab/releases) 下载已经构建好的发布包，当前提供：
-
-- `160Grab-macos-arm64.zip`：适用于 Apple Silicon Mac
-- `160Grab-macos-intel.zip`：适用于 Intel Mac
-- `160Grab-windows-x64.zip`：适用于 64 位 Windows
-
-下载对应 zip 后，解压即可直接运行：
-
-- macOS：双击 `160Grab.command`
-- Windows：双击 `160Grab.exe`
-
-首次运行会在解压目录内创建或复用 `config.yaml`；当前 v1 发布包未签名，macOS Gatekeeper 或 Windows SmartScreen 首次可能会提示确认。
-
-手动构建：
+[Release workflow](.github/workflows/release.yml) 配置 Windows x64、macOS arm64/Intel 的 PyInstaller bundle；包含 starter config、Chromium 和启动器，目标机器无需 Python。`browser.channel` 默认 Chromium；Chrome/Edge 须目标机器另装并使用独立 profile。
 
 ```bash
 ./packaging/build-macos.sh
 ```
 
-Windows PowerShell：
+Windows PowerShell 使用 `./packaging/build-windows.ps1`。产物位于 `dist/release/`：zip、解压目录及 `.sha256`；SHA-256 可用 `shasum -a 256`（macOS）、`sha256sum`（Linux）或 `Get-FileHash -Algorithm SHA256`（Windows）核对。bundle 的 [操作说明](packaging/README-release.md) 随包附带。
 
-```powershell
-./packaging/build-windows.ps1
-```
+可在 [GitHub Releases](https://github.com/wufei-png/160Grab/releases) 查看发布产物；解压后 macOS 使用 `160Grab.command`，Windows 使用 `160Grab.exe`。首次缺配置会生成 config.yaml 并退出，请填好后重新运行。未签名产物可能触发系统信任提示。
 
-构建脚本会先把 Chromium 下载到独立 staging 目录，再在冻结完成后拷回最终 bundle，避免 macOS 上 PyInstaller 处理 Chromium 内部 app bundle 时触发签名冲突。
+release 在 v* tag/手动触发时运行验收、构建、frozen `--help`/`--smoke-browser` 和默认配置 bootstrap，然后上传；配置发布流程不等于本次执行发布。S09 未更改打包代码/配置值，不以文档更新冒称跨平台 frozen 验证。
 
-构建产物会输出到 `dist/release/`，其中包含：
+## 本机人工 Live Canary
 
-- `160Grab-<platform>-<arch>.zip`
-- 解压后的同名目录
-- 对应的 `.sha256` 校验文件
+CI 不跑 live。默认不能仅凭 LIVE_E2E=1 启动现场查询或填表：还须显式 readonly/prepare/submit 层级、专用 profile、目标医生、日期、人工 ready；敏感准备和最终动作需本次具体场景批准。
 
-校验 zip 完整性时，可以把本地计算出的 SHA-256 与同名 `.sha256` 文件中的第一列进行比对，例如：
-
-- macOS: `shasum -a 256 dist/release/160Grab-macos-arm64.zip`
-- Linux: `sha256sum dist/release/160Grab-macos-arm64.zip`
-- Windows PowerShell: `(Get-FileHash .\dist\release\160Grab-windows-x64.zip -Algorithm SHA256).Hash`
-
-发布流水线：
-
-- `.github/workflows/ci.yml` 在 `push` / `pull_request` 时执行 `uv sync --extra dev` 和 `uv run pytest -q`
-- `.github/workflows/release.yml` 在推送 `v*` tag 或手动触发时构建 Windows/macOS 发布包，并通过 `gh release create` 发布到 GitHub Releases
-
-## Live E2E
-
-live E2E 现在也是手动登录模型：浏览器会打开登录页，用户完成登录并导航到目标医生页后，在 pytest 所在终端按 Enter。默认允许真实排班查询、刷号、打开预约页和填写表单；只有 `LIVE_BOOKING=1` 时才会点击最终提交。
-
-必填环境变量：
-
-- `LIVE_E2E=1`
-
-可选环境变量：
-
-- `LIVE_DOCTOR_IDS`
-- `LIVE_WEEKS`
-- `LIVE_DAYS`
-- `LIVE_HOURS`
-- `LIVE_BRUSH_START_DATE`
-- `LIVE_SLEEP_TIME`
-- `LIVE_MEMBER_ID`
-- `LIVE_BOOKING`
-
-live E2E 侧未单独提供 `page_action_sleep_time`、`booking_retry_sleep_time`、`rate_limit_sleep_time` 的环境变量映射，沿用 `GrabConfig` 的默认值；若要在真实浏览器里细调这些间隔，请使用 `main.py` 与本地 `config.yaml`。
-
-运行命令：
-
-```bash
-LIVE_E2E=1 uv run pytest tests/e2e/test_live_flow.py -v -m live
-LIVE_E2E=1 LIVE_BOOKING=0 uv run pytest tests/e2e/test_live_flow.py::test_live_flow_submits_only_when_live_booking_enabled -v -m live
-```
+只读与 prepare 均为零最终/follow-up 动作，即使产品 auto 且 consent 有效。submit 还须 LIVE_E2E=1、LIVE_BOOKING=1 和精确场景批准。完整操作、预算、环境变量、两路径证据和脱敏刷新流程见 [live-canary.md](docs/live-canary.md)。缺 profile/目标/批准或号源时记录 blocker/inconclusive，不能把本地回归当成真实预约成功。
 
 ## 项目结构
 
-```
-src/grab/
-├── browser/   # Playwright 客户端和浏览器内 fetch
-├── core/      # runner 和定时等待
-├── models/    # 配置和领域模型
-├── services/  # 手动登录接管、排班、预约
-└── utils/     # 配置加载、访问频率提示解析与运行时工具
-```
+`src/grab/` 包含 browser、core、models、services、booking、transactions、observability、canary 和 utils。共享合同位于 `tests/contracts/`，真实本地浏览器回归位于 `tests/integration/`，人工现场入口位于 `tests/e2e/`。
 
 ## License
 
-本项目采用 [MIT License](LICENSE)。
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=wufei-png/160Grab&type=Date)](https://star-history.com/#wufei-png/160Grab&Date)
+[MIT](LICENSE)

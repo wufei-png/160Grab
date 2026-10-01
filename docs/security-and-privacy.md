@@ -1,7 +1,8 @@
 # 日志、外发、快照和会话数据边界
 
-版本 1，2026-09-30；适用于 Python 和 Tampermonkey。S02 实现本合同；业务终态、持久授权、
-未决 attempt journal 属于 S03，现场 fixture converter 属于 S06。
+版本 1，2026-09-30；S09 文档收口于 2026-10-01。适用于 Python 和 Tampermonkey。
+S02 数据边界、S03 最小 attempt journal 和 S06 fail-closed fixture converter 已实现；
+[集成验收索引](integration-acceptance.md) 区分本地代码证据与尚未执行的现场/平台 gate。
 
 ## 普通输出
 
@@ -19,7 +20,7 @@ traceback、服务端文本、页面 title/正文、URL 与 HTML 都不进入普
 JS console、panel 日志和持久摘要共享固定消息及 typed detail projection。读取 runtime state 时
 立即丢弃没有日志 schema 的旧日志/摘要；已有 schema 的条目也重新投影。7 天外、非法及未来时间
 条目删除，新日志另有 maxEntries 上限。迁移不清 pendingBooking、submittingBooking 或提交计数。
-这些现存 runtime 字段仍属于本地运行数据；S02 不声称已建立 S03 的 durable blocker。
+runtime 与日志分离；当前 durable journal 独立保留 pending，Stop/reset 和日志迁移都不能清除它。
 
 ## 通知
 
@@ -88,7 +89,8 @@ journal/未决记录不属于输出命名空间，不受 retention 影响，不�
 不提供复制认证状态、profile 或原始响应的导出路径。仓库 fixture 应为手写 synthetic 场景，
 或者通过 S06 的 fail-closed converter 导出脱敏最小 DOM/JSON。真实导出须保留 schema 和必要行为，
 替换个人与会话值，处理 script、嵌入 JSON、URL 和事件正文；未知敏感字段必须拒绝导出。
-S02 没有实现现场 converter，因此没有认可任何原始 HTML/截图为安全 fixture，也不导出真实现场数据。
+S06 converter 已实现但尚未取得真实输入/刷新现场 fixture；原始 HTML/截图仍不是安全 fixture。
+使用流程与 source/日期/层级/fingerprint/覆盖元数据见 [现场 canary](live-canary.md#夹具转换与刷新)。
 
 ## 验证边界
 
@@ -96,3 +98,9 @@ S02 没有实现现场 converter，因此没有认可任何原始 HTML/截图为
 逐 sink 检查 synthetic canary 零明文命中。真实本地 Chromium 验证安全 debug/JS 输出，
 POSIX 测试覆盖 mode、symlink/hardlink、目录替换清理、retention 边界和 dry-run。
 本地验证不代表真实预约、站点 session、远端 CI、Windows/Linux 或 frozen/release 验证。
+
+S09 跨模块 Chromium 回归在真实值准备/提交/恢复过程中注入 synthetic 姓名、证件、phone、
+member/token/card/address，检查直接日志、JSONL、通知 body/失败分支及 journal 无明文；
+JS 检查 console、持久日志和 journal（设置/表单/直接人工提示不归普通输出）。原始 debug 双开关、
+retention/link/权限和 converter 拒绝未知 schema 的独立回归仍强制执行。没有归档私有输入、
+用户 profile、原始 response/HTML；应用输出不纳入 Git。

@@ -1,6 +1,6 @@
 # 本机人工 canary 与最小脱敏夹具
 
-S06，2026-10-01。只在本机人工执行；CI 不运行 live。
+S06 工具、S09 文档收口，2026-10-01。只在本机人工执行；CI 不运行 live。
 Python 与 userscript 的现场证据分别记录，不能用一个 profile/路径的登录或 synthetic 回归代替另一路径。
 未决提交先在原站核对，禁止混跑两路径、多个 browser profile 或多机器。
 
@@ -115,3 +115,14 @@ fingerprint 只计算 schema 形状，不散列个人值。HTML 是静态 parser
 共享全套检查与 review 结果见 [实施计划完成记录](implementation-plan-2026-09-30.md#完成记录)。
 后续每次现场记录路径、日期、层级、预算/计数、安全终态、覆盖与 blocker；不记录个人值、URL query、
 原始 response/HTML。真实提交证据只能用匹配本次场景的已验证业务结果，弱页面变化仍为 UNKNOWN。
+
+## S09 保留的现场 gate
+
+本轮仅运行 offline/local Chromium，没有执行上述现场命令或真实预约。Python 与 userscript
+仍分别缺专用 profile/当前目标/具体场景批准和真实 schema/结果 adapter/fixture 刷新证据；
+未决记录不能因集成验收或文档迁移被标为已核对。Tampermonkey 扩展 sandbox、Windows ready
+仍未验证。现场或远端 CI 必须记录新的实际运行，不能继承本地 synthetic 结果。
+
+CI/release 显式设 LIVE_E2E=0/LIVE_BOOKING=0 并用 `-m "not live"` 排除现场测试，
+contract/本地 Chromium 和 offline canary 照常执行。全部验证与发布边界见
+[集成验收索引](integration-acceptance.md)；文档中的人工现场入口不构成场景批准。
