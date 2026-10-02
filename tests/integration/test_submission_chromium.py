@@ -216,6 +216,103 @@ async def test_userscript_rechecks_revoke_after_async_prepare(chromium_page):
     }
 
 
+@pytest.mark.parametrize("changed", ["member", "target", "disease"])
+async def test_userscript_rechecks_changed_settings_from_another_tab(
+    chromium_page, changed
+):
+    from tests.contracts.booking.scenarios import USERSCRIPT
+
+    page = chromium_page
+    await page.context.route(
+        "**/*",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body='<input name="schedule_id" value="slot"><input type="hidden" name="member_id" value="member"><textarea name="disease_input">synthetic-existing</textarea><button id="submitbtn">预约</button>',
+        ),
+    )
+    await page.goto(
+        "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
+    )
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
+    await page.evaluate(USERSCRIPT.read_text())
+    page.on("dialog", lambda dialog: dialog.accept())
+    await page.evaluate("""() => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        h.writeSettings({target:{unitId:'u',depId:'d',doctorId:'doc'}, member:{memberId:'member'},pacing:{pageActionMs:[1000,1000]}});
+        window.clicks = 0;
+        document.querySelector('#submitbtn').onclick = () => { clicks++; };
+        window.controllerFinished = false;
+        h.runBookingPageController(h.prepareManualControllerStart('booking')).then(() => {controllerFinished = true;});
+    }""")
+    await page.wait_for_function(
+        "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readJournal().consents.length === 1"
+    )
+    other = await page.context.new_page()
+    await other.goto("https://synthetic.invalid/settings")
+    await other.evaluate(
+        """changed => {
+        const key = 'grab160.doctorPagePoller.settings.v2';
+        const settings = JSON.parse(localStorage.getItem(key));
+        if (changed === 'member') settings.member.memberId = 'synthetic-other-member';
+        if (changed === 'target') settings.target.doctorId = 'synthetic-other-doctor';
+        if (changed === 'disease') settings.booking.diseaseDescription = 'synthetic-new-description';
+        localStorage.setItem(key, JSON.stringify(settings));
+    }""",
+        changed,
+    )
+    await page.wait_for_function("controllerFinished")
+    assert await page.evaluate(
+        """() => ({clicks, state:__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readState().outcome, pending:__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.submissionBlocked()})"""
+    ) == dict(clicks=0, state="AWAITING_MANUAL_CONFIRMATION", pending=False)
+
+
+@pytest.mark.parametrize("mismatch", ["unitId", "depId", "scheduleId"])
+async def test_userscript_rejects_booking_page_that_differs_from_navigation_handoff(
+    chromium_page, mismatch
+):
+    from tests.contracts.booking.scenarios import USERSCRIPT
+
+    page = chromium_page
+    await page.context.route(
+        "**/*",
+        lambda route: route.fulfill(
+            content_type="text/html",
+            body='<input name="schedule_id" value="slot"><input type="hidden" name="member_id" value="member"><button id="submitbtn">预约</button>',
+        ),
+    )
+    await page.goto(
+        "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
+    )
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
+    await page.evaluate(USERSCRIPT.read_text())
+    prompts = []
+
+    async def authorize(dialog):
+        prompts.append(dialog.message)
+        await dialog.accept()
+
+    page.on("dialog", authorize)
+    result = await page.evaluate(
+        """async mismatch => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        h.writeSettings({target:{unitId:'u',depId:'d',doctorId:'doc'},member:{memberId:'member'},
+            pacing:{pageActionMs:[0,0],bookingSubmitSettleMs:[0,0]}});
+        window.clicks = 0;
+        document.querySelector('#submitbtn').onclick = () => { clicks++; };
+        const pendingBooking = {unitId:'u',depId:'d',doctorId:'doc',scheduleId:'slot'};
+        pendingBooking[mismatch] = 'synthetic-other';
+        h.writeState({running:true,interactiveConsent:true,pendingBooking});
+        await h.runBookingPageController(h.claimPageController('booking'));
+        return {clicks,outcome:h.readState().outcome,pending:h.submissionBlocked()};
+    }""",
+        mismatch,
+    )
+    assert result == dict(
+        clicks=0, outcome="AWAITING_MANUAL_CONFIRMATION", pending=False
+    )
+    assert prompts == []
+
+
 async def test_userscript_pending_survives_real_browser_restart(tmp_path):
     from playwright.async_api import async_playwright
 

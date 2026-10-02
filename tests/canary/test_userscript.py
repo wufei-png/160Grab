@@ -156,6 +156,35 @@ async def test_userscript_submit_needs_specific_approval_and_never_claims_succes
     assert await page.evaluate("clicks") == 1
 
 
+async def test_userscript_panel_can_disable_legacy_auto_start(chromium_page):
+    page = chromium_page
+    await page.context.route(
+        "**/*",
+        lambda route: route.fulfill(
+            body='<a id="addMark" doctor_id="doc" unit_id="u" dep_id="d"></a>',
+            content_type="text/html",
+        ),
+    )
+    await page.goto("https://synthetic.invalid/doctors/index/docid-doc.html")
+    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate("""() => {
+        __GRAB160_DOCTOR_POLLER_TEST_HOOKS__.writeSettings({runtime:{autoStart:true}});
+    }""")
+    await page.locator('[data-action="settings"]').click()
+    toggle = page.locator('[data-setting="runtime.autoStart"]')
+    assert await toggle.is_checked()
+    await toggle.uncheck()
+    await page.locator('[data-save-settings]').click()
+    assert not await page.evaluate(
+        "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readSettings().runtime.autoStart"
+    )
+    await page.reload()
+    await page.evaluate(USERSCRIPT.read_text())
+    assert not await page.evaluate(
+        "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readState().running"
+    )
+
+
 async def test_userscript_panel_canary_works_without_page_global_bridge(chromium_page):
     page = chromium_page
     await page.context.route(

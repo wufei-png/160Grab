@@ -151,6 +151,35 @@ def test_filter_slots_keeps_coarse_slots_for_booking_page_hour_filter(schedule_s
     assert [slot.schedule_id for slot in filtered] == ["sch-coarse-1"]
 
 
+@pytest.mark.parametrize("available", [True, False])
+async def test_poll_once_only_returns_available_matching_slots(available):
+    statuses = ["full", "expired", "stopped", "not_open", "unavailable"]
+    if available:
+        statuses.append("available")
+    payload = {
+        "result_code": 1,
+        "data": {
+            "schedules": [
+                {
+                    "schedule_id": status,
+                    "doctor_id": "doc",
+                    "weekday": 3,
+                    "day_period": "am",
+                    "status": status,
+                }
+                for status in statuses
+            ]
+        },
+    }
+    service = ScheduleService(SequencedPageApi([payload]), GrabConfig())
+    service.set_target(
+        DoctorPageTarget(unit_id="u", dept_id="d", doctor_id="doc", source_url="")
+    )
+    assert [slot.schedule_id for slot in await service.poll_once()] == (
+        ["available"] if available else []
+    )
+
+
 def test_parse_doctor_schedule_supports_paiban_payload():
     service = ScheduleService(page_api=FakePageApi())
     service.set_target(

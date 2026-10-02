@@ -317,3 +317,64 @@ async def test_python_wrong_schedule_stops_before_any_selection(
     ).state == "AWAITING_MANUAL_CONFIRMATION"
     assert await page.evaluate("window.selectionClicks") == 0
     assert await page.evaluate("window.submitClicks") == 0
+
+
+@pytest.mark.parametrize("path", ["python", "js"])
+@pytest.mark.parametrize("invalid", ["card-pattern", "disease-custom", "late-custom"])
+async def test_native_invalid_known_fields_never_enter_submission(
+    chromium_page, tmp_path, path, invalid
+):
+    case = next(c for c in PREPARATION if c["id"] == "existing-values")
+    page = chromium_page
+    await load_case(page, case)
+    strategy, form = strategy_for(page, case, tmp_path), form_for(case)
+    if path == "js":
+        await load_userscript(page)
+    # A late invalidation must also be caught by the final read-only gate.
+    if invalid == "late-custom":
+        if path == "python":
+            await strategy.fill_booking_form(form)
+            assert form.is_valid
+        else:
+            assert await page.evaluate("""async () => (await __GRAB160_DOCTOR_POLLER_TEST_HOOKS__.prepareBookingFormForSubmit(
+                {scheduleId:'synthetic-slot',appointmentValue:'synthetic-time',expectedDate:'2030-01-02'},
+                {memberId:'synthetic-member'},{},{})).ok""")
+    await page.evaluate(
+        """invalid => {
+        if (invalid === 'card-pattern') document.querySelector('#hismemid').pattern = '[0-9]+';
+        else document.querySelector('[name="disease_input"]').setCustomValidity('Synthetic validation blocker');
+    }""",
+        invalid,
+    )
+    assert not await page.locator("#suborder").evaluate("node => node.checkValidity()")
+    if path == "python":
+        if invalid != "late-custom":
+            await strategy.fill_booking_form(form)
+        result = await strategy.submit_open_form(form)
+        assert result.state == "AWAITING_MANUAL_CONFIRMATION"
+        assert not strategy.attempt_store.pending()
+    else:
+        from grab.booking.page import read_snapshot
+
+        assert await page.evaluate(
+            "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readBookingSnapshot()"
+        ) == await read_snapshot(page)
+        result = await page.evaluate(
+            """async invalid => {
+            const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+            const form = {scheduleId:'synthetic-slot',appointmentValue:'synthetic-time',expectedDate:'2030-01-02'};
+            const member = {memberId:'synthetic-member'};
+            const preparation = invalid === 'late-custom' ? {ok:true} : await h.prepareBookingFormForSubmit(form,member,{},{});
+            const outcome = await h.submitTransaction(h.findSubmitControl(),form,member,
+                {unitId:'synthetic-unit',depId:'synthetic-dept',doctorId:'synthetic-doctor'},true,null,
+                () => h.readBookingFormReadiness(form,member,{},{}).ok);
+            return {ok:preparation.ok,outcome,pending:h.submissionBlocked()};
+        }""",
+            invalid,
+        )
+        assert result == dict(
+            ok=invalid == "late-custom",
+            outcome="AWAITING_MANUAL_CONFIRMATION",
+            pending=False,
+        )
+    assert await page.evaluate("window.submitClicks") == 0

@@ -390,6 +390,7 @@
     "Booking form preparation failed; manual action required.",
     "Booking form prepared; waiting for manual submit.",
     "Booking form invalid.",
+    "Booking settings changed; press Start to review the updated scenario.",
     "Booking page hit rate limiting.",
     "Booking submit failed.",
     "Booking page loaded while runner is stopped.",
@@ -1830,6 +1831,11 @@
       });
     });
     snapshot.other_required = all('[required]').filter(n => !known.has(n) && !['schedule_id','member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => n.validity ? n.validity.valid : Boolean(n.value?.trim()));
+    // Existing card/date/disease/address values can fail pattern or custom
+    // validation too. Preserve only readiness, never the validation message.
+    known.forEach(n => {
+      if (n.value.trim() && (n.validity?.valid === false || n.getAttribute('data-grab-valid') === 'false')) snapshot.other_required.push(false);
+    });
     all('[name="sch_data"]').forEach(n => {
       if (snapshot.schedule_ids.length === 1) {
         snapshot.dates.push(...scheduleRecordDates(n.value, snapshot.schedule_ids[0]));
@@ -1916,6 +1922,13 @@
   function formValues(addressConfig = {}, bookingConfig = {}) {
     return {card:bookingConfig.clinicCard, disease_input:bookingConfig.diseaseDescription, disease_content:bookingConfig.diseaseDescription,
       ...Object.fromEntries(['province','city','area','detail'].map(k => ['address.' + k,addressConfig[k]]))};
+  }
+
+  function bookingSettingsMatch(settings) {
+    const inputs = value => [value.target, value.member, value.filters, value.address, value.booking];
+    // Private in-memory comparison; settings from another tab can change while
+    // this controller awaits DOM preparation, consent, settle or journal hashing.
+    return JSON.stringify(inputs(readSettings())) === JSON.stringify(inputs(settings));
   }
 
   function selectionReady(snapshot, decision) {
@@ -2362,6 +2375,14 @@
 
   async function runBookingPageControllerOwned(controllerId) {
     const settings = readSettings();
+    const guard = () => {
+      if (!isControllerActive(controllerId)) return false;
+      if (!bookingSettingsMatch(settings)) {
+        stopRun("Booking settings changed; press Start to review the updated scenario.");
+        return false;
+      }
+      return true;
+    };
     const bookingTarget = parseBookingUrl(location.href);
     const state = readState();
     const autoOpenedFromDoctor = Boolean(state.pendingBooking?.scheduleId);
@@ -2385,6 +2406,16 @@
     }
     if (!state.running) {
       setSummary("info", "Booking page loaded while runner is stopped.", "");
+      return;
+    }
+    // The handoff is the proof connecting this schedule to the polled doctor.
+    // A redirect or manual navigation to another booking must not reuse it.
+    if ((autoOpenedFromDoctor && (
+      state.pendingBooking.unitId !== bookingTarget.unitId ||
+      state.pendingBooking.depId !== bookingTarget.depId ||
+      state.pendingBooking.scheduleId !== bookingTarget.scheduleId
+    )) || !areTargetsCompatible(settings.target, target)) {
+      stopRun("Booking form invalid.");
       return;
     }
     if (isLoginExpiredPage()) {
@@ -2430,8 +2461,9 @@
       memberSelection,
       settings.address,
       settings.booking,
-      { guard: () => isControllerActive(controllerId) },
+      { guard },
     );
+    if (!guard()) return;
     if (!preparation.ok) {
       stopRun("Booking form preparation failed; manual action required.");
       return;
@@ -2472,13 +2504,13 @@
     }
     await sleepMs(pickDelayMs(settings.pacing.pageActionMs));
     // Stop/restart during an awaited prepare/settle revokes this controller.
-    if (!isControllerActive(controllerId)) return;
+    if (!guard()) return;
     const submitControl = findSubmitControl();
     if (submitControl.method === "not-found") {
       stopRun("Could not find a submit control on the booking page.");
       return;
     }
-    const outcome = await submitTransaction(submitControl, formState, memberSelection, target, authorized, null, () => isControllerActive(controllerId) && consentStillValid() && readSettings().booking.submitMode === "auto" && readBookingFormReadiness(formState, memberSelection, settings.address, settings.booking).ok && findSubmitControl().element === submitControl.element);
+    const outcome = await submitTransaction(submitControl, formState, memberSelection, target, authorized, null, () => guard() && consentStillValid() && readSettings().booking.submitMode === "auto" && readBookingFormReadiness(formState, memberSelection, settings.address, settings.booking).ok && findSubmitControl().element === submitControl.element);
     patchState((next) => ({ ...next, running: false, outcome }));
     setSummary("warn", outcome === "OUTCOME_UNKNOWN" ? "Submission outcome unknown; verify original site records." : "Booking form prepared; waiting for manual submit.");
     renderPanel();
@@ -2542,7 +2574,7 @@
     const result = (status, state = null) => ({status, level, polls:policy.polls, submitCalls:policy.submitCalls, state});
     try {
       return await withBrowserLeader(async (owner) => {
-        const guard = () => canaryAlive(policy) && ownsBrowserLeader(owner);
+        const guard = () => canaryAlive(policy) && ownsBrowserLeader(owner) && bookingSettingsMatch(settings);
         const work = async () => {
           if (!await approve('ready', 'Log in manually and verify the current target page.') || !guard()) return result('not_ready');
           if (submissionBlocked()) return result('pending_blocked', 'OUTCOME_UNKNOWN');
@@ -3415,6 +3447,12 @@
         <details class="grab160-section" open>
           <summary><span>筛选时间</span><span class="grab160-field-note">决定刷哪些号源</span></summary>
           <div class="grab160-section-body">
+            ${renderCheck(
+              "runtime.autoStart",
+              "Auto Start",
+              settings.runtime.autoStart,
+              "加载或刷新页面时自动开始；本机人工 canary 前关闭。已有未决提交或 canary 限制仍会阻止自动开始。",
+            )}
             <div class="grab160-grid">
               ${renderField(
                 "Start At",
@@ -3634,6 +3672,7 @@
 
   function collectSettingsFromPanel(container, previous) {
     const next = clone(previous);
+    next.runtime.autoStart = readSettingInput(container, "runtime.autoStart", previous.runtime.autoStart);
     for (const path of [
       "member.memberId",
       "member.memberLabel",

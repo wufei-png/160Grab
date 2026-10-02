@@ -371,7 +371,7 @@ class ScheduleService:
         payload = await self.fetch_doctor_schedule(target_date)
         raw_slots = self.parse_doctor_schedule(payload)
         filtered_slots = self.filter_slots(
-            raw_slots,
+            [slot for slot in raw_slots if slot.status == "available"],
             doctor_ids=self.config.doctor_ids or [self.target.doctor_id],
             weeks=self.config.weeks,
             days=self.config.days,

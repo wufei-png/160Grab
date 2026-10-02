@@ -362,6 +362,9 @@ class PageBookingStrategy:
                 await self.reporter.emit_event(
                     "booking_succeeded" if result.success else "booking_submit_failed",
                     level="info" if result.success else "warning",
+                    message="Booking succeeded."
+                    if result.success
+                    else "Booking submit stopped.",
                     data={
                         "state": result.state,
                         "attempt_id": attempt_id,
@@ -428,6 +431,7 @@ class PageBookingStrategy:
                 if self.reporter is not None:
                     await self.reporter.emit_event(
                         "booking_submit_failed",
+                        message="Booking form requires manual action.",
                         data={"invalid_reason": form.invalid_reason},
                     )
                 return BookingResult(

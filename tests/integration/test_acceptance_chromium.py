@@ -43,13 +43,17 @@ PAYLOAD = {
             {
                 "schedule_id": slot,
                 "doctor_id": "SYN_DOC",
-                "status": "available",
+                "status": status,
                 "weekday": 3,
                 "day_period": "am",
                 "date": "2030-01-02",
                 "time_range": "09:00-09:30",
             }
-            for slot in ("SYN_SLOT", "SYN_OTHER_SLOT")
+            for slot, status in (
+                ("SYN_FULL_SLOT", "full"),
+                ("SYN_SLOT", "available"),
+                ("SYN_OTHER_SLOT", "available"),
+            )
         ]
     },
 }

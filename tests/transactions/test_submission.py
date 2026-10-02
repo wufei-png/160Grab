@@ -186,3 +186,62 @@ async def test_revocation_during_prepare_wait_prevents_click_without_regrant(tmp
     assert obj.page.clicks == 0
     assert len(prompts) == 1
     assert not obj.attempt_store.pending()
+
+
+def real_reporter(tmp_path):
+    from grab.observability.notifications import (
+        NotificationManager,
+        NullDesktopNotifier,
+    )
+    from grab.observability.reporter import JsonlEventSink, RunReporter
+
+    return RunReporter(
+        sink=JsonlEventSink(tmp_path / "logs", "a" * 12),
+        notification_manager=NotificationManager(
+            desktop_notifier=NullDesktopNotifier()
+        ),
+        rate_limit_threshold=3,
+    )
+
+
+async def test_invalid_form_with_real_reporter_remains_manual(tmp_path):
+    obj = strategy(tmp_path)
+    obj.reporter = real_reporter(tmp_path)
+
+    async def invalid_form(_slot):
+        return BookingForm(member_id="member", schedule_id="slot", is_valid=False)
+
+    obj.open_booking_form = invalid_form
+    result = await obj.submit_with_retry("slot")
+    assert result.state == BookingState.AWAITING_MANUAL_CONFIRMATION
+    assert result.exit_code == 2
+    assert obj.page.clicks == 0
+    assert '"event": "booking_submit_failed"' in obj.reporter.jsonl_path.read_text()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        BookingState.CONFIRMED_SUCCESS,
+        BookingState.CONFIRMED_NO_EFFECT,
+        BookingState.OUTCOME_UNKNOWN,
+    ],
+)
+async def test_submission_records_terminal_event_with_real_reporter(tmp_path, outcome):
+    import json
+
+    async def adapter(_page, _target, _selected):
+        return BookingEvidence(outcome, "u", "d", "doctor", "member", "slot", "time")
+
+    obj = strategy(tmp_path, adapter=adapter)
+    obj.reporter = real_reporter(tmp_path)
+    result = await obj.submit_open_form(form())
+    assert result.state == outcome
+    events = [
+        json.loads(line) for line in obj.reporter.jsonl_path.read_text().splitlines()
+    ]
+    assert events[-1]["event"] == (
+        "booking_succeeded" if result.success else "booking_submit_failed"
+    )
+    assert events[-1]["data"]["state"] == outcome
+    assert events[-1]["data"]["attempt_id"] == result.attempt_id

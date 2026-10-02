@@ -297,6 +297,14 @@ def snapshot_html(html):
             "his_mem_id",
         }:
             result["other_required"].append(required_ready(n, tree.nodes))
+    # Nonempty recognized fields still need native constraint validation.
+    # Missing known values have their own blockers and may be filled first.
+    # Keep only the boolean: custom validation messages can contain private data.
+    result["other_required"].extend(
+        False
+        for n in tree.nodes
+        if field_key(n) and n.value() and n.attrs.get("data-grab-valid") == "false"
+    )
     # Dates must belong to the unique selected schedule record, not its siblings.
     for n in tree.nodes:
         if n.attrs.get("name") == "sch_data" and len(result["schedule_ids"]) == 1:
