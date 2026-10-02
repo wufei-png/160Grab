@@ -204,3 +204,38 @@ Linux、Windows、Intel 通过；ARM 的双标签测试间歇得到 UNKNOWN 且 
 同时启动选主、owner 失效及晚到回调测试保持独立覆盖；失败时增加闭合状态诊断。
 本机 coordination 集成 15 passed；修改后的原测试冷启动重复 50 次通过。
 此增量仅修改测试前提，未调整产品 Web Lock、TTL、journal 或提交保护；四平台 CI 再验证。
+
+### 最终远端验收状态
+
+[CI run 37032198571](https://github.com/wufei-png/160Grab/actions/runs/37032198571)
+验证提交 `3319cd2405144030e9b96569df9e6300adfb5150`，四个 job 全部 success：
+
+| 平台 | 单元及离线 canary | 共享合同及本地浏览器集成 |
+| --- | --- | --- |
+| Linux x64 | 404 passed | 273 passed |
+| macOS ARM | 404 passed | 273 passed |
+| macOS Intel | 404 passed | 273 passed |
+| Windows x64 | 399 passed、5 POSIX 专属 skipped | 273 passed |
+
+各平台 3 个 live 用例显式 deselected；这些是合成场景/本地浏览器检查。
+本轮远端 browser channel 测试未跳过 Edge。Windows 的 5 项 POSIX skip 不构成 Windows ACL 正证据，
+Windows ready 文件仍按既有保守策略阻断。真实预约、账号登录和结果识别不由这些检查证明。
+
+[构建 run 37030520365](https://github.com/wufei-png/160Grab/actions/runs/37030520365)
+验证提交 `7925f14b155f2412153ab765573f2398bcb67562`，三个平台均完成 frozen help、
+browser smoke、config bootstrap、ZIP/checksum 生成及 artifact 上传；release job skipped。
+此提交与最终 CI 提交仅差上述测试和验收文档，产品源码、userscript、打包源码、锁文件和工作流均相同。
+
+| Artifact | GitHub artifact 归档 digest（非内部产品 ZIP 的 checksum） |
+| --- | --- |
+| [Windows x64](https://github.com/wufei-png/160Grab/actions/runs/37030520365/artifacts/11237268968) | `sha256:711133a8409460cabd9702f536a033fdd9f64e21fc6d51ba91057e91efde11c5` |
+| [macOS ARM](https://github.com/wufei-png/160Grab/actions/runs/37030520365/artifacts/11237277782) | `sha256:26b14c475a8daf773e3c6204bba642b3b4803f1f43b4fc0f5af0ae7164e8fefc` |
+| [macOS Intel](https://github.com/wufei-png/160Grab/actions/runs/37030520365/artifacts/11237641261) | `sha256:adb9945fe6c725137f40f1adad595ce146ae7217df9189fcf7b0ae6d9e03e6d4` |
+
+交付在 `codex/validation-20261002`；`master` 保持 `46ddd41e6ab65d59027850dfb6251cb36c3cdba0`，
+未新建 tag 或发布 Release。最后仅补充此验收文档的提交使用 `[skip ci]`，代码验证绑定上述确切提交，
+避免为结果记录重复执行已通过的测试；该机制见 [GitHub 文档](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs)。
+
+现场仍为旧版 v0.2.16 已停止状态，当前 v0.3.0 源码已复制到本机剪贴板。
+工具不能访问扩展编辑页所用协议，需用户在原脚本编辑区全选、粘贴、保存，随后完成医生页登录并刷新。
+完成后再运行最多 3 次查询/120 秒的 readonly canary；当前未把旧脚本观察记为新实现的 sandbox 正证据。
