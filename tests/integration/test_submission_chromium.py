@@ -60,7 +60,7 @@ async def test_userscript_reload_and_restart_never_clear_unknown(
     from tests.contracts.booking.scenarios import USERSCRIPT
 
     page = chromium_page
-    source = USERSCRIPT.read_text()
+    source = USERSCRIPT.read_text(encoding="utf-8")
     await page.context.route(
         "**/*", lambda route: route.fulfill(body='<button id="submitbtn">预约</button>')
     )
@@ -125,7 +125,7 @@ async def test_userscript_real_controller_enforces_new_consent(chromium_page, mo
         "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
     )
     await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     prompts = []
 
     async def respond(dialog):
@@ -179,7 +179,7 @@ async def test_userscript_rechecks_revoke_after_async_prepare(chromium_page):
         "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
     )
     await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     page.on("dialog", lambda dialog: dialog.accept())
     await page.evaluate("""() => {
         const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
@@ -234,7 +234,7 @@ async def test_userscript_rechecks_changed_settings_from_another_tab(
         "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
     )
     await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     page.on("dialog", lambda dialog: dialog.accept())
     await page.evaluate("""() => {
         const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
@@ -284,7 +284,7 @@ async def test_userscript_rejects_booking_page_that_differs_from_navigation_hand
         "https://synthetic.invalid/guahao/ystep1/uid-u/depid-d/schid-slot.html"
     )
     await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     prompts = []
 
     async def authorize(dialog):
@@ -318,7 +318,7 @@ async def test_userscript_pending_survives_real_browser_restart(tmp_path):
 
     from tests.contracts.booking.scenarios import USERSCRIPT
 
-    source = USERSCRIPT.read_text()
+    source = USERSCRIPT.read_text(encoding="utf-8")
     profile = tmp_path / "synthetic-browser-profile"
     async with async_playwright() as pw:
         for restarted in (False, True):

@@ -161,7 +161,7 @@ async def load_userscript(page):
     from tests.contracts.booking.scenarios import USERSCRIPT
 
     await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("case", PREPARATION, ids=lambda c: c["id"])

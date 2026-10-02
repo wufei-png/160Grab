@@ -25,7 +25,7 @@ async def setup(page):
     await page.evaluate(
         'window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__=true;window._user_key="SYN_KEY";'
     )
-    await page.add_script_tag(content=SCRIPT_PATH.read_text())
+    await page.add_script_tag(content=SCRIPT_PATH.read_text(encoding="utf-8"))
     instant = datetime(2026, 10, 1, tzinfo=UTC)
     await page.clock.install(time=instant)
     await page.clock.pause_at(instant + timedelta(seconds=1))

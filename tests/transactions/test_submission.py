@@ -216,7 +216,7 @@ async def test_invalid_form_with_real_reporter_remains_manual(tmp_path):
     assert result.state == BookingState.AWAITING_MANUAL_CONFIRMATION
     assert result.exit_code == 2
     assert obj.page.clicks == 0
-    assert '"event": "booking_submit_failed"' in obj.reporter.jsonl_path.read_text()
+    assert '"event": "booking_submit_failed"' in obj.reporter.jsonl_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -238,7 +238,7 @@ async def test_submission_records_terminal_event_with_real_reporter(tmp_path, ou
     result = await obj.submit_open_form(form())
     assert result.state == outcome
     events = [
-        json.loads(line) for line in obj.reporter.jsonl_path.read_text().splitlines()
+        json.loads(line) for line in obj.reporter.jsonl_path.read_text(encoding="utf-8").splitlines()
     ]
     assert events[-1]["event"] == (
         "booking_succeeded" if result.success else "booking_submit_failed"

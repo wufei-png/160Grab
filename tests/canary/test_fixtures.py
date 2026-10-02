@@ -165,7 +165,7 @@ async def test_exported_sample_parity_in_both_browser_adapters(chromium_page):
     from tests.contracts.booking.scenarios import USERSCRIPT
 
     sample = json.loads(
-        (Path(__file__).parent / "fixtures/booking.minimal.v1.json").read_text()
+        (Path(__file__).parent / "fixtures/booking.minimal.v1.json").read_text(encoding="utf-8")
     )
     page = chromium_page
     await page.context.route(
@@ -174,7 +174,7 @@ async def test_exported_sample_parity_in_both_browser_adapters(chromium_page):
     )
     await page.goto("https://synthetic.invalid/booking")
     await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__=true")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     python_snapshot = await read_snapshot(page)
     js_snapshot = await page.evaluate(
         "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readBookingSnapshot()"

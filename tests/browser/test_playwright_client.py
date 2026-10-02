@@ -330,9 +330,9 @@ async def test_ordinary_debug_never_captures_html_or_screenshot(
     assert path is not None
     assert [p.suffix for p in tmp_path.iterdir()] == [".json"]
     assert_clean(path.name)
-    assert_clean(path.read_text())
+    assert_clean(path.read_text(encoding="utf-8"))
     assert_clean(await client.collect_debug_state())
-    state = json.loads(path.read_text())
+    state = json.loads(path.read_text(encoding="utf-8"))
     assert state["cookie_count"] == 1
     assert state["cookies"] == [{"http_only": True, "secure": True, "session": True}]
     assert state["login_form"] == {"randstr_present": True, "captcha_iframe_count": 1}
@@ -357,10 +357,10 @@ async def test_raw_snapshot_requires_matching_local_opt_in_and_private_permissio
 
     client.page = RawPage()
     path = await client.capture_snapshot(POISON)
-    assert POISON in path.with_suffix(".html").read_text()
+    assert POISON in path.with_suffix(".html").read_text(encoding="utf-8")
     assert path.with_suffix(".png").read_bytes() == b"png"
-    assert_clean(path.read_text())
-    assert json.loads(path.read_text())["sensitive_debug"] is True
+    assert_clean(path.read_text(encoding="utf-8"))
+    assert json.loads(path.read_text(encoding="utf-8"))["sensitive_debug"] is True
     if os.name == "posix":
         for file in path.parent.iterdir():
             assert file.stat().st_mode & 0o777 == 0o600
@@ -387,7 +387,7 @@ async def test_snapshot_failure_does_not_record_exception_text(tmp_path, monkeyp
             raise RuntimeError(POISON)
 
     client.page = Broken()
-    assert_clean((await client.capture_snapshot("failure")).read_text())
+    assert_clean((await client.capture_snapshot("failure")).read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("channel", ["chromium", "chrome", "msedge"])

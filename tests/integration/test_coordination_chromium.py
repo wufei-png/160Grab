@@ -22,7 +22,7 @@ async def pages_for(page, url=DOCTOR):
     other = await context.new_page()
     for p in (page, other):
         await p.goto(url)
-        await p.evaluate(USERSCRIPT.read_text())
+        await p.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
         await p.evaluate("""() => {
             const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
             h.writeSettings({member:{memberId:'member'},target:{unitId:'u',depId:'d',doctorId:'doc'},pacing:{pageActionMs:[0,0],pollMs:[5000,5000]}});
@@ -77,7 +77,7 @@ async def test_two_pages_only_one_submit_and_pending_blocks_takeover(chromium_pa
     await pages[0].close()
     follower = pages[1]
     await follower.reload()
-    await follower.evaluate(USERSCRIPT.read_text())
+    await follower.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     assert await follower.evaluate(expression) == "OUTCOME_UNKNOWN"
     assert await follower.evaluate("localStorage.getItem('clicks')") == "1"
 
@@ -127,7 +127,7 @@ async def test_doctor_to_ystep1_navigation_acquires_one_new_controller(chromium_
         "pollRespond({result_code:1,data:{schedules:[{schedule_id:'slot',doctor_id:'doc',status:'available',weekday:3,day_period:'am'}]}})"
     )
     await first.wait_for_url(BOOKING)
-    await first.evaluate(USERSCRIPT.read_text())
+    await first.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     first.on("dialog", lambda dialog: dialog.accept())
     result = await first.evaluate("""async () => {
         const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;

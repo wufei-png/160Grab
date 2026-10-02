@@ -115,7 +115,7 @@ def test_cleanup_never_follows_symlinks_or_hardlinks(tmp_path):
     linked.symlink_to(outside, target_is_directory=True)
     with pytest.raises(OSError):
         cleanup_outputs(linked, kind="logs", now=NOW, dry_run=False)
-    assert victim.read_text() == "unchanged"
+    assert victim.read_text(encoding="utf-8") == "unchanged"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX descriptor contract")
@@ -138,5 +138,5 @@ def test_cleanup_directory_swap_is_anchored(tmp_path, monkeypatch):
 
     monkeypatch.setattr(PrivateDirectory, "unlink", swap)
     assert cleanup_outputs(root, kind="logs", now=NOW, dry_run=False)["deleted"] == 1
-    assert victim.read_text() == "unchanged"
+    assert victim.read_text(encoding="utf-8") == "unchanged"
     assert list((tmp_path / "moved").iterdir()) == []

@@ -31,7 +31,7 @@ def test_run_only_confirmation_and_binding_changes(tmp_path):
     consent.new_identity_session()
     assert consent.ensure(target(), "SYN_MEMBER")
     assert len(prompts) == 4
-    assert "SYN_" not in (tmp_path / "journal.json").read_text()
+    assert "SYN_" not in (tmp_path / "journal.json").read_text(encoding="utf-8")
 
 
 def test_stable_account_seam_persists_and_revokes_without_resolving(tmp_path):

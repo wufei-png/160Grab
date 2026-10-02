@@ -82,7 +82,7 @@ async def test_jsonl_and_direct_logger_do_not_render_exception_or_values(tmp_pat
     finally:
         raw_logger.remove(handle)
     assert_clean(captured)
-    assert_clean(sink.path.read_text())
+    assert_clean(sink.path.read_text(encoding="utf-8"))
 
 
 @pytest.mark.asyncio
@@ -155,12 +155,12 @@ async def test_notifications_capture_only_projection_and_failure_is_safe(tmp_pat
         data={"token": POISON, "success": True, "url": POISON},
     )
     assert event["event"] == "booking_succeeded"
-    assert_clean([desktop, webhook, sink.path.read_text()])
+    assert_clean([desktop, webhook, sink.path.read_text(encoding="utf-8")])
     assert set(webhook[0]) == {"event", "run_id", "phase", "message", "severity"}
     assert desktop[0]["title"] == "160Grab"
     assert desktop[0]["subtitle"] is None
     assert webhook[0]["message"] == "Booking succeeded."
-    assert "notification_delivery_failed" in sink.path.read_text()
+    assert "notification_delivery_failed" in sink.path.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -175,4 +175,4 @@ async def test_broken_notification_manager_cannot_change_booking_event(tmp_path)
     )
     result = await reporter.emit_event("booking_succeeded", message=POISON, notify=True)
     assert result["event"] == "booking_succeeded"
-    assert_clean(sink.path.read_text())
+    assert_clean(sink.path.read_text(encoding="utf-8"))

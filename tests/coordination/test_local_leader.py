@@ -2,7 +2,7 @@ import asyncio
 import os
 import subprocess
 import sys
-from pathlib import Path
+import threading
 
 import pytest
 
@@ -145,13 +145,22 @@ async def test_cli_global_lock_blocks_other_profile_before_browser(
 def test_owner_nonce_and_lock_inode_tampering_fail_closed(tmp_path):
     owner = LocalLeader(tmp_path).acquire()
     try:
-        Path(tmp_path / "leader.lock").write_text("{}")
+        # Windows rejects writes through another handle while byte zero is locked.
+        # Corrupt the owner's metadata through its own handle on every platform.
+        os.lseek(owner.fd, 0, os.SEEK_SET)
+        os.write(owner.fd, b"{}")
+        os.ftruncate(owner.fd, 2)
         with pytest.raises(LeaderLost):
             owner.check()
     finally:
         owner.release()
     owner = LocalLeader(tmp_path).acquire()
     try:
+        if os.name == "nt":
+            with pytest.raises(PermissionError):
+                os.replace(tmp_path / "leader.lock", tmp_path / "moved")
+            owner.check()
+            return
         os.replace(tmp_path / "leader.lock", tmp_path / "moved")
         (tmp_path / "leader.lock").write_text("{}")
         with pytest.raises(LeaderLost):
@@ -206,6 +215,11 @@ def test_replaced_lock_directory_fences_old_owner(tmp_path):
     root = tmp_path / "locks"
     owner = LocalLeader(root).acquire()
     try:
+        if os.name == "nt":
+            with pytest.raises(PermissionError):
+                root.rename(tmp_path / "old-locks")
+            owner.check()
+            return
         root.rename(tmp_path / "old-locks")
         root.mkdir()
         replacement = LocalLeader(root).acquire()
@@ -243,20 +257,37 @@ async def test_expired_session_refresh_does_not_issue_second_touch(tmp_path):
 
 
 async def test_synchronous_consent_wait_keeps_leader_and_single_click(tmp_path):
-    import time
-
     from grab.transactions.consent import ConsentManager
 
     obj = strategy(tmp_path / "journal")
+    now = [0.0]
+    owner = LocalLeader(tmp_path / "locks", ttl=0.12, clock=lambda: now[0])
+    renewed = threading.Event()
+    clock_lock = threading.Lock()
+    native_renew = owner.renew
+
+    def renew():
+        with clock_lock:
+            native_renew()
+            renewed.set()
+
+    owner.renew = renew
 
     def prompt(_message):
-        time.sleep(0.3)  # input() blocks the event loop in the same way.
+        # Block asyncio beyond the original TTL, waiting for real thread renewals.
+        # The controlled clock avoids a short wall-clock deadline on busy runners.
+        for _ in range(3):
+            with clock_lock:
+                renewed.clear()
+                now[0] += 0.08
+            assert renewed.wait(5), "Heartbeat did not renew during blocking input"
+        assert now[0] > owner.ttl
         return "AUTHORIZE"
 
     consent = ConsentManager(obj.attempt_store, prompt=prompt, interactive=True)
     obj.authorization = consent.ensure
     obj.consent_manager = consent
-    async with leader_scope(LocalLeader(tmp_path / "locks", ttl=0.12)):
+    async with leader_scope(owner):
         result = await obj.submit_open_form(form())
         assert result.state == "OUTCOME_UNKNOWN"
         assert obj.page.clicks == 1

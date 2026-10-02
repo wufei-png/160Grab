@@ -39,7 +39,7 @@ def test_linked_roots_and_leaf_files_cannot_write_outside(tmp_path):
     sink.path.symlink_to(victim)
     with pytest.raises(OSError):
         sink.write({"event": "run_started"})
-    assert victim.read_text() == "untouched"
+    assert victim.read_text(encoding="utf-8") == "untouched"
     assert list(outside.iterdir()) == [victim]
 
 

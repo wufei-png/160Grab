@@ -10,7 +10,7 @@ from grab.transactions.store import AttemptStore
 from tests.userscripts.test_doctor_page_poller import _run_hook
 
 SCENARIOS = json.loads(
-    Path(__file__).with_name("fixtures").joinpath("submission.v1.json").read_text()
+    Path(__file__).with_name("fixtures").joinpath("submission.v1.json").read_text(encoding="utf-8")
 )["scenarios"]
 
 

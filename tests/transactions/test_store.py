@@ -36,7 +36,7 @@ def test_restart_and_revoke_preserve_pending(tmp_path):
     assert store.read()["audit"][0]["state"] == "CONFIRMED_NO_EFFECT"
     with pytest.raises(StoreBlocked):
         store.begin(ref)
-    raw = (store.root / "journal.json").read_text()
+    raw = (store.root / "journal.json").read_text(encoding="utf-8")
     assert "synthetic-member" not in raw
     assert "synthetic-doctor" not in raw
     if os.name == "posix":
@@ -58,7 +58,7 @@ def test_corrupt_fail_closed(tmp_path, raw):
     (tmp_path / "journal.json").write_text(raw)
     with pytest.raises(StoreBlocked):
         AttemptStore(tmp_path).pending()
-    assert (tmp_path / "journal.json").read_text() == raw
+    assert (tmp_path / "journal.json").read_text(encoding="utf-8") == raw
 
 
 def test_failed_write_has_no_begin(tmp_path, monkeypatch):

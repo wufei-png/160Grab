@@ -46,13 +46,13 @@ async def test_real_browser_outputs_exclude_synthetic_dom_script_cookie_and_url(
             client._install_page_listeners(page)
             await page.goto("https://synthetic.invalid/?token=" + POISON)
             path = await client.capture_snapshot(POISON)
-            assert_clean(path.read_text())
+            assert_clean(path.read_text(encoding="utf-8"))
             assert_clean(await client.collect_debug_state())
             assert [p.suffix for p in tmp_path.iterdir()] == [".json"]
             await page.evaluate(
                 "globalThis.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true"
             )
-            await page.evaluate(USERSCRIPT.read_text())
+            await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
             result = await page.evaluate(
                 """(poison) => {
                 const output = [];

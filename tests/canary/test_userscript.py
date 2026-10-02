@@ -11,7 +11,7 @@ async def load(page, body, url):
         "window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__=true;"
     )
     await page.goto(url)
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     await page.evaluate("""() => {
         window.clicks=0; window.changes=0;
         document.addEventListener('click',()=>clicks++);
@@ -50,7 +50,7 @@ async def test_userscript_prepare_never_submits_even_valid_consent(chromium_page
         == "AWAITING_MANUAL_CONFIRMATION"
     )
     await page.reload()
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     await page.evaluate("""async () => {
         const h=__GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
         const id=h.prepareManualControllerStart('booking'); await h.runBookingPageController(id);
@@ -86,7 +86,7 @@ async def test_userscript_readonly_resolves_docid_and_never_changes_form(chromiu
     )
     # The site-origin case is still entirely routed to synthetic content.
     await page.goto("https://www.91160.com/doctors/index/docid-doc.html")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     await page.evaluate("""() => {
         window.clicks=0; window.changes=0; window.requests=0; window._user_key='SYN_KEY';
         document.addEventListener('click',()=>clicks++);document.addEventListener('change',()=>changes++);
@@ -166,7 +166,7 @@ async def test_userscript_panel_can_disable_legacy_auto_start(chromium_page):
         ),
     )
     await page.goto("https://synthetic.invalid/doctors/index/docid-doc.html")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     await page.evaluate("""() => {
         __GRAB160_DOCTOR_POLLER_TEST_HOOKS__.writeSettings({runtime:{autoStart:true}});
     }""")
@@ -179,7 +179,7 @@ async def test_userscript_panel_can_disable_legacy_auto_start(chromium_page):
         "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readSettings().runtime.autoStart"
     )
     await page.reload()
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     assert not await page.evaluate(
         "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readState().running"
     )
@@ -195,7 +195,7 @@ async def test_userscript_panel_canary_works_without_page_global_bridge(chromium
         ),
     )
     await page.goto("https://synthetic.invalid/doctors/index/docid-doc.html")
-    await page.evaluate(USERSCRIPT.read_text())
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
     await page.evaluate("""() => {
         const h=__GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
         h.writeSettings({target:{unitId:'u',depId:'d',doctorId:'doc'},filters:{startDate:'2026-09-30'}});

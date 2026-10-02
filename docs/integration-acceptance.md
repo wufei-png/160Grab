@@ -155,8 +155,37 @@ Python 与打包源码未再修改。真实站点和 Tampermonkey sandbox 仍等
 14 个既有 naive 迁移提示；Ruff、两份 Node 语法、actionlint 和空白检查通过。
 待推送历史与路径已核对，synthetic fixture provenance 保留；
 没有纳入本机 config.yaml、认证状态、profile、journal、artifacts 或原始页面。
-远端执行结果将在获得实际 run 后记录，不以本机结果替代。
+### 首次远端运行及兼容性修复
 
-再次通过当前 Chrome 自动打开真实站点仍返回 `net::ERR_BLOCKED_BY_CLIENT`，
-当前未发现目标医生页标签。扩展管理页的协议策略限制仍生效；已请求人工就绪、明确医生/日期及
-Tampermonkey 当前脚本确认，继续验证仅限 readonly。未执行真实预约。
+验证提交 `ceae2fc` 的 [CI run 37028920828](https://github.com/wufei-png/160Grab/actions/runs/37028920828)：
+Linux、macOS ARM、macOS Intel 通过；Windows 离线测试失败。
+[构建 run 37028928393](https://github.com/wufei-png/160Grab/actions/runs/37028928393)：
+macOS ARM 完成测试、打包、frozen help/browser smoke、config bootstrap 并上传 artifact；
+Windows 和 Intel 在离线测试阶段失败，release job 按 tag 条件跳过。没有发布 Release。
+
+失败日志指出三类测试问题：
+
+- UTF-8 userscript 的 `Path.read_text()` 依赖 Windows 默认 cp1252，导致解码失败。
+  现对测试中的 UTF-8 源码、fixture 和应用输出显式指定编码，未用全局 UTF-8 环境变量掩盖问题。
+- Windows 内核拒绝另一句柄改写锁文件，以及锁文件/所在目录重命名。
+  nonce 损坏检查改用 owner 自身句柄；Windows 重命名分支断言内核拒绝且 owner 仍有效，
+  POSIX 继续断言替换后旧 owner 被 fencing。没有跳过这些 Windows 检查。
+- Intel 的同步输入心跳测试使用 120ms 真实 deadline，可能在输入前被 runner 调度拖延。
+  改用受控单调时钟与真实 heartbeat 线程确认，仍验证 asyncio 阻塞期间多次续租、超过初始 TTL
+  后最终只能点击一次。产品的 TTL、过期阻断与续租逻辑保持原样。
+
+同时补充 Windows frozen help 和 smoke 各自的 `$LASTEXITCODE` 检查，避免首个命令失败被后续成功覆盖。
+本机复核 coordination/canary/contracts/integration：320 passed、2 Edge skipped；
+browser/observability/transactions/utils：131 passed。Ruff、actionlint、空白检查通过。
+修复后重新运行四平台 CI 与三平台构建，结果以各 run 的实际完成状态为准。
+文件编码和锁接口参考 [Python pathlib](https://docs.python.org/3/library/pathlib.html#pathlib.Path.read_text)
+与 [msvcrt](https://docs.python.org/3/library/msvcrt.html#msvcrt.locking) 文档。
+
+### 现场页面读取进展
+
+先前自动新开标签返回 `net::ERR_BLOCKED_BY_CLIENT`，不代表用户 Chrome 会话不能访问。
+用户手动打开后，工具成功读取同一个 Chrome「用户1」中的首页及指定医生页。
+医生页实际提示「请登录后查看医生号源」，脚本面板为旧版 v0.2.16、自动提交 ON、运行已停止；
+已再次点击 Stop。当前现场代码尚未更新，因此不把该页面当作本次 v0.3.0 的 sandbox 验证。
+扩展编辑页的协议策略限制仍生效，已请求用户编辑原脚本并完成站点登录；后续仅限 readonly。
+未填写个人表单、未执行真实预约、未清除既有 journal。

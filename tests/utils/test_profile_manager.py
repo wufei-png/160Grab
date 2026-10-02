@@ -142,7 +142,7 @@ def test_create_profile_writes_expected_marker(tmp_path):
 @pytest.mark.parametrize("channel", ["chromium", "chrome", "msedge"])
 def test_profile_channel_bound_on_create_load_and_resolve(tmp_path, channel):
     profile = create_profile(tmp_path, channel=channel)
-    assert json.loads(profile.marker_path.read_text())["channel"] == channel
+    assert json.loads(profile.marker_path.read_text(encoding="utf-8"))["channel"] == channel
     assert load_profile(tmp_path, profile.name, channel=channel) == profile
     resolved = resolve_profile_for_run(
         root_dir=tmp_path,
@@ -157,7 +157,7 @@ def test_profile_channel_bound_on_create_load_and_resolve(tmp_path, channel):
 
 def test_legacy_marker_is_chromium_and_not_rewritten(tmp_path):
     profile = create_profile(tmp_path)
-    marker = json.loads(profile.marker_path.read_text())
+    marker = json.loads(profile.marker_path.read_text(encoding="utf-8"))
     del marker["channel"]
     profile.marker_path.write_text(json.dumps(marker))
     original = profile.marker_path.read_bytes()
@@ -197,7 +197,7 @@ def test_unknown_marker_fails_closed(tmp_path, field, value):
     from grab.utils.profile_manager import list_profiles
 
     profile = create_profile(tmp_path)
-    marker = json.loads(profile.marker_path.read_text())
+    marker = json.loads(profile.marker_path.read_text(encoding="utf-8"))
     marker[field] = value
     profile.marker_path.write_text(json.dumps(marker))
     with pytest.raises(ValueError):

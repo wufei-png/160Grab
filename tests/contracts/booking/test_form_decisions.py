@@ -76,7 +76,7 @@ def test_single_wrong_or_duplicate_member_never_prepare():
 
 
 PREPARATION = json.loads(
-    (Path(__file__).parent / "fixtures/preparation.v1.json").read_text()
+    (Path(__file__).parent / "fixtures/preparation.v1.json").read_text(encoding="utf-8")
 )["scenarios"]
 
 

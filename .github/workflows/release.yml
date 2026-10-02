@@ -73,7 +73,13 @@ jobs:
         shell: pwsh
         run: |
           & "./dist/release/160Grab-${{ matrix.label }}/160Grab.exe" --help
+          if ($LASTEXITCODE -ne 0) {
+              throw "Frozen binary help check failed."
+          }
           & "./dist/release/160Grab-${{ matrix.label }}/160Grab.exe" --smoke-browser
+          if ($LASTEXITCODE -ne 0) {
+              throw "Frozen browser smoke check failed."
+          }
       - name: Verify Windows config bootstrap
         if: matrix.platform == 'windows'
         shell: pwsh

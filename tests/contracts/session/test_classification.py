@@ -6,7 +6,7 @@ from tests.userscripts.test_doctor_page_poller import _run_hook
 
 
 def test_python_userscript_share_session_scenarios():
-    cases = json.loads(Path(__file__).with_name("scenarios.v1.json").read_text())[
+    cases = json.loads(Path(__file__).with_name("scenarios.v1.json").read_text(encoding="utf-8"))[
         "cases"
     ]
     js = _run_hook(
