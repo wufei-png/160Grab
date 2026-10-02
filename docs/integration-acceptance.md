@@ -189,3 +189,18 @@ browser/observability/transactions/utils：131 passed。Ruff、actionlint、空�
 已再次点击 Stop。当前现场代码尚未更新，因此不把该页面当作本次 v0.3.0 的 sandbox 验证。
 扩展编辑页的协议策略限制仍生效，已请求用户编辑原脚本并完成站点登录；后续仅限 readonly。
 未填写个人表单、未执行真实预约、未清除既有 journal。
+
+### 2026-10-03 远端构建结果与并发测试前提
+
+提交 `7925f14` 的 [构建 run 37030520365](https://github.com/wufei-png/160Grab/actions/runs/37030520365)
+已成功完成 Windows x64、macOS ARM、macOS Intel 三个 job，包括所有测试、打包、
+frozen help/browser smoke、config bootstrap 和 artifact 上传。release job 为 skipped。
+
+同一提交的 [CI run 37030489022](https://github.com/wufei-png/160Grab/actions/runs/37030489022)
+Linux、Windows、Intel 通过；ARM 的双标签测试间歇得到 UNKNOWN 且 0 次点击，未达到其正向 1 次点击断言。
+原测试在本机共享浏览器 100 次、冷启动浏览器 100 次没有复现，不能据此认定产品根因。
+提交边界中断允许 UNKNOWN 且 0 次点击；该正向测试现先建立真实 booking controller 的既有 leader 前提，
+再并发启动 owner 提交与 follower 尝试，仍要求恰好 1 次点击、关闭重启后 pending 阻断。
+同时启动选主、owner 失效及晚到回调测试保持独立覆盖；失败时增加闭合状态诊断。
+本机 coordination 集成 15 passed；修改后的原测试冷启动重复 50 次通过。
+此增量仅修改测试前提，未调整产品 Web Lock、TTL、journal 或提交保护；四平台 CI 再验证。

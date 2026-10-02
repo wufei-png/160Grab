@@ -70,10 +70,37 @@ async def test_two_pages_only_one_submit_and_pending_blocks_takeover(chromium_pa
         const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
         return await h.submitTransaction(h.findSubmitControl(), {scheduleId:'slot'}, {memberId:'member'}, {unitId:'u',depId:'d',doctorId:'doc'}, true);
     }"""
-    outcomes = await asyncio.gather(*(p.evaluate(expression) for p in pages))
-    assert "OUTCOME_UNKNOWN" in outcomes
-    assert set(outcomes) <= {"OUTCOME_UNKNOWN", "AWAITING_MANUAL_CONFIRMATION"}
-    assert await pages[0].evaluate("localStorage.getItem('clicks')") == "1"
+    # The production booking controller already owns the leader before submit.
+    # Establish that precondition before the follower races this transaction;
+    # simultaneous startup/owner loss are covered by the other coordination tests.
+    await pages[0].evaluate("""() => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        window.submitOutcome = null;
+        void h.withBrowserLeader(async () => {
+            await new Promise(resolve => {window.releaseSubmit = resolve;});
+            return await h.submitTransaction(h.findSubmitControl(), {scheduleId:'slot'}, {memberId:'member'}, {unitId:'u',depId:'d',doctorId:'doc'}, true);
+        }).then(outcome => {window.submitOutcome = outcome;});
+    }""")
+    await pages[0].wait_for_function("typeof releaseSubmit === 'function'")
+    assert await pages[0].evaluate(f"{HOOKS}.ownsBrowserLeader()") is True
+    _, follower_outcome = await asyncio.gather(
+        pages[0].evaluate("releaseSubmit()"), pages[1].evaluate(expression)
+    )
+    await pages[0].wait_for_function("submitOutcome !== null")
+    assert await pages[0].evaluate("submitOutcome") == "OUTCOME_UNKNOWN"
+    assert follower_outcome in {"OUTCOME_UNKNOWN", "AWAITING_MANUAL_CONFIRMATION"}
+    clicks = await pages[0].evaluate("localStorage.getItem('clicks')")
+    assert clicks == "1", {
+        "follower_outcome": follower_outcome,
+        "pages": [
+            await p.evaluate(f"""() => ({{
+                visibility:document.visibilityState,
+                states:{HOOKS}.readJournal().attempts.map(r => r.state),
+                summary:{HOOKS}.readState().summary?.message
+            }})""")
+            for p in pages
+        ],
+    }
     await pages[0].close()
     follower = pages[1]
     await follower.reload()
