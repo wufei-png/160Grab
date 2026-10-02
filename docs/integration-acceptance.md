@@ -75,3 +75,88 @@ Ruff/两份 Node/锁定离线 dev sync/whitespace、文档链接/示例 YAML par
 本次变更仅手写 synthetic 回归、CI 和文档。核对 staged 全部路径，不纳入本机 config.yaml、
 artifacts、profile、journal、原始页面、截图、cookie 或服务端响应；既有 ignored 私有输入不改写。
 现场执行遵循 [live-canary.md](live-canary.md)，代码实现授权不等于具体真实预约批准。
+
+## 2026-10-02 决策对齐审核
+
+对照聊天 `01a0f06b-5a8c-7843-8a7a-67c0da987e48` 的用户确认及 D01–D06，
+审查初始实现基线 `16bc710` 至本次开始 HEAD `b90abf3` 的实现、调用路径及回归。
+S01–S09 的本地能力已实现；上表现场、扩展 sandbox、平台及远端 gate 仍未取得证据。
+没有需要重开的产品取舍；本次修复沿用已确认合同，改动留在工作区。
+
+发现并修复：
+
+- **[P1] 设置变化时中止旧预约控制器 — `userscripts/91160-doctor-page-poller.user.js:2380`**。
+  提交等待期间另一标签修改成员、医生或病情，旧控制器仍能用旧授权和字段点击。
+  现在准备、等待和 journal 写入前复核相关设置，变化交人工；canary 同样受此限制。
+- **[P1] 核对预约页与导航传递的完整目标 — `userscripts/91160-doctor-page-poller.user.js:2413`**。
+  当前 URL 的医院、科室或 schedule 与 pendingBooking 不同，仍会沿用医生页身份提交。
+  现在在填表和授权前拒绝不一致，并复核配置目标。
+- **[P2] 检查已识别字段的原生校验结果 — `src/grab/booking/form.py:303`**。
+  非空 card、病情等字段即使 pattern/custom validity 不通过，两适配仍判定 PREPARED。
+  现在准备及最终只读复核都保留布尔 blocker，不复制 validationMessage；零提交、无 pending。
+- **[P2] 给预约事件传入必填 message — `src/grab/services/booking.py:365`**。
+  两个调用缺参数：无效表单触发 TypeError，提交终态事件在异常分支被丢弃。
+  现在使用固定消息，真实 RunReporter 验证人工 exit=2 及三种终态事件。
+- **[P2] 只将可预约号源交给 Python 预约流程 — `src/grab/services/schedule.py:374`**。
+  既有筛选遗漏将满号/过期/停诊等状态当作候选，新终态流程可能在第一项提前停止。
+  现在只传 available；两路径闭环增加满号在前、可预约在后的输入。
+
+新增 18 个回归用例，覆盖上述反例及最终复核，仅使用 synthetic 数据；浏览器用例均由本地路由处理。
+原实现已复现五项缺陷；没有执行真实站点请求、复制认证状态、真实预约、push 或发布。
+最终执行 `LIVE_E2E=0 LIVE_BOOKING=0 uv run --locked --offline --no-sync pytest -q`：
+674 passed、5 skipped（3 个 live、2 个未安装 Edge），14 个既有 appoint_time 迁移警告。
+Ruff、userscript 与 Node harness 语法、`git diff --check`、相关本地文档链接检查均通过。
+本轮审查范围内没有其他已确认缺陷；上表现场、扩展 sandbox、平台及远端 gate 仍待验证。
+
+## 2026-10-02 后续环境验证
+
+使用本次审核后的工作区内容创建显式白名单源码快照，仅包含 tracked 源码、synthetic 测试、
+打包文件、userscript、工作流及公开配置模板。没有复制本机 config.yaml、认证状态、profile 或 journal。
+快照 SHA256：`25ae37477d2dfb8d15f8248810175347c2f9444d84db58f79f7ac73c577893cd`。
+测试后复核当前源码、测试、userscript 与打包文件的逐文件 hash，均与快照一致。
+
+| gate | 新证据与剩余范围 |
+|---|---|
+| Linux 运行 | Ubuntu 20.04.6 x86_64，CPython 3.11.13、Node 24.20.0、锁定 Playwright 1.58.0；offline 组 403 passed / 3 live deselected，contract/Chromium 组 271 passed / 2 Edge skipped；Ruff 与两份 Node 语法通过。合计 674 passed，14 个既有 naive 迁移警告；没有真实站点请求。不能替代 GitHub hosted runner 证据 |
+| macOS arm64 frozen | 在隔离源码目录以锁定依赖重新执行 PyInstaller 6.20.0、浏览器装包及 release staging；Mach-O arm64、help、普通 smoke、强制 `PLAYWRIGHT_BROWSERS_PATH=0` 的 bundled-browser smoke、缺配置 bootstrap 均通过。bootstrap 输出与公开模板逐字节相同；ZIP checksum 与内容检查通过。未签名公证、未发布；不是 Windows/Intel Mac 证据 |
+| 远端 CI | 既有最近成功 run `36739045332` 只覆盖旧提交 `46ddd41e6ab6`，不覆盖本次修复。CI 已准备四种 runner 的矩阵与手动入口；Release 分支 dispatch 仅构建，发布 job 仅允许 v tag，build 使用只读 contents。actionlint 1.7.12 与空白检查通过；等待当前内容推送到验证分支后执行 |
+| 真实站点 | 当前 Chrome 打开首页返回 `net::ERR_BLOCKED_BY_CLIENT`；本机配置没有明确医生、日期、就诊人或选定 profile，尚无人工 ready。没有运行 live canary、收集真实夹具或执行预约；需先解决可访问性并提供明确只读场景 |
+| Tampermonkey sandbox | 浏览器 URL 安全策略拒绝打开扩展管理页，尚未确认安装与当前脚本版本；普通 Chromium 注入仍不能当成 sandbox 证据。需用户确认当前扩展和脚本、目标医生页及人工 ready |
+| Windows/Intel Mac、Windows ACL/reparse/ready、Edge | 当前机器及 Ubuntu 主机不能验证这些平台；待远端实际运行。Windows ready 仍保守阻断，POSIX 模式测试的 skip 不构成 ACL 正证据；未安装 Edge 的两项 skip 不构成 launch 成功 |
+
+本次 frozen ZIP SHA256：`f46c0461ecf11bab5d49fc2b23f3a68d73e7c6cc32b3320269944bfe355f3713`。
+仅使用公开配置模板；未包含 profile、journal、原始页面、认证数据或 cache link 元数据。
+源码及本机打包保存在隔离临时目录，Linux 测试也使用隔离临时目录，未改写既有用户运行数据。
+以上 Linux 与 frozen 证据绑定本次源码快照；CI 配置的静态校验不是远端执行成功。
+
+runner 架构与 workflow_dispatch/permissions 行为依据
+[GitHub runner 文档](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+和 [GitHub 工作流语法](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)。
+
+### 人工协作入口补齐
+
+核对现场操作说明时发现：`runtime.autoStart` 已有设置及启动逻辑，但 Settings 面板没有对应开关，
+文档要求「关闭 Auto Start」无法直接操作。现增加面板复选框与保存读取；旧配置 true 可以关闭，
+不改默认 false、canary 限制或 pending 阻断。新增本地 Chromium 回归检验 true→面板关闭→保存→刷新
+后不自动开始。现场协作步骤见 [live-canary.md](live-canary.md#现场验证需要人工辅助时)。
+
+执行 userscript/canary、时间面板及集成闭环相关测试：98 passed；Ruff、Node 语法和空白检查通过。
+这是上述 Linux 源码快照之后的 userscript UI 增量；此前 Linux/frozen 结果不冒称覆盖此增量，
+Python 与打包源码未再修改。真实站点和 Tampermonkey sandbox 仍等待人工现场证据。
+
+## 2026-10-02 自动化验证推进
+
+用户授权代为执行已说明的验证分支提交、推送与远端检查。
+修复与 canary 面板入口提交为 `c7d17ef`，四平台 CI 和 tag 发布门槛提交为 `7885d2b`；
+目标分支 `codex/validation-20261002`，包含此前尚未推送的 25 个实现提交。
+不合并主分支、不创建版本 tag、不发布 GitHub Release。
+
+包含 Auto Start 增量的最终本机全套：675 passed、5 skipped（3 live、2 Edge），
+14 个既有 naive 迁移提示；Ruff、两份 Node 语法、actionlint 和空白检查通过。
+待推送历史与路径已核对，synthetic fixture provenance 保留；
+没有纳入本机 config.yaml、认证状态、profile、journal、artifacts 或原始页面。
+远端执行结果将在获得实际 run 后记录，不以本机结果替代。
+
+再次通过当前 Chrome 自动打开真实站点仍返回 `net::ERR_BLOCKED_BY_CLIENT`，
+当前未发现目标医生页标签。扩展管理页的协议策略限制仍生效；已请求人工就绪、明确医生/日期及
+Tampermonkey 当前脚本确认，继续验证仅限 readonly。未执行真实预约。

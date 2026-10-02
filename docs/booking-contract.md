@@ -98,7 +98,9 @@ Python 纯解析器与 JS 纯 decision 分别执行；Chromium 再比较两适�
   多个匹配、禁用及审核/身份警告都交人工。不回写 hidden member，不点击任意单 radio。
   JS memberLabel 改为完整显示文字的唯一精确匹配。
 - card、date、病情、地区、详细地址控件存在时按已知表单合同检查必填；缺省地址控件不产生地址 blocker。
-  其他 HTML required 控件按原生 validity 复核；离线 radio 按 form/name 分组。地区（含 optgroup）只接受唯一精确 value/完整显示文字，不做包含/简称匹配。
+  已识别字段的非空值和其他 HTML required 控件按原生 validity 复核，包括 pattern/custom validity；
+  只记录布尔 readiness，不输出 validationMessage。离线 radio 按 form/name 分组。
+  地区（含 optgroup）只接受唯一精确 value/完整显示文字，不做包含/简称匹配。
   地址来源可为选定成员属性或显式配置；来源/已有值冲突则保留原值并交人工。
 - Python 显式值配置为 booking.disease_description / clinic_card / address；JS 为 booking.diseaseDescription /
   clinicCard 与 address。默认全空。仅填写空控件，已有值保留；不复制 real_card/证件号到 card。
@@ -108,6 +110,8 @@ Python 纯解析器与 JS 纯 decision 分别执行；Chromium 再比较两适�
 - 准备最多三个 DOM pass，只等延迟字段/地区 options/可操作控件，不通过重开号源绕过必填缺失。
   选择用 Python Locator 与 JS native click；准备后再只读复核选中成员/时段、字段、控件和授权。
   当前时段适配确认 `#delts li.selected`；未识别的现场选择语义须交人工并等待 S06 证据。
+- Python 只将 available 状态的号源交给预约流程。JS 预约页须与医生页传递的医院、科室和 schedule
+  完整匹配；等待期间目标、成员、筛选或填表配置变化时停止，重新 Start 后再核对授权。
 - 协议 checkbox 未由站点/用户勾选时交人工，本工具不代替首次接受。checkIdInfo 空响应 patch 已删除：
   未取得 endpoint/原处理分支的安全证明，保留原站 AJAX 与身份警告。
 - JS settingsVersion=4 清除旧版本自动生成的广东/深圳/南山区和通用病情的同名值；无法确认来源，

@@ -107,6 +107,8 @@ uv run --locked python main.py config.yaml --revoke-consent
 
 面板有 Start/Stop、Overview/Settings/Logs、Reset State、撤销授权和人工核对已预约/未预约。Stop/reset/刷新/重启都不清 durable pending；Reset 不清配置，也不重置连续只读失败预算或缩短冷却。后台隐藏、pagehide、失锁或过期暂停；无 Web Locks 禁自动运行。
 
+预约页必须匹配医生页传递的医院、科室及号源。等待提交时变更目标、就诊人、筛选或填表设置会暂停当前操作；重新 Start 后核对更新后的场景和授权。
+
 settingsVersion=5：旧版自动生成的广东/深圳/南山区、通用病情等来源不可区分，迁移时清除后需明确重新输入；v4 已明确的真实字段保留。旧 maxSubmitAttempts 只迁到最多三次的 pre-submit 预算。`autoReturnAfterSubmitFailure` 不能绕过 UNKNOWN，字段/时段不匹配或必填缺失不换号绕过。
 
 缺 key/未知 schema 停下人工核对；明确 10021/login redirect 清缓存并停下等待人工登录后按 Start，不能自动刷新重试。轮询预算/取消/冷却和 Python 合同一致。真实 Tampermonkey sandbox 仍待现场验证。
@@ -144,7 +146,7 @@ uv run --locked pytest -q tests/contracts/ tests/integration/ -m "not live" --br
 
 已有环境可用 `--offline --no-sync`。Node 缺失不能跳过 JS 验收；临时 Chromium context 和 synthetic route 不读取用户 profile，不访问真实站点。完整检查可执行 `uv run --locked pytest -q`，未显式启用 live 时三个现场层级跳过。
 
-PR/push CI 与 release 验证前置安装 Node/Chromium，强制 Ruff、两份 Node 语法、单元/离线 canary、contract/本地 Chromium，设置 LIVE_E2E=0/LIVE_BOOKING=0 并排除 live。本地同命令通过不代表远端 CI 已执行，最新结果见 [验收索引](docs/integration-acceptance.md)。
+PR/push CI 与 release 验证前置安装 Node/Chromium，强制 Ruff、两份 Node 语法、单元/离线 canary、contract/本地 Chromium，设置 LIVE_E2E=0/LIVE_BOOKING=0 并排除 live。CI 矩阵覆盖 Linux、Windows、macOS arm64/Intel，也可手动运行。本地同命令通过不代表远端 CI 已执行，最新结果见 [验收索引](docs/integration-acceptance.md)。
 
 ## 打包与发布
 
@@ -158,7 +160,7 @@ Windows PowerShell 使用 `./packaging/build-windows.ps1`。产物位于 `dist/r
 
 可在 [GitHub Releases](https://github.com/wufei-png/160Grab/releases) 查看发布产物；解压后 macOS 使用 `160Grab.command`，Windows 使用 `160Grab.exe`。首次缺配置会生成 config.yaml 并退出，请填好后重新运行。未签名产物可能触发系统信任提示。
 
-release 在 v* tag/手动触发时运行验收、构建、frozen `--help`/`--smoke-browser` 和默认配置 bootstrap，然后上传；配置发布流程不等于本次执行发布。S09 未更改打包代码/配置值，不以文档更新冒称跨平台 frozen 验证。
+release 在 v* tag/手动触发时运行验收、构建、frozen `--help`/`--smoke-browser` 和默认配置 bootstrap，并上传工作流 artifact。分支上的手动执行仅验证构建；只有 v* tag 才进入 GitHub Release 发布。配置发布流程不等于本次执行发布，当前实际平台证据见 [验收索引](docs/integration-acceptance.md)。
 
 ## 本机人工 Live Canary
 
