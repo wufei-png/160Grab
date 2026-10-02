@@ -269,3 +269,11 @@ readonly 控件中 `LIVE_E2E=1` 与 `LIVE_BOOKING=1` 均未选，已启用 canar
 新增回归覆盖无 Web Locks、隐藏页面、锁竞争、损坏 journal、查询中失锁及晚到回调：
 修复前 5 failed；修复后 canary/coordination 30 passed。Ruff 与 Node 语法检查通过。
 本次修复尚未安装到现场，真实查询验收仍待下一次运行。
+
+[增量 CI run 37037504950](https://github.com/wufei-png/160Grab/actions/runs/37037504950)
+验证修复提交 `a27c59e25d7d9701d462c4e31416c8f3270d0e4e`，四个平台全部 success：
+Linux、macOS ARM、macOS Intel 各 409 项离线测试 + 273 项合同/浏览器集成通过；
+Windows 为 404 + 273 passed，5 项 POSIX 专属 skipped。每个平台 3 项 live 显式 deselected。
+这次增加的是 userscript 结果归一及测试/文档，Python、打包源码、配置模板与依赖锁文件
+相较上述 `7925f14` 构建提交均未改变；未重复构建 frozen bundle，也没有发布 Release。
+最后仅补充此 CI 结果的文档提交使用 `[skip ci]`；代码验证绑定上述确切修复提交。
