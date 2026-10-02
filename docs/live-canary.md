@@ -89,10 +89,14 @@ prepare/submit 由人工核对医生和排班，**在已启用限制的同一标
 3. 手动登录、完成 CAPTCHA，停留目标医生页。面板 Settings →「筛选时间」关闭 Auto Start；
    Appointment From 填明确验证日期，Submit mode 选择 Manual confirm，点击 Save Settings。
    readonly 无需填写就诊人、卡号、病情或地址。关闭其它预约运行；Python 路径与 userscript 顺序验证。
+   验证期间保持该页可见。其它自动化任务操作同一 Chrome 时，先等其结束再验证；
+   独立窗口不能保证工具连接或页面可见性不受干扰，页面隐藏仍会触发安全停止。
 4. 展开「本机人工 canary」，点击「启用 canary 限制」，选 readonly，再点击「运行并人工确认」。
    仅确认 ready；保留两个 LIVE 复选框未选。默认最多三次查询、120 秒，最终动作必须为零。
 5. 返回本地弹窗的 `status`、`level`、`polls`、`submitCalls`、`state`，以及脚本是否由 Tampermonkey 加载。
    `submitCalls` 必须为 0；无号源或 blocker 不是成功现场证据。原始 HTML、cookie 和个人表单值留在本机。
+   失锁时摘要为 `leader_blocked`，保留已发起查询的计数；journal 异常仍返回 `OUTCOME_UNKNOWN`，
+   必须在原站核对，不能重置 journal 后重跑。
 
 允许用户脚本的步骤依据 [Chrome 官方说明](https://developer.chrome.com/docs/extensions/reference/api/userScripts)。
 完成一条路径并关闭其浏览器后，再运行另一条路径的 readonly；prepare/submit 仍遵守上文具体场景门槛。

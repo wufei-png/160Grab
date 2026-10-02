@@ -2557,23 +2557,24 @@
 
   async function runCanary(level, options = {}) {
     if (!['readonly', 'prepare', 'submit'].includes(level)) throw new Error('Explicit canary level required');
-    if (activeCanary || browserLeader) return {status:'leader_blocked', level};
+    const emptyResult = (status) => ({status, level, polls:0, submitCalls:0, state:null});
+    if (activeCanary || browserLeader) return emptyResult('leader_blocked');
     globalThis.sessionStorage.setItem(CANARY_KEY, 'locked');
     stopRun();
     const maxPolls = options.maxPolls ?? 3;
     const timeoutMs = options.timeoutMs ?? 120000;
     if (!Number.isInteger(maxPolls) || maxPolls < 1 || maxPolls > 10 || !Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 600000) throw new Error('Invalid canary budget');
-    if (level === 'submit' && !(options.LIVE_E2E === 1 && options.LIVE_BOOKING === 1)) return {status:'submit_gate_blocked', level};
+    if (level === 'submit' && !(options.LIVE_E2E === 1 && options.LIVE_BOOKING === 1)) return emptyResult('submit_gate_blocked');
     const settings = readSettings();
-    if (!validFormDate(options.date) || (!isResolvedTarget(options.target) || options.target.unitId === '0')) return {status:'missing_target', level};
-    if (level !== 'readonly' && (!options.memberId || !settings.filters.hours.length)) return {status:'missing_scenario', level};
+    if (!validFormDate(options.date) || (!isResolvedTarget(options.target) || options.target.unitId === '0')) return emptyResult('missing_target');
+    if (level !== 'readonly' && (!options.memberId || !settings.filters.hours.length)) return emptyResult('missing_scenario');
     const policy = {level, valid:true, deadline:leaderNow()+timeoutMs, prepareApproved:false, approvedSubmission:null, liveE2e:options.LIVE_E2E === 1, liveBooking:options.LIVE_BOOKING === 1, polls:0, submitCalls:0};
     activeCanary = policy;
     const approve = options.ready ?? (async (phase, message) => globalThis.confirm(`${phase}: ${message}\nConfirm this specific local canary. No mixed runners. Unknown outcome requires original-site verification.`));
     let timer;
     const result = (status, state = null) => ({status, level, polls:policy.polls, submitCalls:policy.submitCalls, state});
     try {
-      return await withBrowserLeader(async (owner) => {
+      const outcome = await withBrowserLeader(async (owner) => {
         const guard = () => canaryAlive(policy) && ownsBrowserLeader(owner) && bookingSettingsMatch(settings);
         const work = async () => {
           if (!await approve('ready', 'Log in manually and verify the current target page.') || !guard()) return result('not_ready');
@@ -2620,6 +2621,10 @@
         };
         return await Promise.race([work(), new Promise(resolve => { timer = setTimeout(() => { policy.valid = false; resolve(result('inconclusive_timeout', policy.submitCalls ? 'OUTCOME_UNKNOWN' : null)); }, Math.max(0, policy.deadline-leaderNow())); })]);
       });
+      // The shared leader helper returns controller states when it blocks or fences work.
+      if (outcome === 'AWAITING_MANUAL_CONFIRMATION') return result('leader_blocked', outcome);
+      if (outcome === 'OUTCOME_UNKNOWN') return result('stopped', outcome);
+      return outcome;
     } catch (_error) { return result('stopped', policy.submitCalls ? 'OUTCOME_UNKNOWN' : null); }
     finally { policy.valid = false; clearTimeout(timer); activeCanary = null; }
   }

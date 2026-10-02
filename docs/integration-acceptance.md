@@ -236,6 +236,36 @@ browser smoke、config bootstrap、ZIP/checksum 生成及 artifact 上传；rele
 未新建 tag 或发布 Release。最后仅补充此验收文档的提交使用 `[skip ci]`，代码验证绑定上述确切提交，
 避免为结果记录重复执行已通过的测试；该机制见 [GitHub 文档](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs)。
 
-现场仍为旧版 v0.2.16 已停止状态，当前 v0.3.0 源码已复制到本机剪贴板。
+上述记录时现场为旧版 v0.2.16 已停止状态，当前 v0.3.0 源码已复制到本机剪贴板。
 工具不能访问扩展编辑页所用协议，需用户在原脚本编辑区全选、粘贴、保存，随后完成医生页登录并刷新。
 完成后再运行最多 3 次查询/120 秒的 readonly canary；当前未把旧脚本观察记为新实现的 sandbox 正证据。
+
+### 2026-10-03 新版现场检查（尚未完成 readonly）
+
+用户报告已更新并登录。现已实际读到医生页的 `160Grab v0.3.0` 面板，
+并通过可见 Settings 控件保存 Auto Start 关闭、Submit mode 为 Manual confirm、
+Appointment From 为 `2026-10-03`。面板确认自动提交 off、已停止。
+readonly 控件中 `LIVE_E2E=1` 与 `LIVE_BOOKING=1` 均未选，已启用 canary 限制。
+
+本机 ready 确认后的一个完整弹窗事件摘要为：
+
+```json
+{"status":"not_ready","level":"readonly","polls":0,"submitCalls":0,"state":null}
+```
+
+其他尝试遇到浏览器控制连接超时、活跃窗口切换和 leader unavailable，尚未取得完整查询结果。
+上述摘要证明该次尝试没有发起查询或提交；不能扩展为所有中断尝试的计数，
+也不构成登录有效、排班查询成功或完整 Tampermonkey readonly 验收的证据。
+已尝试将医生页移至独立 Chrome 窗口，快速接受 ready 后仍收到字符串
+`"AWAITING_MANUAL_CONFIRMATION"`。独立窗口未完成本次 readonly 验收；
+其它浏览器自动化任务仍在操作，需要等其结束后顺序验证。
+未填写个人预约字段、未执行真实预约、未清除未决 journal；仅记录闭合状态和安全开关。
+
+该字符串同时暴露了 canary 结果报告缺口：共享 leader helper 在阻断、失锁或 journal 异常时
+返回 controller 状态字符串，`runCanary` 原样返回，丢失安全摘要中的计数。
+现将手动确认状态归一为 `leader_blocked`、未知结果归一为 `stopped` + `OUTCOME_UNKNOWN`，
+保留当前 policy 的查询/提交计数；启动前阻断也返回完整五字段摘要。
+没有修改 Web Lock、TTL、页面隐藏停止、提交门槛或 journal 保留逻辑。
+新增回归覆盖无 Web Locks、隐藏页面、锁竞争、损坏 journal、查询中失锁及晚到回调：
+修复前 5 failed；修复后 canary/coordination 30 passed。Ruff 与 Node 语法检查通过。
+本次修复尚未安装到现场，真实查询验收仍待下一次运行。
