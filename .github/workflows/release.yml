@@ -112,7 +112,7 @@ jobs:
           "$bundle_dir/160Grab"
           test -f "$config_path"
       - name: Upload release artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.label }}
           path: |
