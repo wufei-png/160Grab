@@ -9,10 +9,14 @@ const options = input.options.map((option) => ({
   getAttribute: (name) => name === "val" ? option.value : null,
   textContent: option.label,
   click: () => { clickCount += 1; },
+  getClientRects: () => [1],
+  matches: () => false,
+  closest: () => null,
 }));
 const sandbox = {
   console,
   URL,
+  getComputedStyle: () => ({visibility: "visible"}),
   setTimeout,
   clearTimeout,
   location: new URL("https://synthetic.invalid/guahao/ystep1/synthetic.html"),

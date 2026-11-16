@@ -37,6 +37,21 @@ def test_conflicting_existing_values_are_preserved_without_any_click_proposal():
     assert not result["can_prepare"]
 
 
+@pytest.mark.parametrize(
+    "existing,allowed", [("synthetic-new", True), ("synthetic-old", False), ("", False)]
+)
+def test_explicit_address_override_requires_the_page_to_already_match(
+    existing, allowed
+):
+    html = BASE.replace(
+        'name="mid" value="synthetic-member"',
+        'name="mid" value="synthetic-member" address="synthetic-old"',
+    ).format(fields=f'<input name="address" value="{existing}">')
+    result = decide(snapshot_html(html), SELECTION, {"address.detail": "synthetic-new"})
+    assert ("address.detail.conflict" not in result["blockers"]) is allowed
+    assert result["writes"] == []
+
+
 def test_missing_required_fields_do_not_get_fabricated_values():
     snapshot = snapshot_html(
         BASE.format(

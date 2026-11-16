@@ -77,3 +77,30 @@ async def test_booking_parsers_share_real_chromium_dom(chromium_page, scenario):
     )
     assert await page.evaluate("globalThis.__syntheticSubmits") == 0
     assert unexpected_requests == []
+
+
+async def test_booking_parsers_skip_hidden_time_before_available_time(chromium_page):
+    page = chromium_page
+    html = """<style>.unavailable { display: none }</style>
+      <input name="schedule_id" value="slot">
+      <ul id="delts">
+        <li class="unavailable" val="hidden">08:30-09:00</li>
+        <li val="available">09:00-09:30</li>
+      </ul><button id="submitbtn">Submit</button>"""
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    strategy = PageBookingStrategy(page, GrabConfig(hours=["08:00-10:00"]))
+    strategy.prepare_target(unit_id="u", dept_id="d", member_id="member")
+    form = await strategy.fetch_booking_form("slot")
+    assert form.appointment_value == "available"
+
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true")
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
+    assert (
+        await page.evaluate("""() =>
+        __GRAB160_DOCTOR_POLLER_TEST_HOOKS__
+          .parseBookingFormState({hours:['08:00-10:00']}, '').appointmentValue
+    """)
+        == "available"
+    )

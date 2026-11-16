@@ -8,6 +8,7 @@ from grab.booking.form import SUBMIT_SELECTOR, snapshot_html
 from grab.booking.page import (
     apply_decision,
     read_decision,
+    read_snapshot,
     selected_member_ready,
 )
 from grab.canary.policy import current_policy
@@ -75,12 +76,18 @@ class PageBookingStrategy:
         self.target = target
         self.member_id = member_id
 
-    def parse_booking_form(self, booking_page_html: str, member_id: str) -> BookingForm:
-        snapshot = snapshot_html(booking_page_html)
+    def parse_booking_form(
+        self, booking_page_html: str, member_id: str, *, snapshot=None
+    ) -> BookingForm:
+        snapshot = (
+            snapshot if snapshot is not None else snapshot_html(booking_page_html)
+        )
         schedule_id = (
             snapshot["schedule_ids"][0] if len(snapshot["schedule_ids"]) == 1 else ""
         )
-        appointment_options = self._parse_appointment_options(booking_page_html)
+        appointment_options = self._parse_appointment_options(
+            booking_page_html, snapshot=snapshot
+        )
         appointment_value, appointment_label = self._select_appointment_option(
             booking_page_html,
             appointment_options,
@@ -140,12 +147,15 @@ class PageBookingStrategy:
         return None, None
 
     def _parse_appointment_options(
-        self, booking_page_html: str
+        self, booking_page_html: str, *, snapshot=None
     ) -> list[tuple[str, str]]:
+        snapshot = (
+            snapshot if snapshot is not None else snapshot_html(booking_page_html)
+        )
         return [
             (t["value"], t["label"])
-            for t in snapshot_html(booking_page_html)["times"]
-            if t["value"] and t["label"]
+            for t in snapshot["times"]
+            if t["value"] and t["label"] and t["actionable"]
         ]
 
     def _appointment_matches_hours(self, label: str) -> bool:
@@ -210,7 +220,10 @@ class PageBookingStrategy:
             )
         html = await self.page.content()
         raise_if_rate_limited(html, context="booking form page")
-        form = self.parse_booking_form(html, member_id=self.member_id)
+        snapshot = await read_snapshot(self.page)
+        form = self.parse_booking_form(
+            html, member_id=self.member_id, snapshot=snapshot
+        )
         if form.schedule_id != slot_id:
             form.is_valid = False
             form.invalid_reason = "schedule_mismatch"
@@ -236,10 +249,24 @@ class PageBookingStrategy:
         for attempt in range(3):
             snapshot, decision = await read_decision(self.page, form, self.config)
             if decision["can_prepare"]:
-                await apply_decision(self.page, snapshot, decision, guard=check_leader)
+                try:
+                    await apply_decision(
+                        self.page, snapshot, decision, guard=check_leader
+                    )
+                except PlaywrightTimeoutError:
+                    # An overlay or changing page can intercept input. Leave the
+                    # page open for a human; Playwright errors may contain form data.
+                    form.is_valid = False
+                    form.invalid_reason = "required_fields_blocked"
+                    form.blockers = ["form.action_blocked"]
+                    return
                 snapshot, decision = await read_decision(self.page, form, self.config)
             form.blockers = decision["blockers"]
-            if not form.blockers and selected_member_ready(snapshot, decision):
+            if (
+                not form.blockers
+                and not decision["writes"]
+                and selected_member_ready(snapshot, decision)
+            ):
                 return
             deterministic = any(
                 b.endswith((".conflict", ".ambiguous", ".mismatch", ".blocked"))
@@ -248,6 +275,12 @@ class PageBookingStrategy:
             if deterministic or attempt == 2:
                 break
             await asyncio.sleep(0.25)
+        if not form.blockers:
+            form.blockers = [
+                "form.pending_writes"
+                if decision["writes"]
+                else "form.selection_incomplete"
+            ]
         form.is_valid = False
         form.invalid_reason = "required_fields_blocked"
 
@@ -419,6 +452,22 @@ class PageBookingStrategy:
         return form
 
     @exclusive_operation
+    async def reprepare_open_form(self, form: BookingForm) -> BookingForm:
+        # A human can resolve site-required fields without reopening a slot.
+        # Never use this path to revive a mismatch or an unresolved submission.
+        if (
+            form.invalid_reason != "required_fields_blocked"
+            or self.blocked_result()
+            or not booking_page_matches(
+                self.page, self.build_booking_url(form.schedule_id)
+            )
+        ):
+            return form
+        form.is_valid, form.invalid_reason, form.blockers = True, None, []
+        await self.fill_booking_form(form)
+        return form
+
+    @exclusive_operation
     async def submit_open_form(self, form: BookingForm) -> BookingResult:
         return await self.submit_booking_via_page(form)
 
@@ -530,6 +579,10 @@ class BookingService:
     async def open_booking_form(self, slot) -> BookingForm:
         self.page_strategy.expected_date = slot.date or None
         return await self.page_strategy.open_booking_form(slot.schedule_id)
+
+    @exclusive_operation
+    async def reprepare_open_form(self, form: BookingForm) -> BookingForm:
+        return await self.page_strategy.reprepare_open_form(form)
 
     @exclusive_operation
     async def submit_open_form(self, form: BookingForm) -> BookingResult:

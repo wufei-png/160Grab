@@ -7,7 +7,7 @@ import pytest
 
 from grab.browser.page_api import BrowserPageApi
 from grab.browser.playwright_client import PlaywrightClient
-from grab.canary.runner import CanaryRunner
+from grab.canary.runner import CanaryRunner, safe_blockers
 from grab.core.leader import leader_scope
 from grab.models.schemas import GrabConfig
 from grab.services.booking import BookingService, PageBookingStrategy
@@ -34,6 +34,7 @@ def _build_live_config():
         brush_start_date=os.environ["LIVE_DATE"],
         booking={
             "clinic_card": os.getenv("LIVE_CARD"),
+            "first_visit": os.getenv("LIVE_FIRST_VISIT") == "1",
             "disease_description": os.getenv("LIVE_DISEASE"),
             "address": {
                 k: os.getenv("LIVE_ADDRESS_" + k.upper())
@@ -48,7 +49,12 @@ async def terminal_ready(phase, private):
     # No executor thread left reading a future operator response after timeout.
     if not sys.stdin.isatty() or os.name != "posix":
         return False
-    word = {"ready": "READY", "prepare": "PREPARE", "submit": "SUBMIT"}[phase]
+    word = {
+        "ready": "READY",
+        "prepare": "PREPARE",
+        "repair": "REPAIR",
+        "submit": "SUBMIT",
+    }[phase]
     if private:
         target, item, config = private
         print(
@@ -60,6 +66,14 @@ async def terminal_ready(phase, private):
         if phase == "prepare":
             print(
                 "允许选择就诊人/时段及填写显式配置字段；请在本机核对全部字段。",
+                flush=True,
+            )
+        elif phase == "repair":
+            print(
+                f"当前阻断分类：{', '.join(safe_blockers(item.blockers))}", flush=True
+            )
+            print(
+                "请在当前预约页处理真实字段和医院规则，再继续复核；不会自动提交。",
                 flush=True,
             )
         else:
@@ -151,6 +165,7 @@ async def live_runner(request):
                 timeout_seconds=timeout,
                 live_e2e=True,
                 live_booking=os.getenv("LIVE_BOOKING") == "1",
+                allow_manual_repair=True,
             )
         finally:
             await client.close()

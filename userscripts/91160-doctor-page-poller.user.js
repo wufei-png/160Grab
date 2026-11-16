@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.3.1
+// @version      0.3.6
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -21,7 +21,7 @@
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
   const PANEL_TOOLTIP_ID = "grab160-doctor-page-poller-tooltip";
-  const SCRIPT_VERSION = "0.3.1";
+  const SCRIPT_VERSION = "0.3.6";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -79,6 +79,7 @@
       autoReturnAfterSubmitFailure: false,
       diseaseDescription: null,
       clinicCard: null,
+      firstVisit: false,
     },
     session: {
       recoveryEnabled: true,
@@ -352,6 +353,7 @@
         diseaseDescription:
           normalizeOptionalValue(merged.booking.diseaseDescription),
         clinicCard: normalizeOptionalValue(merged.booking.clinicCard),
+        firstVisit: normalizeBoolean(merged.booking.firstVisit, false),
       },
       session: {
         recoveryEnabled: normalizeBoolean(merged.session.recoveryEnabled, true),
@@ -1688,7 +1690,7 @@
         label: compactText(element.textContent),
         element,
       }))
-      .filter((option) => option.value && option.label);
+      .filter((option) => option.value && option.label && formActionable(option.element));
   }
 
   function chooseAppointmentOption(options, filters) {
@@ -1755,6 +1757,10 @@
     return Boolean(node && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden' && !node.matches(':disabled') && !node.closest('[aria-disabled="true"]'));
   }
 
+  function timeSelected(node) {
+    return node.classList.contains('selected') || node.classList.contains('cur');
+  }
+
   function scheduleRecordDates(raw, scheduleId) {
     try {
       const bytes = new TextEncoder().encode(raw);
@@ -1809,24 +1815,45 @@
 
   function readBookingSnapshot() {
     const all = selector => Array.from(document.querySelectorAll(selector));
+    // The current PKU Shenzhen page uses these legacy flags for a different
+    // hospital's record workflow. Fall back to the conservative policy if the
+    // hospital or its observed validation markers cannot be verified.
+    let pkuProfile = false, cardOptional = false;
+    if (location.origin === 'https://www.91160.com' && parseBookingUrl(location.href)?.unitId === '21') {
+      const units = all('input#unit_id[name="unit_id"]');
+      const code = Array.from(document.scripts || []).filter(n => !n.src).map(n => n.textContent).join('\n');
+      const unitFlags = [...code.matchAll(/var\s+unit_id\s*=\s*(?:'([0-9]+)'|"([0-9]+)"|([0-9]+))\s*;/g)];
+      const flags = [...code.matchAll(/var\s+is_today_guahao_flag\s*=\s*(?:'([01]?)'|"([01]?)")\s*;/g)];
+      pkuProfile = units.length === 1 && unitFlags.length > 0 && unitFlags.every(m => (m[1] ?? m[2] ?? m[3]) === '21') && all('#suborder').length === 1 &&
+        flags.length === 1 && /function\s+checkOrderButton\s*\(/.test(code) &&
+        /if\s*\(\s*unit_id\s*==\s*111\s*\)/.test(code) &&
+        /if\s*\(\s*is_today_guahao_flag\s*==\s*1\s*\)/.test(code);
+      cardOptional = pkuProfile && (flags[0][1] ?? flags[0][2]) !== '1';
+    }
     const snapshot = {version:1, schedule_ids:all('[name="schedule_id"]').map(n => n.value.trim()), members:[], hidden_members:[], times:[], dates:[], fields:{}, submit:all(SUBMIT_SELECTOR).map(formActionable), other_required:[]};
     snapshot.hidden_members = all('input[type="hidden"]').filter(n => ['member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => n.value.trim());
     all('input[type="radio"]').forEach((n, index) => {
       if (!['mid','member_id','memberid','his_mem_id'].includes(n.name.toLowerCase()) && !n.hasAttribute('data-member-id') && !n.hasAttribute('data-mid')) return;
       const container = n.closest('tr,li,label,.patient_item,.member_item,.person_item') || n.parentElement;
+      let dataTitle = n.getAttribute('data-title') || '';
+      if (pkuProfile && dataTitle === '您当前的就诊人信息审核中，暂不能预约挂号' &&
+          n.parentElement?.classList.contains('tips_wrap') && !n.parentElement.querySelector('.tips_box2')) dataTitle = '';
       snapshot.members.push({ids:[...new Set([n.value.trim(), n.getAttribute('data-member-id'), n.getAttribute('data-mid')].filter(Boolean))], label:compactText(container.textContent), index,
         actionable:formActionable(n), checked:n.checked,
-        blocked:n.getAttribute('need_check') === '1' || ['record_created','is_complete','is_info_complete'].some(k => n.getAttribute(k) === '0') || /暂不能预约|审核中|认证|建档/.test((n.getAttribute('data-title') || '') + (n.title || '')),
+        blocked:(n.getAttribute('isneedcustodian') === '1' && ['', '0'].includes(n.getAttribute('guardianid') || '')) ||
+          (!pkuProfile && (n.getAttribute('need_check') === '1' || ['record_created','is_complete','is_info_complete'].some(k => n.getAttribute(k) === '0'))) ||
+          /暂不能预约|审核中|认证|建档/.test(dataTitle + (n.title || '')),
         address:Object.fromEntries([['province','province_id'],['city','city_id'],['area','area_id'],['detail','address']].map(([k,a]) => [k,n.getAttribute(a) || '']))});
     });
-    snapshot.times = all('#delts li[val]').map(n => ({value:n.getAttribute('val').trim(),label:compactText(n.textContent),actionable:formActionable(n),selected:n.classList.contains('selected')}));
+    snapshot.times = all('#delts li[val]').map(n => ({value:n.getAttribute('val').trim(),label:compactText(n.textContent),actionable:formActionable(n),selected:timeSelected(n)}));
     const known = new Set();
     Object.entries(FORM_FIELDS).forEach(([key, selector]) => {
       const nodes = all(selector).filter(n => ['INPUT','SELECT','TEXTAREA'].includes(n.tagName));
       if (!nodes.length) return;
       snapshot.fields[key] = nodes.map(n => {
         known.add(n);
-        return {value:n.value.trim(), checked:Boolean(n.checked), actionable:!n.matches(':disabled') && !n.readOnly && (formActionable(n) || n.type === 'hidden'), kind:n.tagName.toLowerCase(),
+        const optional = pkuProfile && (['disease_input','disease_content'].includes(key) || (key === 'card' && cardOptional)) && !n.required && n.getAttribute('aria-required') !== 'true';
+        return {value:n.value.trim(), checked:Boolean(n.checked), actionable:!n.matches(':disabled') && !n.readOnly && (formActionable(n) || n.type === 'hidden'), kind:n.tagName.toLowerCase(), ...(optional ? {optional:true} : {}),
           options:Array.from(n.options || []).map(o => ({value:o.value,label:compactText(o.textContent),disabled:o.disabled || (o.parentElement.tagName === 'OPTGROUP' && o.parentElement.disabled)}))};
       });
     });
@@ -1883,11 +1910,11 @@
       if (key.startsWith('address.') && member) {
         const memberValue = member.address[key.split('.')[1]] || '';
         if (memberValue) {
-          if (desired && desired !== memberValue) {
-            const options = f.options.filter(o => o.value === desired || o.label === desired);
-            if (!(options.length === 1 && options[0].value === memberValue)) blockers.push(key + '.conflict');
-          }
-          desired = memberValue; source = 'member';
+          const options = f.options.filter(o => !o.disabled && (o.value === desired || o.label === desired));
+          const desiredValue = options.length === 1 ? options[0].value : desired;
+          if (desired && desiredValue !== memberValue) {
+            if (existing !== desiredValue) blockers.push(key + '.conflict');
+          } else { desired = memberValue; source = 'member'; }
         }
       }
       if (key === 'date') { desired = dates.length === 1 ? dates[0] : ''; source = desired ? 'schedule' : null; }
@@ -1910,7 +1937,7 @@
         sources[key] = source;
         if (!f.actionable) blockers.push(key + '.disabled');
         else writes.push({field:key,value:desired,kind:f.kind});
-      } else { sources[key] = 'missing'; blockers.push(key + '.required'); }
+      } else { sources[key] = 'missing'; if (!f.optional || (key === 'card' && values.first_visit !== true)) blockers.push(key + '.required'); }
     });
     if (!snapshot.other_required.every(Boolean)) blockers.push('other.required');
     if (JSON.stringify(snapshot.submit) !== '[true]') blockers.push('submit.control');
@@ -1924,7 +1951,7 @@
   }
 
   function formValues(addressConfig = {}, bookingConfig = {}) {
-    return {card:bookingConfig.clinicCard, disease_input:bookingConfig.diseaseDescription, disease_content:bookingConfig.diseaseDescription,
+    return {card:bookingConfig.clinicCard, first_visit:bookingConfig.firstVisit, disease_input:bookingConfig.diseaseDescription, disease_content:bookingConfig.diseaseDescription,
       ...Object.fromEntries(['province','city','area','detail'].map(k => ['address.' + k,addressConfig[k]]))};
   }
 
@@ -1951,7 +1978,7 @@
     if (decision.appointment_value) {
       const matches = Array.from(document.querySelectorAll('#delts li[val]')).filter(n => n.getAttribute('val') === decision.appointment_value);
       if (matches.length !== 1 || !formActionable(matches[0])) return;
-      if (!matches[0].classList.contains('selected')) { if (!guard()) throw new Error('cancelled'); matches[0].click(); }
+      if (!timeSelected(matches[0])) { if (!guard()) throw new Error('cancelled'); matches[0].click(); }
     }
     for (const write of decision.writes) {
       const controls = Array.from(document.querySelectorAll(FORM_FIELDS[write.field]));
@@ -1969,7 +1996,8 @@
   function resolveMemberSelection(memberConfig) {
     const snapshot = readBookingSnapshot();
     const decision = decideBookingPreparation(snapshot, {member_id:memberConfig.memberId,member_label:memberConfig.memberLabel,schedule_id:snapshot.schedule_ids[0],appointment_value:snapshot.times[0]?.value});
-    if (decision.blockers.some(b => b.startsWith('member.'))) return {ok:false, reason:'Member selection requires manual action.'};
+    const blocker = decision.blockers.find(b => b.startsWith('member.'));
+    if (blocker) return {ok:false, reason:'Member selection requires manual action.', blocker};
     return {ok:true,memberId:decision.member_id,radio:decision.member_index === null ? null : document.querySelectorAll('input[type="radio"]')[decision.member_index]};
   }
 
@@ -2557,7 +2585,7 @@
         const current = parseBookingUrl(location.href);
         const state = JSON.parse(sessionStorage.getItem(STATE_KEY) || '{}');
         const pending = state.pendingBooking;
-        const target = pending || settings?.target;
+        const target = pending || (current && settings ? canaryBookingTarget(current, settings) : null);
         resolved = Boolean(current && isResolvedTarget(target) && areTargetsCompatible(settings?.target,target) &&
           target.unitId === current.unitId && target.depId === current.depId && (!pending || pending.scheduleId === current.scheduleId));
       }
@@ -2572,6 +2600,7 @@
   // A canary latch survives navigation/reload, but approvals are memory-only.
   // Start/reset/valid product consent cannot turn a low-level canary into auto.
   const CANARY_KEY = 'grab160.canary.v1';
+  const CANARY_TARGET_KEY = 'grab160.canaryTarget.v1';
   let activeCanary = null;
   function canaryLatched() {
     try { return globalThis.sessionStorage?.getItem(CANARY_KEY) !== null && globalThis.sessionStorage?.getItem(CANARY_KEY) !== undefined; }
@@ -2595,11 +2624,36 @@
     stopRun();
   }
 
+  function canaryBookingTarget(booking, settings) {
+    const raw = globalThis.sessionStorage.getItem(CANARY_TARGET_KEY);
+    if (raw === null) return settings.target; // Existing explicitly configured target.
+    try {
+      const saved = JSON.parse(raw);
+      return isResolvedTarget(saved.target) && areTargetsCompatible(settings.target, saved.target) &&
+        saved.date === settings.filters.startDate && saved.target.unitId === booking.unitId &&
+        saved.target.depId === booking.depId && Array.isArray(saved.scheduleIds) &&
+        saved.scheduleIds.includes(booking.scheduleId) ? saved.target : null;
+    } catch (_error) { return null; }
+  }
+
+  function canaryBlockers(preparation) {
+    const allowed = new Set(['member.blocked', 'member.mismatch', 'member.ambiguous',
+      'schedule.mismatch', 'time.mismatch', 'date.conflict', 'other.required', 'submit.control']);
+    for (const field of Object.keys(FORM_FIELDS)) {
+      for (const suffix of ['ambiguous', 'conflict', 'option', 'disabled', 'required']) allowed.add(`${field}.${suffix}`);
+    }
+    const blockers = preparation?.readiness?.missing;
+    if (!Array.isArray(blockers) || !blockers.length) return ['unclassified'];
+    const safe = blockers.filter(code => allowed.has(code));
+    if (safe.length !== blockers.length) safe.push('unclassified');
+    return [...new Set(safe)].sort();
+  }
+
   async function runCanaryFromPanel(body) {
     const settings = readSettings();
     const level = body.querySelector('[data-canary-level]').value;
     const booking = parseBookingUrl(location.href);
-    const resolved = booking ? {target:settings.target} : resolveTargetFromSnapshot(snapshotCurrentDoctorPage(), settings.target);
+    const resolved = booking ? {target:canaryBookingTarget(booking, settings)} : resolveTargetFromSnapshot(snapshotCurrentDoctorPage(), settings.target);
     const options = {target:resolved.target, date:settings.filters.startDate, memberId:settings.member.memberId,
       scheduleId:booking?.scheduleId, LIVE_E2E:body.querySelector('[data-canary-e2e]').checked ? 1 : 0,
       LIVE_BOOKING:body.querySelector('[data-canary-booking]').checked ? 1 : 0};
@@ -2610,6 +2664,7 @@
 
   async function runCanary(level, options = {}) {
     if (!['readonly', 'prepare', 'submit'].includes(level)) throw new Error('Explicit canary level required');
+    if (level === 'readonly') globalThis.sessionStorage.removeItem(CANARY_TARGET_KEY);
     const emptyResult = (status) => ({status, level, polls:0, submitCalls:0, state:null});
     if (activeCanary || browserLeader) return emptyResult('leader_blocked');
     globalThis.sessionStorage.setItem(CANARY_KEY, 'locked');
@@ -2625,7 +2680,7 @@
     activeCanary = policy;
     const approve = options.ready ?? (async (phase, message) => globalThis.confirm(`${phase}: ${message}\nConfirm this specific local canary. No mixed runners. Unknown outcome requires original-site verification.`));
     let timer;
-    const result = (status, state = null) => ({status, level, polls:policy.polls, submitCalls:policy.submitCalls, state});
+    const result = (status, state = null, reason = null, blockers = null) => ({status, level, polls:policy.polls, submitCalls:policy.submitCalls, state, ...(reason ? {reason} : {}), ...(blockers ? {blockers} : {})});
     try {
       const outcome = await withBrowserLeader(async (owner) => {
         const guard = () => canaryAlive(policy) && ownsBrowserLeader(owner) && bookingSettingsMatch(settings);
@@ -2650,7 +2705,13 @@
               if (assessment.state === 'RATE_LIMITED') return result('rate_limited');
               if (assessment.state !== 'VALID') return result(assessment.state === 'EXPIRED' ? 'login_required' : assessment.failureClass === 'schema_drift' ? 'schema_blocked' : 'session_blocked');
               const slots = filterSlots(parseDoctorSchedulePayload(payload, resolved.target), resolved.target, settings.filters).filter(s => s.date === options.date && s.unitId === resolved.target.unitId && s.depId === resolved.target.depId);
-              if (slots.some(s => s.status === 'available')) return result('observed');
+              const available = slots.filter(s => s.status === 'available' && s.scheduleId);
+              if (available.length) {
+                globalThis.sessionStorage.setItem(CANARY_TARGET_KEY, JSON.stringify({
+                  target:resolved.target, date:options.date, scheduleIds:available.map(s => s.scheduleId),
+                }));
+                return result('observed');
+              }
               if (i + 1 < maxPolls) await sleepMs(Math.max(3000, pickDelayMs(settings.pacing.pollMs)));
             }
             return result('inconclusive_no_slots');
@@ -2662,12 +2723,13 @@
           const member = resolveMemberSelection({memberId:options.memberId});
           const form = parseBookingFormState(settings.filters, options.scheduleId);
           form.expectedDate = options.date;
-          if (!member.ok || !form.isValid || form.scheduleId !== options.scheduleId) return result('readiness_blocked');
+          if (!member.ok) return result('readiness_blocked', null, member.blocker);
+          if (!form.isValid || form.scheduleId !== options.scheduleId) return result('readiness_blocked', null, 'booking_form');
           const description = `${options.target.unitId}/${options.target.depId}/${options.target.doctorId}; member ${member.memberId}; ${options.date}; schedule ${form.scheduleId}; time ${form.appointmentValue ?? ''}; fields from existing page/explicit settings`;
           if (!await approve('prepare', description) || !guard()) return result('prepare_not_approved');
           policy.prepareApproved = true;
           const preparation = await prepareBookingFormForSubmit(form, member, settings.address, settings.booking, {guard});
-          if (!preparation.ok || !guard()) return result('readiness_blocked');
+          if (!preparation.ok || !guard()) return result('readiness_blocked', null, 'preparation', canaryBlockers(preparation));
           if (level === 'prepare') return result('prepared', 'PREPARED');
           if (!await approve('submit', description + '; ONE FINAL CLICK') || !guard()) return result('submit_not_approved');
           policy.approvedSubmission = canaryScenario(options.target, form, member);
@@ -3417,7 +3479,7 @@
       </div>
       <div data-diagnostics hidden role="status"></div>
       <details><summary>本机人工 canary</summary>
-        <div>先保存具体目标、日期/时段、就诊人及字段；readonly 停留医生页，prepare/submit 手动打开对应预约页。</div>
+        <div>先保存日期/时段、就诊人及字段；在医生页运行 readonly，再于本标签手动打开匹配的预约页执行 prepare/submit。</div>
         <button type="button" data-canary-arm>启用 canary 限制</button>
         <select data-canary-level><option value="readonly">readonly</option><option value="prepare">prepare</option><option value="submit">submit</option></select>
         <label><input type="checkbox" data-canary-e2e>LIVE_E2E=1</label>
@@ -3621,6 +3683,8 @@
               "仅使用真实就诊卡；留空等待站点查询，证件号不会被复制为卡号。",
               `<input data-setting="booking.clinicCard" type="password" value="${htmlEscape(settings.booking.clinicCard ?? "")}">`,
             )}
+            ${renderCheck("booking.firstVisit", "首次到该院就诊，无门诊卡", settings.booking.firstVisit,
+              "只在本人确为首次就诊且医院允许无卡预约时勾选；当日号等明确要求卡号的情况仍会停止。")}
             ${renderField(
               "Max pre-submit attempts",
               "仅提交前准备重试，最多三次；进入提交边界后不再重试。",
@@ -3771,6 +3835,7 @@
       "booking.autoReturnAfterSubmitFailure",
       "booking.diseaseDescription",
       "booking.clinicCard",
+      "booking.firstVisit",
       "booking.maxPreSubmitAttempts",
       "session.recoveryEnabled",
       "session.keepAliveIntervalSeconds",

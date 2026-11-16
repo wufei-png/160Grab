@@ -7,6 +7,13 @@ from grab.models.schemas import BookingResult, BookingState, RunResult
 from grab.transactions.store import AttemptStore, StoreBlocked
 
 
+def test_default_test_store_is_isolated(tmp_path):
+    store = AttemptStore()
+    assert store.root == tmp_path / "synthetic-transactions"
+    assert store.pending() == []
+    assert (store.root / "journal.json").is_file()
+
+
 def test_result_false_never_implies_retry():
     assert (
         BookingResult(success=False).state == BookingState.AWAITING_MANUAL_CONFIRMATION

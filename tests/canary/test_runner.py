@@ -92,6 +92,60 @@ async def test_rejected_specific_approval_does_not_prepare():
     runner.booking.open_booking_form.assert_not_called()
 
 
+async def test_prepare_reports_only_allowlisted_readiness_blockers():
+    runner = setup_runner()
+    runner.booking.open_booking_form.return_value = BookingForm(
+        member_id="member",
+        schedule_id="slot",
+        is_valid=False,
+        blockers=["member.blocked", "accept.required", "SYN_PRIVATE_VALUE"],
+    )
+    result = await runner.run("prepare")
+    assert result.status == "readiness_blocked"
+    assert result.blockers == ("accept.required", "member.blocked", "unclassified")
+    assert result.submit_calls == 0
+    runner.booking.submit_open_form.assert_not_called()
+
+
+async def test_manual_repair_rechecks_the_same_form_before_submit():
+    runner = setup_runner(allow_manual_repair=True, live_e2e=True, live_booking=True)
+    blocked = BookingForm(
+        member_id="member",
+        schedule_id="slot",
+        is_valid=False,
+        invalid_reason="required_fields_blocked",
+        blockers=["accept.required"],
+    )
+    repaired = BookingForm(member_id="member", schedule_id="slot")
+    runner.booking.open_booking_form.return_value = blocked
+    runner.booking.reprepare_open_form = AsyncMock(return_value=repaired)
+    result = await runner.run("submit")
+    assert [c.args[0] for c in runner.ready.call_args_list] == [
+        "ready",
+        "prepare",
+        "repair",
+        "submit",
+    ]
+    runner.booking.reprepare_open_form.assert_awaited_once_with(blocked)
+    runner.booking.submit_open_form.assert_awaited_once_with(repaired)
+    assert result.submit_calls == 1
+
+
+async def test_rejected_manual_repair_never_submits():
+    runner = setup_runner(allow_manual_repair=True, live_e2e=True, live_booking=True)
+    runner.booking.open_booking_form.return_value = BookingForm(
+        member_id="member",
+        schedule_id="slot",
+        is_valid=False,
+        invalid_reason="required_fields_blocked",
+        blockers=["accept.required"],
+    )
+    runner.ready.side_effect = [True, True, False]
+    result = await runner.run("submit")
+    assert result.status == "readiness_blocked" and result.submit_calls == 0
+    runner.booking.submit_open_form.assert_not_called()
+
+
 async def test_docid_only_resolution_before_poll():
     runner = setup_runner()
     runner.session._wait_for_doctor_target.return_value = DoctorPageTarget(

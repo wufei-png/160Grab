@@ -101,6 +101,301 @@ async def test_python_preparation_and_submit_contract(chromium_page, tmp_path, c
         assert await page.evaluate("window.selectionClicks") == 0
 
 
+async def test_both_paths_keep_an_already_selected_cur_time(chromium_page, tmp_path):
+    from tests.contracts.booking.scenarios import USERSCRIPT
+
+    page = chromium_page
+    html = """<meta charset="utf-8"><input name="schedule_id" value="slot">
+      <input type="radio" name="mid" value="member" checked>
+      <ul id="delts"><li val="time" class="cur">08:30-09:00<span class="cur"></span></li></ul>
+      <button id="submitbtn">Submit</button>"""
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto("https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html")
+    await page.evaluate("""() => {
+        window.timeClicks = 0;
+        document.querySelector('#delts li').addEventListener('click', () => timeClicks++);
+        window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true;
+    }""")
+    strategy = PageBookingStrategy(
+        page, GrabConfig(), attempt_store=AttemptStore(tmp_path)
+    )
+    strategy.prepare_target("u", "d", "member")
+    form = BookingForm(member_id="member", schedule_id="slot", appointment_value="time")
+    await strategy.fill_booking_form(form)
+    assert form.is_valid
+
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
+    result = await page.evaluate("""async () => {
+        const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+        return (await h.prepareBookingFormForSubmit(
+          {scheduleId:'slot', appointmentValue:'time'}, {memberId:'member'}, {}, {}
+        )).ok;
+    }""")
+    assert result is True
+    assert await page.evaluate("timeClicks") == 0
+
+
+@pytest.mark.parametrize(
+    "url_unit,site_unit,today,guardian,expected",
+    [
+        ("21", "21", "", "0", []),
+        ("21", "21", "1", "0", ["card.required"]),
+        ("21", "21", "", "1", ["member.blocked"]),
+        (
+            "21",
+            "other",
+            "",
+            "0",
+            ["card.required", "disease_input.required", "member.blocked"],
+        ),
+        (
+            "other",
+            "21",
+            "",
+            "0",
+            ["card.required", "disease_input.required", "member.blocked"],
+        ),
+    ],
+)
+async def test_verified_pku_site_flags_match_both_adapters(
+    chromium_page, url_unit, site_unit, today, guardian, expected
+):
+    from grab.booking.page import read_snapshot
+
+    page = chromium_page
+    html = f'''<form id="suborder">
+      <input id="unit_id" name="unit_id" value="{site_unit}">
+      <input name="schedule_id" value="slot">
+      <input type="radio" name="mid" value="member" checked need_check="1"
+             record_created="0" is_info_complete="0" isneedcustodian="{guardian}" guardianid="0">
+      <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul>
+      <input id="hismemid"><textarea name="disease_input"></textarea>
+      <input type="checkbox" id="check_yuyue_rule" checked><button id="submitbtn">Submit</button>
+      </form><script type="text/plain">var unit_id='{site_unit}'; var is_today_guahao_flag='{today}';
+      function checkOrderButton() {{ if(unit_id == 111) submitOrder(); if(is_today_guahao_flag==1) {{}} }}</script>'''
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto(
+        f"https://www.91160.com/guahao/ystep1/uid-{url_unit}/depid-d/schid-slot.html"
+    )
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true")
+    await load_userscript(page)
+    snapshot = await read_snapshot(page)
+    selection = {
+        "member_id": "member",
+        "schedule_id": "slot",
+        "appointment_value": "time",
+    }
+    from grab.booking.form import decide
+
+    values = {"first_visit": True}
+    python = decide(snapshot, selection, values)
+    js = await page.evaluate(
+        """({selection,values}) => {
+      const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+      const snapshot = h.readBookingSnapshot();
+      return {snapshot, decision:h.decideBookingPreparation(snapshot,selection,values)};
+    }""",
+        {"selection": selection, "values": values},
+    )
+    assert js["snapshot"] == snapshot
+    assert python["blockers"] == expected
+    assert js["decision"]["blockers"] == expected
+    if url_unit == site_unit == "21" and not today and guardian == "0":
+        assert "card.required" in decide(snapshot, selection)["blockers"]
+
+
+@pytest.mark.parametrize(
+    "tooltip,title,expected_blocked",
+    [
+        ("", "", False),
+        ('<span class="tips_box2">审核中</span>', "", True),
+        ("", "正在审核中", True),
+    ],
+)
+async def test_pku_ignores_only_the_unrendered_generic_audit_tooltip(
+    chromium_page, tooltip, title, expected_blocked
+):
+    from grab.booking.form import decide
+    from grab.booking.page import read_snapshot
+
+    page = chromium_page
+    html = f"""<meta charset="utf-8"><form id="suborder"><input id="unit_id" name="unit_id">
+      <input name="schedule_id" value="slot"><span class="tips_wrap">
+      <input type="radio" name="mid" value="member" checked need_check="1" record_created="0"
+        data-title="您当前的就诊人信息审核中，暂不能预约挂号" title="{title}">{tooltip}</span>
+      <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul><button id="submitbtn">Submit</button>
+      </form><script type="text/plain">var unit_id='21'; var is_today_guahao_flag='';
+      function checkOrderButton() {{ if(unit_id == 111) submitOrder(); if(is_today_guahao_flag==1) {{}} }}</script>"""
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto(
+        "https://www.91160.com/guahao/ystep1/uid-21/depid-d/schid-slot.html"
+    )
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true")
+    await load_userscript(page)
+    selection = {
+        "member_id": "member",
+        "schedule_id": "slot",
+        "appointment_value": "time",
+    }
+    snapshot = await read_snapshot(page)
+    js_snapshot = await page.evaluate(
+        "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readBookingSnapshot()"
+    )
+    assert js_snapshot == snapshot
+    assert (
+        "member.blocked" in decide(snapshot, selection)["blockers"]
+    ) is expected_blocked
+
+
+@pytest.mark.parametrize("existing", ["new", "old", ""])
+async def test_explicit_address_override_matches_both_adapters(chromium_page, existing):
+    from grab.booking.form import decide
+    from grab.booking.page import read_snapshot
+
+    page = chromium_page
+    html = f'''<form id="suborder"><input name="schedule_id" value="slot">
+      <input type="radio" name="mid" value="member" checked address="old">
+      <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul>
+      <input name="address" value="{existing}"><button id="submitbtn">Submit</button></form>'''
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto("https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html")
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true")
+    await load_userscript(page)
+    selection = {
+        "member_id": "member",
+        "schedule_id": "slot",
+        "appointment_value": "time",
+    }
+    values = {"address.detail": "new"}
+    snapshot = await read_snapshot(page)
+    python = decide(snapshot, selection, values)
+    js = await page.evaluate(
+        """({selection,values}) => {
+      const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+      return h.decideBookingPreparation(h.readBookingSnapshot(),selection,values);
+    }""",
+        {"selection": selection, "values": values},
+    )
+    assert js == python
+    assert ("address.detail.conflict" not in python["blockers"]) is (existing == "new")
+    assert python["writes"] == []
+
+
+async def test_manual_repair_rechecks_existing_form_without_reopening(
+    chromium_page, tmp_path
+):
+    page = chromium_page
+    html = """<form id="suborder"><input name="schedule_id" value="slot">
+      <input type="radio" name="mid" value="member" checked address="old">
+      <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul>
+      <input name="address" value="old"><input type="checkbox" id="check_yuyue_rule">
+      <button id="submitbtn">Submit</button></form>"""
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto("https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html")
+    strategy = PageBookingStrategy(
+        page,
+        GrabConfig(booking={"address": {"detail": "new"}}),
+        attempt_store=AttemptStore(tmp_path),
+    )
+    strategy.prepare_target("u", "d", "member")
+    form = BookingForm(member_id="member", schedule_id="slot", appointment_value="time")
+    await strategy.fill_booking_form(form)
+    assert not form.is_valid and "address.detail.conflict" in form.blockers
+    await page.locator('[name="address"]').fill("new")
+    await page.locator("#check_yuyue_rule").check()
+    await strategy.reprepare_open_form(form)
+    assert form.is_valid and not form.blockers
+
+    form.is_valid, form.invalid_reason = False, "required_fields_blocked"
+    await page.goto(
+        "https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-other.html"
+    )
+    await strategy.reprepare_open_form(form)
+    assert not form.is_valid
+
+
+async def test_overlay_interception_stops_and_can_be_repaired(chromium_page, tmp_path):
+    page = chromium_page
+    html = """<input name="schedule_id" value="slot">
+      <input type="radio" name="mid" value="member">
+      <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul>
+      <button id="submitbtn">Submit</button>
+      <div id="overlay" style="position:fixed;inset:0;z-index:99;background:white">
+        <button id="close" onclick="document.querySelector('#overlay').remove()">Close</button>
+      </div><script>window.submitClicks=0;
+      document.querySelector('#submitbtn').onclick=()=>window.submitClicks++;</script>"""
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto("https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html")
+    strategy = PageBookingStrategy(
+        page, GrabConfig(), attempt_store=AttemptStore(tmp_path)
+    )
+    strategy.prepare_target("u", "d", "member")
+    form = BookingForm(member_id="member", schedule_id="slot", appointment_value="time")
+    await strategy.fill_booking_form(form)
+    assert not form.is_valid and form.blockers == ["form.action_blocked"]
+    assert not await page.locator('input[name="mid"]').is_checked()
+    assert await page.evaluate("window.submitClicks") == 0
+
+    await page.locator("#close").click()
+    await strategy.reprepare_open_form(form)
+    assert form.is_valid and not form.blockers
+    assert await page.locator('input[name="mid"]').is_checked()
+    assert await page.evaluate("window.submitClicks") == 0
+
+
+@pytest.mark.parametrize("reset_area", [False, True])
+async def test_python_waits_for_cascaded_address_write(
+    chromium_page, tmp_path, reset_area
+):
+    page = chromium_page
+    html = """<meta charset="utf-8"><input name="schedule_id" value="slot">
+      <input type="radio" name="mid" value="member" checked>
+      <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul>
+      <select id="useraddress_city"><option value="0">选择城市</option>
+        <option value="city">深圳</option></select>
+      <select id="useraddress_area"><option value="0">选择区</option></select>
+      <button id="submitbtn">Submit</button><script>
+      const city = document.querySelector('#useraddress_city');
+      const area = document.querySelector('#useraddress_area');
+      city.addEventListener('change', () => {
+        area.innerHTML = '<option value="0">选择区</option><option value="area">南山区</option>';
+      });
+      if (RESET_AREA) area.addEventListener('change', () => { area.value = '0'; });
+      window.submitClicks = 0;
+      document.querySelector('#submitbtn').onclick = () => window.submitClicks++;
+      </script>""".replace("RESET_AREA", str(reset_area).lower())
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto("https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html")
+    strategy = PageBookingStrategy(
+        page,
+        GrabConfig(booking={"address": {"city": "深圳", "area": "南山区"}}),
+        attempt_store=AttemptStore(tmp_path),
+    )
+    strategy.prepare_target("u", "d", "member")
+    form = BookingForm(member_id="member", schedule_id="slot", appointment_value="time")
+    await strategy.fill_booking_form(form)
+    assert form.is_valid is not reset_area
+    assert await page.locator("#useraddress_area").input_value() == (
+        "0" if reset_area else "area"
+    )
+    assert form.blockers == (["form.pending_writes"] if reset_area else [])
+    assert await page.evaluate("window.submitClicks") == 0
+
+
 async def test_python_waits_for_delayed_card_and_disabled_button(
     chromium_page, tmp_path
 ):

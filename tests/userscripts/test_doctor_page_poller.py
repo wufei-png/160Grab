@@ -128,8 +128,9 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.3.1" in content
-    assert 'const SCRIPT_VERSION = "0.3.1";' in content
+    assert content.startswith("// ==UserScript==\n")
+    assert "// @version      0.3.6" in content
+    assert 'const SCRIPT_VERSION = "0.3.6";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -567,8 +568,9 @@ def test_booking_form_hour_mismatch_does_not_depend_on_schedule_attempts():
     result = _run_hook(
         "hooks.parseBookingFormState({ hours: ['13:00-13:30'] }, 'sch-1001')",
         extra_js="""
-const li1 = { getAttribute: (name) => name === "val" ? "detl-1" : "", textContent: "09:00-09:30" };
-const li2 = { getAttribute: (name) => name === "val" ? "detl-2" : "", textContent: "09:30-10:00" };
+const actionable = {getClientRects: () => [1], matches: () => false, closest: () => null};
+const li1 = { ...actionable, getAttribute: (name) => name === "val" ? "detl-1" : "", textContent: "09:00-09:30" };
+const li2 = { ...actionable, getAttribute: (name) => name === "val" ? "detl-2" : "", textContent: "09:30-10:00" };
 const schedule = { value: "sch-1001" };
 sandbox.document.querySelector = (selector) => selector === 'input[name="schedule_id"]' ? schedule : null;
 sandbox.document.querySelectorAll = (selector) => selector === 'input[name="schedule_id"]' ? [schedule] : [];
@@ -611,6 +613,19 @@ def test_defaults_do_not_invent_clinical_or_address_values():
     assert settings["address"] == dict(province=None, city=None, area=None, detail=None)
     assert settings["booking"]["diseaseDescription"] is None
     assert settings["booking"]["clinicCard"] is None
+    assert settings["booking"]["firstVisit"] is False
+    assert (
+        _run_hook(
+            "hooks.normalizeSettings({booking:{firstVisit:true}}).booking.firstVisit"
+        )
+        is True
+    )
+    assert (
+        _run_hook(
+            "hooks.normalizeSettings({booking:{firstVisit:'true'}}).booking.firstVisit"
+        )
+        is False
+    )
 
 
 def test_no_identity_response_parser_patch_is_installed():

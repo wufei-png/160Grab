@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from tests.contracts.booking.scenarios import USERSCRIPT
@@ -59,6 +61,56 @@ async def test_userscript_prepare_never_submits_even_valid_consent(chromium_page
     assert not await page.evaluate(
         "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.submissionBlocked()"
     )
+
+
+@pytest.mark.parametrize(
+    "member_attribute,schedule_id,expected_reason",
+    [('need_check="1"', "slot", "member.blocked"), ("", "other", "booking_form")],
+)
+async def test_prepare_reports_safe_preflight_blocker(
+    chromium_page, member_attribute, schedule_id, expected_reason
+):
+    page = chromium_page
+    await load(
+        page,
+        f'<input name="schedule_id" value="{schedule_id}">'
+        f'<input type="radio" name="mid" value="member" {member_attribute}>'
+        '<ul id="delts"><li val="time">09:00-09:30</li></ul><button id="submitbtn">预约</button>',
+        "https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html",
+    )
+    result = await page.evaluate("""async () => __GRAB160_CANARY__.run('prepare', {
+        date:'2026-09-30', target:{unitId:'u',depId:'d',doctorId:'doc'},
+        memberId:'member', scheduleId:'slot', ready:async()=>true
+    })""")
+    assert result == {
+        "status": "readiness_blocked",
+        "level": "prepare",
+        "polls": 0,
+        "submitCalls": 0,
+        "state": None,
+        "reason": expected_reason,
+    }
+    assert await page.evaluate("clicks") == 0
+
+
+async def test_prepare_reports_closed_codes_for_remaining_form_blockers(chromium_page):
+    page = chromium_page
+    await load(
+        page,
+        '<input name="schedule_id" value="slot">'
+        '<input type="radio" name="mid" value="member" checked>'
+        '<ul id="delts"><li val="time" class="selected">09:00-09:30</li></ul>'
+        '<input type="checkbox" id="check_yuyue_rule"><button id="submitbtn">预约</button>',
+        "https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html",
+    )
+    result = await page.evaluate("""async () => __GRAB160_CANARY__.run('prepare', {
+        date:'2026-09-30', target:{unitId:'u',depId:'d',doctorId:'doc'},
+        memberId:'member', scheduleId:'slot', ready:async()=>true
+    })""")
+    assert result["status"] == "readiness_blocked"
+    assert result["reason"] == "preparation"
+    assert result["blockers"] == ["accept.required"]
+    assert result["submitCalls"] == 0
 
 
 @pytest.mark.parametrize("e2e,booking", [(0, 0), (1, 0), (0, 1)])
@@ -368,3 +420,78 @@ async def test_userscript_panel_canary_works_without_page_global_bridge(chromium
         "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readState().running === false"
     )
     assert messages and "submit_gate_blocked" in messages[-1]
+
+
+async def test_panel_passes_readonly_target_to_matching_booking_page(chromium_page):
+    page = chromium_page
+
+    async def serve(route):
+        if "/doctors/index/" in route.request.url:
+            body = '<a id="addMark" doctor_id="doc" unit_id="u" dep_id="d"></a>'
+        else:
+            body = (
+                '<input name="schedule_id" value="slot">'
+                '<input type="hidden" name="mid" value="member">'
+                '<ul id="delts"><li val="time" class="selected">08:30-09:00</li></ul>'
+                '<button id="submitbtn">预约</button>'
+            )
+        await route.fulfill(body=body, content_type="text/html")
+
+    await page.context.route("**/*", serve)
+    await page.goto("https://www.91160.com/doctors/index/docid-doc.html")
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
+    await page.evaluate("""() => {
+        window._user_key = 'SYN_KEY';
+        window.fetch = async () => ({status:200,text:async()=>JSON.stringify({
+          result_code:1,data:{schedules:[{schedule_id:'slot',doctor_id:'doc',unit_id:'u',
+          dep_id:'d',date:'2026-09-30',status:'available',weekday:3,day_period:'am'}]}
+        })});
+    }""")
+    await page.locator('[data-action="settings"]').click()
+    for name, value in {
+        "member.memberId": "member",
+        "filters.startDate": "2026-09-30",
+    }.items():
+        await page.locator(f'[data-setting="{name}"]').fill(value)
+    await page.locator('[data-setting="booking.submitMode"]').select_option(
+        "manual_confirm"
+    )
+    await page.locator("[data-save-settings]").click()
+
+    results = asyncio.Queue()
+
+    async def handle_dialog(dialog):
+        message = dialog.message
+        await dialog.accept()
+        if message.startswith("{"):
+            results.put_nowait(message)
+
+    page.on("dialog", handle_dialog)
+    await page.get_by_text("本机人工 canary", exact=True).click()
+    await page.locator("[data-canary-run]").click()
+    assert '"status":"observed"' in await asyncio.wait_for(results.get(), timeout=5)
+
+    await page.goto(
+        "https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-other.html"
+    )
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
+    await page.get_by_text("本机人工 canary", exact=True).click()
+    await page.locator("[data-canary-level]").select_option("prepare")
+    await page.locator("[data-canary-run]").click()
+    assert '"status":"missing_target"' in await asyncio.wait_for(
+        results.get(), timeout=5
+    )
+
+    await page.goto("https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html")
+    await page.evaluate(USERSCRIPT.read_text(encoding="utf-8"))
+    await page.evaluate("""() => {
+        window.submitClicks = 0;
+        document.querySelector('#submitbtn').addEventListener('click', () => submitClicks++);
+    }""")
+    await page.get_by_text("本机人工 canary", exact=True).click()
+    await page.locator("[data-canary-level]").select_option("prepare")
+    await page.locator("[data-canary-run]").click()
+    result = await asyncio.wait_for(results.get(), timeout=5)
+    assert '"status":"prepared"' in result
+    assert '"submitCalls":0' in result
+    assert await page.evaluate("submitClicks") == 0

@@ -9,8 +9,26 @@ from grab.booking.form import (
 )
 
 # Clone to capture live properties (outerHTML alone retains stale default values).
-SNAPSHOT_SCRIPT = """() => {
+SNAPSHOT_SCRIPT = r"""() => {
     const clone = document.documentElement.cloneNode(true);
+    // Only the observed PKU Shenzhen page has verified meanings for these flags.
+    // Remove any page-supplied annotation before adding our own to the clone.
+    clone.removeAttribute('data-grab-pku-profile');
+    clone.removeAttribute('data-grab-card-optional');
+    const unit = [...document.querySelectorAll('input#unit_id[name="unit_id"]')];
+    const code = [...document.scripts].filter(n => !n.src).map(n => n.textContent).join('\n');
+    const unitFlags = [...code.matchAll(/var\s+unit_id\s*=\s*(?:'([0-9]+)'|"([0-9]+)"|([0-9]+))\s*;/g)];
+    const flags = [...code.matchAll(/var\s+is_today_guahao_flag\s*=\s*(?:'([01]?)'|"([01]?)")\s*;/g)];
+    if (location.origin === 'https://www.91160.com' &&
+        /^\/guahao\/ystep1\/uid-21\/depid-[^/]+\/schid-[^/.]+\.html$/.test(location.pathname) &&
+        unit.length === 1 && unitFlags.length > 0 && unitFlags.every(m => (m[1] ?? m[2] ?? m[3]) === '21') &&
+        document.querySelectorAll('#suborder').length === 1 &&
+        flags.length === 1 && /function\s+checkOrderButton\s*\(/.test(code) &&
+        /if\s*\(\s*unit_id\s*==\s*111\s*\)/.test(code) &&
+        /if\s*\(\s*is_today_guahao_flag\s*==\s*1\s*\)/.test(code)) {
+        clone.setAttribute('data-grab-pku-profile', '1');
+        clone.setAttribute('data-grab-card-optional', String((flags[0][1] ?? flags[0][2]) !== '1'));
+    }
     const live = document.documentElement.querySelectorAll('*');
     const copies = clone.querySelectorAll('*');
     live.forEach((node, i) => {
@@ -39,7 +57,7 @@ async def read_snapshot(page):
         html = await page.evaluate(SNAPSHOT_SCRIPT)
     else:
         html = await page.content()
-    return snapshot_html(html)
+    return snapshot_html(html, trusted_browser_snapshot=hasattr(page, "evaluate"))
 
 
 def selection_for(form):
@@ -57,6 +75,7 @@ def configured_values(config):
     b = config.booking
     return {
         "card": b.clinic_card,
+        "first_visit": b.first_visit,
         "disease_input": b.disease_description,
         "disease_content": b.disease_description,
         **{"address." + k: v for k, v in b.address.model_dump().items()},

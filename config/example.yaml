@@ -34,6 +34,7 @@ member_id:
 doctor_ids: []
 weeks: []
 days: []
+# 与预约时段有重叠即可命中；示例仅查 08:00–09:00，改为 [] 表示不限
 hours:
   - "8-9"
 # 刷号轮询间隔(ms)，范围或固定值；实际下限 3000ms，遵守更长 Retry-After
@@ -59,6 +60,8 @@ booking:
   # 仅填真实信息；留空保留站点已有值，必填缺失/冲突交人工
   disease_description:
   clinic_card:
+  # 仅首次到该院就诊且官网明确允许无卡时启用；其他情况保守停下
+  first_visit: false
   address:
     # 地区只接受唯一的精确 option value 或完整显示文字
     province:

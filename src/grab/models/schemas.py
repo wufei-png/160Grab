@@ -171,6 +171,7 @@ class BookingConfig(BaseModel):
     submit_mode: Literal["auto", "manual_confirm"] = "auto"
     disease_description: str | None = None
     clinic_card: str | None = None
+    first_visit: bool = False
     address: BookingAddressConfig = Field(default_factory=BookingAddressConfig)
 
 

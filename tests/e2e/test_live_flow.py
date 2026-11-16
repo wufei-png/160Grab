@@ -10,9 +10,14 @@ import pytest
 async def test_live_canary(live_runner, level):
     if os.environ["LIVE_LEVEL"] != level:
         pytest.skip("different explicitly selected canary level")
+    failed = False
     try:
         result = await live_runner.run(level)
     except Exception:
+        failed = True
+    if failed:
+        # Fail outside the exception handler so pytest cannot print a chained
+        # Playwright exception containing live form attributes.
         pytest.fail(
             "live canary stopped; inspect original site manually", pytrace=False
         )

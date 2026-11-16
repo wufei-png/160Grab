@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 
+from grab.booking.form import FIELD_SELECTORS
 from grab.canary.policy import CanaryPolicy, canary_scope, scenario
 from grab.core.leader import LeaderLost, check_leader, leader_scope
 from grab.errors import (
@@ -11,6 +12,35 @@ from grab.errors import (
 from grab.models.schemas import BookingState
 from grab.utils.rate_limit import RateLimitError
 
+SAFE_BLOCKERS = frozenset(
+    {
+        "member.blocked",
+        "member.mismatch",
+        "member.ambiguous",
+        "target.mismatch",
+        "schedule.mismatch",
+        "time.mismatch",
+        "date.conflict",
+        "other.required",
+        "submit.control",
+        "form.action_blocked",
+        "form.pending_writes",
+        "form.selection_incomplete",
+    }
+    | {
+        f"{field}.{suffix}"
+        for field in FIELD_SELECTORS
+        for suffix in ("ambiguous", "conflict", "option", "disabled", "required")
+    }
+)
+
+
+def safe_blockers(blockers):
+    codes = set(blockers) & SAFE_BLOCKERS
+    if not blockers or any(code not in SAFE_BLOCKERS for code in blockers):
+        codes.add("unclassified")
+    return tuple(sorted(codes))
+
 
 @dataclass(frozen=True)
 class CanaryResult:
@@ -20,6 +50,7 @@ class CanaryResult:
     form_opened: bool = False
     state: str | None = None
     submit_calls: int = 0
+    blockers: tuple[str, ...] = ()
 
 
 class CanaryRunner:
@@ -42,6 +73,7 @@ class CanaryRunner:
         timeout_seconds=120,
         live_e2e=False,
         live_booking=False,
+        allow_manual_repair=False,
     ):
         if not 1 <= max_polls <= 10 or not 1 <= timeout_seconds <= 600:
             raise ValueError("Invalid canary budget")
@@ -49,6 +81,7 @@ class CanaryRunner:
         self.config, self.ready = config, ready
         self.max_polls, self.timeout_seconds = max_polls, timeout_seconds
         self.live_e2e, self.live_booking = live_e2e, live_booking
+        self.allow_manual_repair = allow_manual_repair
 
     async def run(self, level):
         if level not in {"readonly", "prepare", "submit"}:
@@ -163,6 +196,14 @@ class CanaryRunner:
         self.booking.prepare(target, self.config.member_id)
         form = await self.booking.open_booking_form(slots[0])
         self.form_opened = True
+        if (
+            not form.is_valid
+            and form.invalid_reason == "required_fields_blocked"
+            and self.allow_manual_repair
+            and await self.ready("repair", (target, form, self.config))
+        ):
+            check_leader()
+            form = await self.booking.reprepare_open_form(form)
         if not form.is_valid:
             return CanaryResult(
                 "readiness_blocked",
@@ -170,6 +211,7 @@ class CanaryRunner:
                 self.polls,
                 True,
                 BookingState.AWAITING_MANUAL_CONFIRMATION,
+                blockers=safe_blockers(form.blockers),
             )
         if level == "prepare":
             return CanaryResult(
