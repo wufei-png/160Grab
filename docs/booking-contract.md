@@ -1,8 +1,7 @@
 # 两路径预约业务合同
 
 合同版本：1；确认日期：2026-09-30。适用于 Python/Playwright 与 Tampermonkey。
-S01–S09 已落实代码与离线/本地浏览器保护；现场结果 adapter 仍未验证。
-实施顺序与交付记录见
+目前没有已验证的现场结果 adapter。实施与验收记录见
 [实施计划](implementation-plan-2026-09-30.md)，当前能力见 [当前架构](current-architecture.md)。
 两路径共享规则及 synthetic JSON/HTML 期望，交互适配各自实现，无运行时跨语言依赖。
 
@@ -47,7 +46,7 @@ DISCOVERED -> PREPARED -> AWAITING_MANUAL_CONFIRMATION
 绑定账号、就诊人、医生目标与策略版本，仅存加盐不透明引用；账号无法可靠区分时仅本次运行有效。
 首次确认展示目标/就诊人、自动最终提交行为、未知结果需人工核对、禁止混跑；个人信息不入日志。
 未授权的非交互运行停止；拒绝后保留人工模式；换绑定对象/策略版本重新确认，支持撤销。
-此授权不替代站点协议、验证码或支付确认，也不授权实现会话执行真实预约或复制认证状态。
+此授权不替代站点协议、验证码或支付确认；不得复制浏览器认证状态。
 
 Python 使用本机进程互斥，userscript 使用同浏览器跨标签互斥。
 禁止两路径或多机器混跑同一目标；不建设跨路径、跨 browser profile 或分布式协调服务。
@@ -61,8 +60,7 @@ Python 使用本机进程互斥，userscript 使用同浏览器跨标签互斥�
   规则勾选不代替首次接受站点协议。
 - 控件须唯一且可操作；Python 用 Locator，JS 用 native click。
   禁止取第一个宽文本候选、无目标验证的单 radio fallback、未核实的 form.submit/requestSubmit。
-- `checkIdInfo` 空响应 patch 仅在证明是指定 endpoint 的纯解析兼容，且未跳过身份校验或警告时保留。
-- 只建立必要 booking parser/page seam，不做全仓库分层重构。
+- 保留站点 `checkIdInfo` 的原生处理，不修改响应或跳过身份校验与警告。
 
 ## 离线场景与覆盖边界
 
@@ -71,23 +69,20 @@ Python 使用本机进程互斥，userscript 使用同浏览器跨标签互斥�
 场景记录 member/schedule/date/time、字段来源、必填 blockers、submit 候选数、期望状态及 click 次数。
 `schema_version` 描述场景格式；`contract_version` 描述本合同。格式改变须明确升级版本。
 
-历史 S01 只执行解析层：Python 现有 parser、Node JS hooks、Chromium 中的 Python HTML 解析与
-JS DOM hooks 共用一组解析期望。状态声明为 `DISCOVERED`，因为 harness 未准备或提交预约；
-零 click 在 Node/Chromium 被捕获。解析通过不代表身份、字段或提交 readiness 已满足。
-此套件不调用现有 submit/retry 路径，不证明现有提交安全。
+解析层测试让 Python parser、Node JS hooks、Chromium 中的 Python HTML 解析与 JS DOM hooks
+共用解析期望。该测试只覆盖 `DISCOVERED` 和零 click，不证明身份、字段或提交 readiness 已满足。
+提交与恢复由其他回归测试覆盖：
 
-S03–S05 已增加以下可执行 regression；不能用已知红灯测试充当完成证据：
-
-| 会话 | 必须增加的场景 |
+| 范围 | 回归场景 |
 |---|---|
-| S03 | 提交后 timeout/navigation/限频、弱成功、reload 未决记录；状态与 click 次数贯通 |
-| S04 | 多成员/唯一错误 radio、日期缺失/冲突、card 已有/缺失、地址缺省/必填缺值、病情已有/配置/缺值；双按钮/隐藏/disabled、延迟 DOM；两路径 decision/blockers/member/slot/time parity |
-| S05 | 并发 leader、失锁、crash 接管及 pending 阻断 |
+| 提交 | 提交后 timeout/navigation/限频、弱成功、reload 未决记录；状态与 click 次数贯通 |
+| 准备 | 多成员/唯一错误 radio、日期缺失/冲突、card 已有/缺失、地址缺省/必填缺值、病情已有/配置/缺值；双按钮/隐藏/disabled、延迟 DOM；两路径 decision/blockers/member/slot/time parity |
+| 互斥 | 并发 leader、失锁、crash 接管及 pending 阻断 |
 
 本地 Chromium、离线、live 与远端 CI 证据分别记录；FakePage 不算真实浏览器验证。
 CI 只使用离线/本地浏览器，不运行真实预约。canary 人工本机执行，具体真实提交需要单独授权。
 
-## S04 可执行准备合同
+## 可执行准备合同
 
 `preparation.v1.json` 的 version=1 是独立的准备场景格式；包含手写 synthetic HTML、
 selection（member/schedule/time/date）、明确配置 values、expected（state/blockers/sources/submit_clicks）。
@@ -112,17 +107,16 @@ Python 纯解析器与 JS 纯 decision 分别执行；Chromium 再比较两适�
   当前时段适配识别 `#delts li.selected` 和现场观察到的 `#delts li.cur`；未识别的选择语义交人工。
 - Python 只将 available 状态的号源交给预约流程。JS 预约页须与医生页传递的医院、科室和 schedule
   完整匹配；等待期间目标、成员、筛选或填表配置变化时停止，重新 Start 后再核对授权。
-- 协议 checkbox 未由站点/用户勾选时交人工，本工具不代替首次接受。checkIdInfo 空响应 patch 已删除：
-  未取得 endpoint/原处理分支的安全证明，保留原站 AJAX 与身份警告。
+- 协议 checkbox 未由站点/用户勾选时交人工，本工具不代替首次接受。
 - JS settingsVersion=4 清除旧版本自动生成的广东/深圳/南山区和通用病情的同名值；无法确认来源，
   即使旧值曾由用户输入也须重新核实。v4 明确填写的同名真实值保留。
 
-S04 当时的证据全为本地 synthetic；后续真实页面观察和覆盖范围见 [现场 canary 记录](live-canary.md)。
+本地 synthetic 测试不代表现场结果；真实页面观察和覆盖范围见 [现场 canary 记录](live-canary.md)。
 医院标记或首次就诊声明不能单独证明空卡、空病情或成员审核状态可跳过；这些情况交人工处理。站点的实名与监护人校验始终保留。
 
-## S09 集成验收与恢复
+## 集成验收与恢复
 
-`tests/integration/test_acceptance_chromium.py` 补充两路径闭环：实际 CLI 服务组装/JS doctor
+`tests/integration/test_acceptance_chromium.py` 覆盖两路径闭环：实际 CLI 服务组装/JS doctor
 controller → 排班解析与筛选 → 预约准备 → 明确授权 → durable 单次提交 → UNKNOWN 停止 →
 新 run/reload、Stop/reset、撤销仍阻断 → 人工核对解决及最小 audit。Python 还覆盖 confirmed expired
 人工恢复后重新绑定目标/成员/授权。人工登录/成员页传输使用 synthetic seam，不构成现场认证验证。
@@ -131,4 +125,4 @@ controller → 排班解析与筛选 → 预约准备 → 明确授权 → durab
 已提交过的同一 booking_ref 不自动再次 click。Python CLI 与 JS 面板的核对/撤销操作见
 [README](../README.md#未决提交与退出码)。checkIdInfo patch 继续保持删除，条款/验证/支付交人工。
 
-D01–D06 覆盖映射、配置迁移及所有未覆盖 gate 统一见 [集成验收索引](integration-acceptance.md)。
+覆盖映射、配置迁移及未覆盖 gate 见 [集成验收索引](integration-acceptance.md)。

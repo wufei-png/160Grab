@@ -4,7 +4,7 @@
 
 默认 `auto` 须明确授权后才能点击一次最终提交；也可选择 `manual_confirm`。目前没有已验证的现场结果 adapter，点击后的弱页面变化、超时、导航或限频一律是 `OUTCOME_UNKNOWN`，必须在原站核对预约记录。禁止两路径、多个 browser profile 或多机器混跑同一目标。
 
-S01–S09 的代码/离线验收进度见 [实施计划](docs/implementation-plan-2026-09-30.md#完成记录)，现场 pending 单独保留。当前只支持医生详情页通道；科室 fallback 须先取得漏号证据。参考项目：[pengpan/91160-cli](https://github.com/pengpan/91160-cli)。
+当前只支持医生详情页通道。历史实现与验收记录见 [实施计划](docs/implementation-plan-2026-09-30.md#完成记录)。参考项目：[pengpan/91160-cli](https://github.com/pengpan/91160-cli)。
 
 ## 文档入口
 
@@ -14,7 +14,6 @@ S01–S09 的代码/离线验收进度见 [实施计划](docs/implementation-pla
 - [日志、隐私、权限与清理](docs/security-and-privacy.md)
 - [本机人工 canary 与脱敏夹具](docs/live-canary.md)
 - [集成验收、配置迁移与未覆盖 gate](docs/integration-acceptance.md)
-- [历史实施提示词](docs/implementation-session-prompts-2026-09-30.md)
 - [历史改进建议](docs/future-improvements.md)（历史原文不作为当前操作说明）
 
 ## Python 快速开始
@@ -168,7 +167,7 @@ Windows PowerShell 使用 `./packaging/build-windows.ps1`。产物位于 `dist/r
 
 可在 [GitHub Releases](https://github.com/wufei-png/160Grab/releases) 查看发布产物；解压后 macOS 使用 `160Grab.command`，Windows 使用 `160Grab.exe`。首次缺配置会生成 config.yaml 并退出，请填好后重新运行。未签名产物可能触发系统信任提示。
 
-release 在 v* tag/手动触发时运行验收、构建、frozen `--help`/`--smoke-browser` 和默认配置 bootstrap，并上传工作流 artifact。分支上的手动执行仅验证构建；只有 v* tag 才进入 GitHub Release 发布。配置发布流程不等于本次执行发布，当前实际平台证据见 [验收索引](docs/integration-acceptance.md)。
+release 在 v* tag/手动触发时运行验收、构建、frozen `--help`/`--smoke-browser` 和默认配置 bootstrap，并上传工作流 artifact。分支上的手动执行仅验证构建；只有 v* tag 才进入 GitHub Release 发布。实际平台验收证据见 [验收索引](docs/integration-acceptance.md)。
 
 ## 本机人工 Live Canary
 

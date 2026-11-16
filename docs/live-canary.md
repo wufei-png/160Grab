@@ -1,9 +1,7 @@
 # 本机人工 canary 与最小脱敏夹具
 
-历史实现审核见 [2026-10-19 审核记录](project-status-2026-10-19.md)；每次现场结果独立记录，历史日期不代表新版本已完成现场验收。
-
-S06 工具、S09 文档收口，2026-10-01。只在本机人工执行；CI 不运行 live。
-Python 与 userscript 的现场证据分别记录，不能用一个 profile/路径的登录或 synthetic 回归代替另一路径。
+现场 canary 只在本机人工执行；CI 不运行 live。Python 与 userscript 的现场证据分别记录，
+不能用一个 profile/路径的登录或 synthetic 回归代替另一路径。历史结果不代表新版本已完成现场验收。
 未决提交先在原站核对，禁止混跑两路径、多个 browser profile 或多机器。
 
 ## 层级与门槛
@@ -80,26 +78,22 @@ prepare/submit 由人工核对医生和排班，**在同一标签页**打开其�
 
 ### 现场验证需要人工辅助时
 
-先在现有 Chrome 地址栏手动打开站点，记录能否正常访问。`ERR_BLOCKED_BY_CLIENT` 仅表示客户端
-拦截了请求，不能仅凭错误码认定具体扩展；人工也受阻时先核对错误页或阻拦工具的明确记录。
-若人工可访问而代理操作受阻，由人工执行下面的本机面板步骤并返回安全摘要，无需改变代理访问策略。
-扩展管理页 `chrome://extensions/` 由人工打开；自动化工具拒绝该协议不代表 Tampermonkey 安装失败。
+先在 Chrome 中确认可以访问站点。`ERR_BLOCKED_BY_CLIENT` 表示客户端拦截了请求，
+应检查本机错误页或拦截工具的记录，不能仅凭错误码认定具体扩展。
 
 1. 确认 Tampermonkey 来自官方扩展商店并启用，允许其在 `https://www.91160.com/` 运行。
    Chrome 138+ 在 Tampermonkey「详情」启用「允许用户脚本」；旧版依照官方说明使用 Developer mode。
 2. 已有本脚本时编辑原脚本，完整替换为当前工作区
    [userscript](../userscripts/91160-doctor-page-poller.user.js) 后保存，不新建副本或删除重装，保留已有设置和未决 journal。
    没有原脚本时才新建。若旧脚本正在运行，先在原页面 Stop 并启用 canary 限制，再更新。
-   当前工作区为 v0.3.7，完整内容应包含 `bookingSettingsMatch`、`diagnosticSnapshot` 和
-   `fitPanelToViewport`；旧 v0.3.0 不视为本轮修复版本。工具若拒绝扩展编辑页，由用户手动更新，不能绕过策略。
+   当前脚本版本为 v0.3.7。
 3. 手动登录、完成 CAPTCHA，停留目标医生页。面板 Settings →「筛选时间」关闭 Auto Start；
    Appointment From 填明确验证日期，Submit mode 选择 Manual confirm，点击 Save Settings。
    readonly 无需填写就诊人、卡号、病情或地址。关闭其它预约运行；Python 路径与 userscript 顺序验证。
-   验证期间保持该页可见。其它自动化任务操作同一 Chrome 时，先等其结束再验证；
-   独立窗口不能保证工具连接或页面可见性不受干扰，页面隐藏仍会触发安全停止。
+   验证期间保持该页可见；页面隐藏会触发安全停止。
 4. 展开「本机人工 canary」，点击「启用 canary 限制」，选 readonly，再点击「运行并人工确认」。
    仅确认 ready；保留两个 LIVE 复选框未选。默认最多三次查询、120 秒，最终动作必须为零。
-5. 返回本地弹窗的 `status`、`level`、`polls`、`submitCalls`、`state` 和可选的 `reason`，以及脚本是否由 Tampermonkey 加载。
+5. 检查本地弹窗的 `status`、`level`、`polls`、`submitCalls`、`state` 和可选的 `reason`。
    `submitCalls` 必须为 0；无号源或 blocker 不是成功现场证据。原始 HTML、cookie 和个人表单值留在本机。
    失锁时摘要为 `leader_blocked`，保留已发起查询的计数；journal 异常仍返回 `OUTCOME_UNKNOWN`，
    必须在原站核对，不能重置 journal 后重跑。
@@ -138,12 +132,12 @@ fingerprint 只计算 schema 形状，不散列个人值。HTML 是静态 parser
 仓库 `tests/canary/fixtures/booking.minimal.v1.json` 由已有 synthetic 场景转换，source=synthetic，
 用于验证实际 CLI 导出和两适配 parity，不属于现场证据。
 
-## 本次证据（2026-10-01）
+## 历史本地验证（2026-10-01）
 
 | 路径 | 层级/覆盖 | 现场状态 |
 |---|---|---|
-| Python | 本地 Chromium：docid-only→完整目标→查询；readonly/prepare 零最终动作；有效产品 grant 仍受层级保护；人工拒绝/预算/pending | 未运行 live：未提供明确 profile、医生、日期/时段/就诊人及具体批准 |
-| userscript | 本地 Chromium：readonly 无成员/表单修改；prepare/submit gates、次数/ready timeout、UNKNOWN blocker、reload、实际 panel 事件 | 未运行 live：未提供当前目标/场景与 Tampermonkey 现场输入 |
+| Python | 本地 Chromium：docid-only→完整目标→查询；readonly/prepare 零最终动作；有效产品 grant 仍受层级保护；人工拒绝/预算/pending | 当时未运行 live |
+| userscript | 本地 Chromium：readonly 无成员/表单修改；prepare/submit gates、次数/ready timeout、UNKNOWN blocker、reload、实际 panel 事件 | 当时未运行 live |
 | converter | synthetic 注入/unknown schema/link 拒绝、结构 fingerprint、静态状态与 Chromium 双适配 parity | 未刷新真实夹具；无现场结果证据，未增加 live adapter |
 
 共享全套检查与 review 结果见 [实施计划完成记录](implementation-plan-2026-09-30.md#完成记录)。
@@ -180,12 +174,8 @@ Python 专用浏览器随后在同院另一位医生的号源上执行 submit。
 撤回自动放宽之前，当前版本尚未重新执行现场预约；Python 与插件各有独立现场证据，不能仅根据
 本记录清除其他未决提交或放宽验证。
 
-## 历史 S09 现场 gate
-
-2026-10-01 的 S09 轮次仅运行 offline/local Chromium，没有执行上述现场命令或真实预约。Python 与 userscript
-仍分别缺专用 profile/当前目标/具体场景批准和真实 schema/结果 adapter/fixture 刷新证据；
-未决记录不能因集成验收或文档迁移被标为已核对。该轮 Tampermonkey 扩展 sandbox、Windows ready
-未验证。现场或远端 CI 必须记录新的实际运行，不能继承本地 synthetic 结果。
+2026-10-01 的本地验证未覆盖真实预约、真实 fixture、结果 adapter、Tampermonkey 扩展 sandbox 或 Windows ready。
+未决记录不能因本地测试通过而标为已核对；后续现场或远端 CI 应单独记录实际结果。
 
 CI/release 显式设 LIVE_E2E=0/LIVE_BOOKING=0 并用 `-m "not live"` 排除现场测试，
 contract/本地 Chromium 和 offline canary 照常执行。全部验证与发布边界见
