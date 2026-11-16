@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.3.6
+// @version      0.3.7
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -21,7 +21,7 @@
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
   const PANEL_TOOLTIP_ID = "grab160-doctor-page-poller-tooltip";
-  const SCRIPT_VERSION = "0.3.6";
+  const SCRIPT_VERSION = "0.3.7";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -79,7 +79,6 @@
       autoReturnAfterSubmitFailure: false,
       diseaseDescription: null,
       clinicCard: null,
-      firstVisit: false,
     },
     session: {
       recoveryEnabled: true,
@@ -353,7 +352,6 @@
         diseaseDescription:
           normalizeOptionalValue(merged.booking.diseaseDescription),
         clinicCard: normalizeOptionalValue(merged.booking.clinicCard),
-        firstVisit: normalizeBoolean(merged.booking.firstVisit, false),
       },
       session: {
         recoveryEnabled: normalizeBoolean(merged.session.recoveryEnabled, true),
@@ -1815,34 +1813,16 @@
 
   function readBookingSnapshot() {
     const all = selector => Array.from(document.querySelectorAll(selector));
-    // The current PKU Shenzhen page uses these legacy flags for a different
-    // hospital's record workflow. Fall back to the conservative policy if the
-    // hospital or its observed validation markers cannot be verified.
-    let pkuProfile = false, cardOptional = false;
-    if (location.origin === 'https://www.91160.com' && parseBookingUrl(location.href)?.unitId === '21') {
-      const units = all('input#unit_id[name="unit_id"]');
-      const code = Array.from(document.scripts || []).filter(n => !n.src).map(n => n.textContent).join('\n');
-      const unitFlags = [...code.matchAll(/var\s+unit_id\s*=\s*(?:'([0-9]+)'|"([0-9]+)"|([0-9]+))\s*;/g)];
-      const flags = [...code.matchAll(/var\s+is_today_guahao_flag\s*=\s*(?:'([01]?)'|"([01]?)")\s*;/g)];
-      pkuProfile = units.length === 1 && unitFlags.length > 0 && unitFlags.every(m => (m[1] ?? m[2] ?? m[3]) === '21') && all('#suborder').length === 1 &&
-        flags.length === 1 && /function\s+checkOrderButton\s*\(/.test(code) &&
-        /if\s*\(\s*unit_id\s*==\s*111\s*\)/.test(code) &&
-        /if\s*\(\s*is_today_guahao_flag\s*==\s*1\s*\)/.test(code);
-      cardOptional = pkuProfile && (flags[0][1] ?? flags[0][2]) !== '1';
-    }
     const snapshot = {version:1, schedule_ids:all('[name="schedule_id"]').map(n => n.value.trim()), members:[], hidden_members:[], times:[], dates:[], fields:{}, submit:all(SUBMIT_SELECTOR).map(formActionable), other_required:[]};
     snapshot.hidden_members = all('input[type="hidden"]').filter(n => ['member_id','memberId','mid','his_mem_id'].includes(n.name)).map(n => n.value.trim());
     all('input[type="radio"]').forEach((n, index) => {
       if (!['mid','member_id','memberid','his_mem_id'].includes(n.name.toLowerCase()) && !n.hasAttribute('data-member-id') && !n.hasAttribute('data-mid')) return;
       const container = n.closest('tr,li,label,.patient_item,.member_item,.person_item') || n.parentElement;
-      let dataTitle = n.getAttribute('data-title') || '';
-      if (pkuProfile && dataTitle === '您当前的就诊人信息审核中，暂不能预约挂号' &&
-          n.parentElement?.classList.contains('tips_wrap') && !n.parentElement.querySelector('.tips_box2')) dataTitle = '';
       snapshot.members.push({ids:[...new Set([n.value.trim(), n.getAttribute('data-member-id'), n.getAttribute('data-mid')].filter(Boolean))], label:compactText(container.textContent), index,
         actionable:formActionable(n), checked:n.checked,
         blocked:(n.getAttribute('isneedcustodian') === '1' && ['', '0'].includes(n.getAttribute('guardianid') || '')) ||
-          (!pkuProfile && (n.getAttribute('need_check') === '1' || ['record_created','is_complete','is_info_complete'].some(k => n.getAttribute(k) === '0'))) ||
-          /暂不能预约|审核中|认证|建档/.test(dataTitle + (n.title || '')),
+          n.getAttribute('need_check') === '1' || ['record_created','is_complete','is_info_complete'].some(k => n.getAttribute(k) === '0') ||
+          /暂不能预约|审核中|认证|建档/.test((n.getAttribute('data-title') || '') + (n.title || '')),
         address:Object.fromEntries([['province','province_id'],['city','city_id'],['area','area_id'],['detail','address']].map(([k,a]) => [k,n.getAttribute(a) || '']))});
     });
     snapshot.times = all('#delts li[val]').map(n => ({value:n.getAttribute('val').trim(),label:compactText(n.textContent),actionable:formActionable(n),selected:timeSelected(n)}));
@@ -1852,8 +1832,7 @@
       if (!nodes.length) return;
       snapshot.fields[key] = nodes.map(n => {
         known.add(n);
-        const optional = pkuProfile && (['disease_input','disease_content'].includes(key) || (key === 'card' && cardOptional)) && !n.required && n.getAttribute('aria-required') !== 'true';
-        return {value:n.value.trim(), checked:Boolean(n.checked), actionable:!n.matches(':disabled') && !n.readOnly && (formActionable(n) || n.type === 'hidden'), kind:n.tagName.toLowerCase(), ...(optional ? {optional:true} : {}),
+        return {value:n.value.trim(), checked:Boolean(n.checked), actionable:!n.matches(':disabled') && !n.readOnly && (formActionable(n) || n.type === 'hidden'), kind:n.tagName.toLowerCase(),
           options:Array.from(n.options || []).map(o => ({value:o.value,label:compactText(o.textContent),disabled:o.disabled || (o.parentElement.tagName === 'OPTGROUP' && o.parentElement.disabled)}))};
       });
     });
@@ -1937,7 +1916,7 @@
         sources[key] = source;
         if (!f.actionable) blockers.push(key + '.disabled');
         else writes.push({field:key,value:desired,kind:f.kind});
-      } else { sources[key] = 'missing'; if (!f.optional || (key === 'card' && values.first_visit !== true)) blockers.push(key + '.required'); }
+      } else { sources[key] = 'missing'; blockers.push(key + '.required'); }
     });
     if (!snapshot.other_required.every(Boolean)) blockers.push('other.required');
     if (JSON.stringify(snapshot.submit) !== '[true]') blockers.push('submit.control');
@@ -1951,7 +1930,7 @@
   }
 
   function formValues(addressConfig = {}, bookingConfig = {}) {
-    return {card:bookingConfig.clinicCard, first_visit:bookingConfig.firstVisit, disease_input:bookingConfig.diseaseDescription, disease_content:bookingConfig.diseaseDescription,
+    return {card:bookingConfig.clinicCard, disease_input:bookingConfig.diseaseDescription, disease_content:bookingConfig.diseaseDescription,
       ...Object.fromEntries(['province','city','area','detail'].map(k => ['address.' + k,addressConfig[k]]))};
   }
 
@@ -3683,8 +3662,6 @@
               "仅使用真实就诊卡；留空等待站点查询，证件号不会被复制为卡号。",
               `<input data-setting="booking.clinicCard" type="password" value="${htmlEscape(settings.booking.clinicCard ?? "")}">`,
             )}
-            ${renderCheck("booking.firstVisit", "首次到该院就诊，无门诊卡", settings.booking.firstVisit,
-              "只在本人确为首次就诊且医院允许无卡预约时勾选；当日号等明确要求卡号的情况仍会停止。")}
             ${renderField(
               "Max pre-submit attempts",
               "仅提交前准备重试，最多三次；进入提交边界后不再重试。",
@@ -3835,7 +3812,6 @@
       "booking.autoReturnAfterSubmitFailure",
       "booking.diseaseDescription",
       "booking.clinicCard",
-      "booking.firstVisit",
       "booking.maxPreSubmitAttempts",
       "session.recoveryEnabled",
       "session.keepAliveIntervalSeconds",

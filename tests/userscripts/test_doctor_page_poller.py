@@ -129,8 +129,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
     assert content.startswith("// ==UserScript==\n")
-    assert "// @version      0.3.6" in content
-    assert 'const SCRIPT_VERSION = "0.3.6";' in content
+    assert "// @version      0.3.7" in content
+    assert 'const SCRIPT_VERSION = "0.3.7";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -613,19 +613,6 @@ def test_defaults_do_not_invent_clinical_or_address_values():
     assert settings["address"] == dict(province=None, city=None, area=None, detail=None)
     assert settings["booking"]["diseaseDescription"] is None
     assert settings["booking"]["clinicCard"] is None
-    assert settings["booking"]["firstVisit"] is False
-    assert (
-        _run_hook(
-            "hooks.normalizeSettings({booking:{firstVisit:true}}).booking.firstVisit"
-        )
-        is True
-    )
-    assert (
-        _run_hook(
-            "hooks.normalizeSettings({booking:{firstVisit:'true'}}).booking.firstVisit"
-        )
-        is False
-    )
 
 
 def test_no_identity_response_parser_patch_is_installed():

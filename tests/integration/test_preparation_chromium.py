@@ -138,35 +138,24 @@ async def test_both_paths_keep_an_already_selected_cur_time(chromium_page, tmp_p
 
 
 @pytest.mark.parametrize(
-    "url_unit,site_unit,today,guardian,expected",
+    "url_unit,form_unit,site_unit,today,guardian",
     [
-        ("21", "21", "", "0", []),
-        ("21", "21", "1", "0", ["card.required"]),
-        ("21", "21", "", "1", ["member.blocked"]),
-        (
-            "21",
-            "other",
-            "",
-            "0",
-            ["card.required", "disease_input.required", "member.blocked"],
-        ),
-        (
-            "other",
-            "21",
-            "",
-            "0",
-            ["card.required", "disease_input.required", "member.blocked"],
-        ),
+        ("21", "21", "21", "", "0"),
+        ("21", "111", "21", "", "0"),
+        ("21", "21", "21", "1", "0"),
+        ("21", "21", "21", "", "1"),
+        ("21", "111", "111", "", "0"),
+        ("111", "21", "21", "", "0"),
     ],
 )
-async def test_verified_pku_site_flags_match_both_adapters(
-    chromium_page, url_unit, site_unit, today, guardian, expected
+async def test_site_markers_never_relax_unverified_checks(
+    chromium_page, url_unit, form_unit, site_unit, today, guardian
 ):
     from grab.booking.page import read_snapshot
 
     page = chromium_page
     html = f'''<form id="suborder">
-      <input id="unit_id" name="unit_id" value="{site_unit}">
+      <input id="unit_id" name="unit_id" value="{form_unit}">
       <input name="schedule_id" value="slot">
       <input type="radio" name="mid" value="member" checked need_check="1"
              record_created="0" is_info_complete="0" isneedcustodian="{guardian}" guardianid="0">
@@ -191,6 +180,7 @@ async def test_verified_pku_site_flags_match_both_adapters(
     }
     from grab.booking.form import decide
 
+    # A legacy opt-in must not suppress these checks.
     values = {"first_visit": True}
     python = decide(snapshot, selection, values)
     js = await page.evaluate(
@@ -202,22 +192,70 @@ async def test_verified_pku_site_flags_match_both_adapters(
         {"selection": selection, "values": values},
     )
     assert js["snapshot"] == snapshot
+    expected = ["card.required", "disease_input.required", "member.blocked"]
     assert python["blockers"] == expected
     assert js["decision"]["blockers"] == expected
-    if url_unit == site_unit == "21" and not today and guardian == "0":
-        assert "card.required" in decide(snapshot, selection)["blockers"]
 
 
 @pytest.mark.parametrize(
-    "tooltip,title,expected_blocked",
+    "attributes,blocked",
     [
-        ("", "", False),
-        ('<span class="tips_box2">审核中</span>', "", True),
-        ("", "正在审核中", True),
+        ('need_check="1"', True),
+        ('record_created="0"', True),
+        ('is_complete="0"', True),
+        ('is_info_complete="0"', True),
+        ('isneedcustodian="1" guardianid="0"', True),
+        ('isneedcustodian="1" guardianid="guardian"', False),
+        ("", False),
     ],
 )
-async def test_pku_ignores_only_the_unrendered_generic_audit_tooltip(
-    chromium_page, tooltip, title, expected_blocked
+async def test_member_status_checks_match_both_adapters(
+    chromium_page, attributes, blocked
+):
+    from grab.booking.form import decide
+    from grab.booking.page import read_snapshot
+
+    page = chromium_page
+    html = f"""<form id="suborder"><input name="schedule_id" value="slot">
+      <input type="radio" name="mid" value="member" checked {attributes}>
+      <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul>
+      <button id="submitbtn">Submit</button></form>"""
+    await page.context.route(
+        "**/*", lambda route: route.fulfill(body=html, content_type="text/html")
+    )
+    await page.goto(
+        "https://www.91160.com/guahao/ystep1/uid-21/depid-d/schid-slot.html"
+    )
+    await page.evaluate("window.__GRAB160_DOCTOR_POLLER_DISABLE_AUTO_START__ = true")
+    await load_userscript(page)
+    selection = {
+        "member_id": "member",
+        "schedule_id": "slot",
+        "appointment_value": "time",
+    }
+    snapshot = await read_snapshot(page)
+    js = await page.evaluate(
+        """selection => {
+          const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
+          return h.decideBookingPreparation(h.readBookingSnapshot(), selection);
+        }""",
+        selection,
+    )
+    python = decide(snapshot, selection)
+    assert js == python
+    assert ("member.blocked" in python["blockers"]) is blocked
+
+
+@pytest.mark.parametrize(
+    "tooltip,title",
+    [
+        ("", ""),
+        ('<span class="tips_box2">审核中</span>', ""),
+        ("", "正在审核中"),
+    ],
+)
+async def test_member_warning_is_not_ignored_when_tooltip_is_absent(
+    chromium_page, tooltip, title
 ):
     from grab.booking.form import decide
     from grab.booking.page import read_snapshot
@@ -225,7 +263,7 @@ async def test_pku_ignores_only_the_unrendered_generic_audit_tooltip(
     page = chromium_page
     html = f"""<meta charset="utf-8"><form id="suborder"><input id="unit_id" name="unit_id">
       <input name="schedule_id" value="slot"><span class="tips_wrap">
-      <input type="radio" name="mid" value="member" checked need_check="1" record_created="0"
+      <input type="radio" name="mid" value="member" checked
         data-title="您当前的就诊人信息审核中，暂不能预约挂号" title="{title}">{tooltip}</span>
       <ul id="delts"><li val="time" class="cur">08:30-09:00</li></ul><button id="submitbtn">Submit</button>
       </form><script type="text/plain">var unit_id='21'; var is_today_guahao_flag='';
@@ -248,9 +286,7 @@ async def test_pku_ignores_only_the_unrendered_generic_audit_tooltip(
         "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readBookingSnapshot()"
     )
     assert js_snapshot == snapshot
-    assert (
-        "member.blocked" in decide(snapshot, selection)["blockers"]
-    ) is expected_blocked
+    assert "member.blocked" in decide(snapshot, selection)["blockers"]
 
 
 @pytest.mark.parametrize("existing", ["new", "old", ""])

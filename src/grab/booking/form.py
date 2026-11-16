@@ -38,11 +38,6 @@ class Node:
             for option in ([child] if child.tag == "option" else child.options())
         ]
 
-    def contains_class(self, name):
-        return name in self.attrs.get("class", "").split() or any(
-            child.contains_class(name) for child in self.children
-        )
-
     def value(self):
         if self.tag == "textarea":
             return self.text.strip()
@@ -170,15 +165,8 @@ def required_ready(n, nodes):
     return bool(n.value())
 
 
-def snapshot_html(html, *, trusted_browser_snapshot=False):
+def snapshot_html(html):
     tree = Tree(html)
-    root = next((n for n in tree.nodes if n.tag == "html"), None)
-    pku_profile = bool(
-        trusted_browser_snapshot
-        and root
-        and root.attrs.get("data-grab-pku-profile") == "1"
-    )
-    card_optional = pku_profile and root.attrs.get("data-grab-card-optional") == "true"
     result = {
         "version": 1,
         "schedule_ids": [],
@@ -223,17 +211,6 @@ def snapshot_html(html, *, trusted_browser_snapshot=False):
                         if v
                     )
                 )
-                data_title = a.get("data-title", "")
-                if (
-                    pku_profile
-                    and data_title == "您当前的就诊人信息审核中，暂不能预约挂号"
-                    and n.parent
-                    and "tips_wrap" in n.parent.attrs.get("class", "").split()
-                    and not n.parent.contains_class("tips_box2")
-                ):
-                    # This exact placeholder is attached to selectable radios
-                    # even when the site's tooltip element is absent.
-                    data_title = ""
                 result["members"].append(
                     {
                         "ids": ids,
@@ -245,24 +222,19 @@ def snapshot_html(html, *, trusted_browser_snapshot=False):
                             a.get("isneedcustodian") == "1"
                             and a.get("guardianid", "") in {"", "0"}
                         )
-                        or (
-                            not pku_profile
-                            and (
-                                a.get("need_check") == "1"
-                                or any(
-                                    a.get(k) == "0"
-                                    for k in [
-                                        "record_created",
-                                        "is_complete",
-                                        "is_info_complete",
-                                    ]
-                                )
-                            )
+                        or a.get("need_check") == "1"
+                        or any(
+                            a.get(k) == "0"
+                            for k in [
+                                "record_created",
+                                "is_complete",
+                                "is_info_complete",
+                            ]
                         )
                         or bool(
                             re.search(
                                 r"暂不能预约|审核中|认证|建档",
-                                data_title + a.get("title", ""),
+                                a.get("data-title", "") + a.get("title", ""),
                             )
                         ),
                         "address": {
@@ -311,18 +283,6 @@ def snapshot_html(html, *, trusted_browser_snapshot=False):
                         else n.actionable() and "readonly" not in a
                     ),
                     "kind": n.tag,
-                    **(
-                        {"optional": True}
-                        if pku_profile
-                        and (
-                            key in {"disease_input", "disease_content"}
-                            or key == "card"
-                            and card_optional
-                        )
-                        and "required" not in a
-                        and a.get("aria-required") != "true"
-                        else {}
-                    ),
                     "options": [
                         {
                             "value": c.attrs.get("value", ""),
@@ -493,12 +453,7 @@ def decide(snapshot, selection, values=None):
                 writes.append({"field": key, "value": desired, "kind": f["kind"]})
         else:
             sources[key] = "missing"
-            if (
-                not f.get("optional")
-                or key == "card"
-                and values.get("first_visit") is not True
-            ):
-                blockers.append(key + ".required")
+            blockers.append(key + ".required")
     if not all(snapshot["other_required"]):
         blockers.append("other.required")
     if snapshot["submit"] != [True]:

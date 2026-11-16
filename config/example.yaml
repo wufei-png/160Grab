@@ -60,8 +60,6 @@ booking:
   # 仅填真实信息；留空保留站点已有值，必填缺失/冲突交人工
   disease_description:
   clinic_card:
-  # 仅首次到该院就诊且官网明确允许无卡时启用；其他情况保守停下
-  first_visit: false
   address:
     # 地区只接受唯一的精确 option value 或完整显示文字
     province:

@@ -34,7 +34,6 @@ def _build_live_config():
         brush_start_date=os.environ["LIVE_DATE"],
         booking={
             "clinic_card": os.getenv("LIVE_CARD"),
-            "first_visit": os.getenv("LIVE_FIRST_VISIT") == "1",
             "disease_description": os.getenv("LIVE_DISEASE"),
             "address": {
                 k: os.getenv("LIVE_ADDRESS_" + k.upper())
