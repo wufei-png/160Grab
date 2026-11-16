@@ -19,7 +19,7 @@ async def test_real_locator_click_is_durable_and_never_repeated(
             body='<input name="schedule_id" value="slot"><input type="hidden" name="mid" value="member"><button id="submitbtn">预约</button>',
         ),
     )
-    await page.goto("https://synthetic.invalid/booking")
+    await page.goto("https://www.91160.com/guahao/ystep1/uid-u/depid-d/schid-slot.html")
     await page.evaluate(
         """(effect) => {
         window.clickCount = 0;
@@ -323,7 +323,7 @@ async def test_userscript_pending_survives_real_browser_restart(tmp_path):
     async with async_playwright() as pw:
         for restarted in (False, True):
             context = await pw.chromium.launch_persistent_context(
-                str(profile), headless=True, service_workers="block"
+                str(profile), headless=True, service_workers="block", offline=True
             )
             try:
                 await context.route(

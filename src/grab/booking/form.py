@@ -303,7 +303,12 @@ def snapshot_html(html):
     result["other_required"].extend(
         False
         for n in tree.nodes
-        if field_key(n) and n.value() and n.attrs.get("data-grab-valid") == "false"
+        if (field_key(n) and n.value() and n.attrs.get("data-grab-valid") == "false")
+        or (
+            not field_key(n)
+            and "required" not in n.attrs
+            and n.attrs.get("data-grab-native-invalid") == "true"
+        )
     )
     # Dates must belong to the unique selected schedule record, not its siblings.
     for n in tree.nodes:

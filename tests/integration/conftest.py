@@ -7,7 +7,9 @@ async def chromium_page():
     # A fresh transient context: no local profile, authentication or live network.
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(service_workers="block")
+        # Routes still fulfill synthetic responses, but a redirect that bypasses
+        # Playwright routing cannot escape to the real network.
+        context = await browser.new_context(service_workers="block", offline=True)
         try:
             yield await context.new_page()
         finally:

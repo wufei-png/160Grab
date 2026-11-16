@@ -3,6 +3,7 @@ from typing import Protocol
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from grab.booking.click_guard import booking_page_matches, submit_boundary_guard
 from grab.booking.form import SUBMIT_SELECTOR, snapshot_html
 from grab.booking.page import (
     apply_decision,
@@ -199,6 +200,14 @@ class PageBookingStrategy:
         await self._sleep_page_action("opening booking form")
         check_leader()
         await self.page.goto(self.build_booking_url(slot_id))
+        if not booking_page_matches(self.page, self.build_booking_url(slot_id)):
+            return BookingForm(
+                member_id=self.member_id,
+                schedule_id=slot_id,
+                is_valid=False,
+                invalid_reason="target_mismatch",
+                blockers=["target.mismatch"],
+            )
         html = await self.page.content()
         raise_if_rate_limited(html, context="booking form page")
         form = self.parse_booking_form(html, member_id=self.member_id)
@@ -289,6 +298,21 @@ class PageBookingStrategy:
         control = await self._submit_control()
         if control is None:
             return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
+        if hasattr(self.page, "evaluate"):
+            try:
+                # Wait for actionability before the last readiness snapshot and
+                # before creating a durable attempt. A trial causes no click.
+                await control.click(trial=True, timeout=5000)
+            except PlaywrightTimeoutError:
+                return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
+        async with submit_boundary_guard(
+            self.page, self.build_booking_url(form.schedule_id)
+        ) as guard_intact:
+            if guard_intact is None:
+                return BookingResult(state=BookingState.AWAITING_MANUAL_CONFIRMATION)
+            return await self._submit_prepared(form, control, policy, guard_intact)
+
+    async def _submit_prepared(self, form, control, policy, guard_intact):
         try:
             snapshot, readiness = await read_decision(self.page, form, self.config)
             if (
@@ -331,7 +355,7 @@ class PageBookingStrategy:
             await control.click(timeout=5000)
             # No live evidence adapter has been verified yet. Page disappearance,
             # HTTP status, redirects and follow-up/payment controls prove nothing.
-            if self.evidence_adapter is not None:
+            if self.evidence_adapter is not None and await guard_intact():
                 evidence = await self.evidence_adapter(self.page, self.target, form)
                 if evidence and evidence.matches(self.target, form):
                     outcome = evidence.state

@@ -311,7 +311,8 @@ async def test_old_delayed_navigation_cannot_borrow_new_owner(chromium_page):
     await first.clock.install()
     await first.evaluate("""() => {
         const h = __GRAB160_DOCTOR_POLLER_TEST_HOOKS__;
-        h.writeSettings({session:{recoveryCooldownMs:[3000,3000]},pacing:{rateLimitCooldownMs:[15000,15000]}});
+        const settings = h.readSettings();
+        h.writeSettings({...settings, session:{...settings.session,recoveryCooldownMs:[3000,3000]},pacing:{...settings.pacing,rateLimitCooldownMs:[15000,15000]}});
     }""")
     await first.evaluate("""() => {
         document.body.append('访问次数过多');

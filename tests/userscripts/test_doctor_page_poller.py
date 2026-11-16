@@ -128,8 +128,8 @@ def test_userscript_metadata_matches_tampermonkey_storage_design():
     assert "@grant        unsafeWindow" in content
     assert "GM_xmlhttpRequest" not in content
     assert 'credentials: "omit"' in content
-    assert "// @version      0.3.0" in content
-    assert 'const SCRIPT_VERSION = "0.3.0";' in content
+    assert "// @version      0.3.1" in content
+    assert 'const SCRIPT_VERSION = "0.3.1";' in content
     assert "160Grab v${SCRIPT_VERSION}" in content
 
 
@@ -743,7 +743,7 @@ def test_safe_workflow_summaries_preserve_manual_waiting_and_cooldown():
     })()""",
         extra_js="""
     const fakeBody = { innerHTML: '', querySelector: () => null };
-    sandbox.document.getElementById = () => ({ querySelector: () => fakeBody });
+    sandbox.document.getElementById = () => ({ style:{left:'auto'}, querySelector: () => fakeBody });
     sandbox.console.log = sandbox.console.warn = sandbox.console.error = () => {};
     """,
     )

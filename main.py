@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -99,6 +100,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resolution", choices=["booked", "not-booked"])
     parser.add_argument("--revoke-consent", action="store_true")
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Print a private-value-free startup diagnostic report without launching a browser.",
+    )
+    parser.add_argument(
         "--create-profile",
         action="store_true",
         help="Create a new persistent browser profile and open it for warm-up.",
@@ -123,6 +129,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Preview cleanup counts without deleting files.",
     )
     args = parser.parse_args(argv)
+    if args.check and any(
+        (
+            args.pending_attempts,
+            args.resolve_attempt,
+            args.resolution,
+            args.revoke_consent,
+            args.create_profile,
+            args.profile_name,
+            args.smoke_browser,
+            args.cleanup_data,
+            args.dry_run,
+        )
+    ):
+        parser.error("--check cannot be combined with other operations")
     if bool(args.resolve_attempt) != bool(args.resolution):
         parser.error("--resolve-attempt and --resolution are required together")
     if args.dry_run and not args.cleanup_data:
@@ -184,6 +204,14 @@ async def run_smoke_browser(*, debug_dir: Path | None) -> None:
 
 
 async def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    if args.check:
+        from grab.diagnostics import diagnostic_report
+
+        config_path, _ = resolve_config_path(args)
+        report = await diagnostic_report(config_path)
+        emit_console_message(json.dumps(report, ensure_ascii=False))
+        raise SystemExit(2 if report["status"] == "blocked" else 0)
     try:
         await _exclusive_main(argv)
     except BrowserLaunchError:

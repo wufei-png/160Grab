@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         160Grab 91160 Doctor Page Poller
 // @namespace    https://github.com/wufei-png/160Grab
-// @version      0.3.0
+// @version      0.3.1
 // @description  Poll a real 91160 doctor detail page, jump into ystep1, and optionally submit the booking form.
 // @author       OpenAI Codex
 // @match        https://www.91160.com/doctors/index/*
@@ -21,7 +21,7 @@
   const PANEL_POSITION_KEY = "grab160.doctorPagePoller.panelPosition.v2";
   const PANEL_ID = "grab160-doctor-page-poller-panel";
   const PANEL_TOOLTIP_ID = "grab160-doctor-page-poller-tooltip";
-  const SCRIPT_VERSION = "0.3.0";
+  const SCRIPT_VERSION = "0.3.1";
   const PLACEHOLDER_VALUES = new Set(["", "...", "null", "undefined", "<member_id>"]);
   const RATE_LIMIT_PATTERNS = [
     "单位时间内访问次数过多",
@@ -1578,7 +1578,7 @@
     }
     const treeValid = (node, depth = 0) => {
       if (!node || typeof node !== 'object' || Array.isArray(node) || depth > 16) return false;
-      if ('schedule_id' in node || 'y_state' in node) return ['string','number'].includes(typeof node.schedule_id) && String(node.schedule_id).length > 0 && Number.isInteger(node.y_state) && [-3,-2,-1,0,1].includes(node.y_state);
+      if ('schedule_id' in node || 'y_state' in node) return ['string','number'].includes(typeof node.schedule_id) && String(node.schedule_id).length > 0 && ((Number.isInteger(node.y_state) && [-3,-2,-1,0,1].includes(node.y_state)) || (typeof node.y_state === 'string' && ['-3','-2','-1','0','1'].includes(node.y_state)));
       return Object.values(node).every(child => treeValid(child, depth + 1));
     };
     if (treeValid(payload.sch) && (payload.dates === undefined || (payload.dates && typeof payload.dates === 'object' && !Array.isArray(payload.dates)))) return {state: "VALID"};
@@ -1835,6 +1835,10 @@
     // validation too. Preserve only readiness, never the validation message.
     known.forEach(n => {
       if (n.value.trim() && (n.validity?.valid === false || n.getAttribute('data-grab-valid') === 'false')) snapshot.other_required.push(false);
+    });
+    const submitForm = document.querySelector(SUBMIT_SELECTOR)?.form;
+    all('input,select,textarea').forEach(n => {
+      if (!known.has(n) && !n.required && n.willValidate && !n.validity.valid && (!submitForm || n.form === submitForm)) snapshot.other_required.push(false);
     });
     all('[name="sch_data"]').forEach(n => {
       if (snapshot.schedule_ids.length === 1) {
@@ -2395,7 +2399,6 @@
       depId: bookingTarget.depId,
       doctorId:
         normalizeOptionalValue(state.pendingBooking?.doctorId) ??
-        normalizeOptionalValue(state.lastTarget?.doctorId) ??
         normalizeOptionalValue(settings.target.doctorId),
     };
     if (!isControllerActive(controllerId)) {
@@ -2410,7 +2413,7 @@
     }
     // The handoff is the proof connecting this schedule to the polled doctor.
     // A redirect or manual navigation to another booking must not reuse it.
-    if ((autoOpenedFromDoctor && (
+    if (!isResolvedTarget(target) || (autoOpenedFromDoctor && (
       state.pendingBooking.unitId !== bookingTarget.unitId ||
       state.pendingBooking.depId !== bookingTarget.depId ||
       state.pendingBooking.scheduleId !== bookingTarget.scheduleId
@@ -2516,6 +2519,56 @@
     renderPanel();
   }
 
+  const DIAGNOSTIC_MESSAGES = {
+    web_locks_available: '浏览器互斥能力可用', web_locks_missing: '缺少 Web Locks，自动运行不可用',
+    settings_valid: '设置格式有效', settings_unavailable: '设置无效，请在 Settings 修正',
+    journal_valid: '本地提交记录有效，无待核对项', journal_not_initialized: '尚未初始化提交记录',
+    pending_verification: '存在未核对的提交，请先检查原站预约记录', journal_unavailable: '提交记录不可用，请人工核对',
+    target_resolved: '当前医生目标可解析', target_unresolved: '无法核实当前医生目标，请返回医生页或明确配置目标',
+    page_visible: '当前页面可见', page_hidden: '页面隐藏时自动操作会暂停',
+    readonly_canary_required: '服务端登录态尚未验证；请运行只读 canary', login_required: '当前停留登录页，请先人工登录',
+  };
+
+  function diagnosticSnapshot() {
+    const checks = [];
+    const add = (id, status, code, extra = {}) => checks.push({id,status,code,...extra});
+    add('coordination', navigator.locks?.request ? 'ok' : 'blocked', navigator.locks?.request ? 'web_locks_available' : 'web_locks_missing');
+    let settings;
+    try {
+      // Read directly, without readSettings' migrations or storage fallback.
+      const raw = typeof GM_getValue === 'function' ? GM_getValue(SETTINGS_KEY, null) : JSON.parse(localStorage.getItem(SETTINGS_KEY) || 'null');
+      settings = normalizeSettings(raw);
+      if (settings.runtime.startBlocked) throw new Error('settings');
+      add('settings','ok','settings_valid');
+    } catch (_) { add('settings','blocked','settings_unavailable'); }
+    try {
+      const raw = localStorage.getItem(JOURNAL_KEY);
+      if (raw === null) add('journal','warning','journal_not_initialized');
+      else {
+        const journal = JSON.parse(raw); validateJournal(journal);
+        const count = journal.attempts.filter(r => UNRESOLVED.has(r.state)).length;
+        add('journal',count ? 'blocked' : 'ok',count ? 'pending_verification' : 'journal_valid',{pending_count:count});
+      }
+    } catch (_) { add('journal','blocked','journal_unavailable'); }
+    let resolved = false;
+    try {
+      if (parseDoctorPageUrl(location.href)) resolved = resolveTargetFromSnapshot(snapshotCurrentDoctorPage(), settings?.target || {}).ok;
+      else {
+        const current = parseBookingUrl(location.href);
+        const state = JSON.parse(sessionStorage.getItem(STATE_KEY) || '{}');
+        const pending = state.pendingBooking;
+        const target = pending || settings?.target;
+        resolved = Boolean(current && isResolvedTarget(target) && areTargetsCompatible(settings?.target,target) &&
+          target.unitId === current.unitId && target.depId === current.depId && (!pending || pending.scheduleId === current.scheduleId));
+      }
+    } catch (_) { /* Keep diagnostic output closed and free of page values. */ }
+    add('target',resolved ? 'ok' : 'blocked',resolved ? 'target_resolved' : 'target_unresolved');
+    add('visibility',document.visibilityState === 'hidden' ? 'warning' : 'ok',document.visibilityState === 'hidden' ? 'page_hidden' : 'page_visible');
+    add('site_session',isLoginExpiredPage() ? 'blocked' : 'warning',isLoginExpiredPage() ? 'login_required' : 'readonly_canary_required');
+    const status = checks.some(c => c.status === 'blocked') ? 'blocked' : checks.some(c => c.status === 'warning') ? 'warning' : 'ok';
+    return {version:1,status,live_checked:false,checks};
+  }
+
   // A canary latch survives navigation/reload, but approvals are memory-only.
   // Start/reset/valid product consent cannot turn a low-level canary into auto.
   const CANARY_KEY = 'grab160.canary.v1';
@@ -2585,11 +2638,17 @@
             if (!pageTarget || pageTarget.doctorId !== options.target.doctorId || !resolved.ok || JSON.stringify([resolved.target.unitId,resolved.target.depId,resolved.target.doctorId]) !== JSON.stringify([options.target.unitId,options.target.depId,options.target.doctorId])) return result('target_unresolved');
             for (let i = 0; i < maxPolls && guard(); i++) {
               policy.polls++;
-              const payload = await fetchDoctorSchedule(resolved.target, {...settings, filters:{...settings.filters,startDate:options.date}});
+              let payload;
+              try { payload = await fetchDoctorSchedule(resolved.target, {...settings, filters:{...settings.filters,startDate:options.date}}); }
+              catch (error) {
+                const status = error.sessionState === 'EXPIRED' ? 'login_required' : error.sessionState === 'RATE_LIMITED' ? 'rate_limited' : error.sessionState === 'TRANSIENT_FAILURE' ? 'network_blocked' : error.sessionState === 'UNKNOWN' ? (error.failureClass === 'schema_drift' ? 'schema_blocked' : 'session_blocked') : null;
+                if (status) return result(status);
+                throw error;
+              }
               if (!guard()) return result('inconclusive_timeout');
               const assessment = classifySchedule(payload);
               if (assessment.state === 'RATE_LIMITED') return result('rate_limited');
-              if (assessment.state !== 'VALID') return result('session_blocked');
+              if (assessment.state !== 'VALID') return result(assessment.state === 'EXPIRED' ? 'login_required' : assessment.failureClass === 'schema_drift' ? 'schema_blocked' : 'session_blocked');
               const slots = filterSlots(parseDoctorSchedulePayload(payload, resolved.target), resolved.target, settings.filters).filter(s => s.date === options.date && s.unitId === resolved.target.unitId && s.depId === resolved.target.depId);
               if (slots.some(s => s.status === 'available')) return result('observed');
               if (i + 1 < maxPolls) await sleepMs(Math.max(3000, pickDelayMs(settings.pacing.pollMs)));
@@ -2662,9 +2721,15 @@
       panel.style.left = "auto";
       return;
     }
-    panel.style.left = `${Math.max(8, normalized.left)}px`;
-    panel.style.top = `${Math.max(8, normalized.top)}px`;
+    const rect = panel.getBoundingClientRect();
+    panel.style.left = `${Math.max(8, Math.min(normalized.left, innerWidth - rect.width - 8))}px`;
+    panel.style.top = `${Math.max(8, Math.min(normalized.top, innerHeight - rect.height - 8))}px`;
     panel.style.right = "auto";
+  }
+
+  function fitPanelToViewport(panel) {
+    // Keep the current drag position, rather than restoring stale saved coordinates.
+    applyPanelPosition(panel, panel.style.left === 'auto' ? null : panel.getBoundingClientRect());
   }
 
   function installPanelDragging(panel, title) {
@@ -3162,6 +3227,7 @@
     document.documentElement.appendChild(panel);
     applyPanelPosition(panel, readPanelPosition());
     installPanelDragging(panel, panel.querySelector(".grab160-title"));
+    globalThis.addEventListener('resize', () => fitPanelToViewport(panel));
     return panel;
   }
 
@@ -3343,11 +3409,13 @@
         <button type="button" data-action="main">Overview</button>
         <button type="button" data-action="settings">Settings</button>
         <button type="button" data-action="logs">Logs</button>
+        <button type="button" data-action="diagnostics">自检</button>
         <button type="button" data-action="reset-state">Reset State</button>
         <button type="button" data-action="revoke-consent">撤销授权</button>
         <button type="button" data-action="resolve-booked">核对：已预约</button>
         <button type="button" data-action="resolve-not-booked">核对：未预约</button>
       </div>
+      <div data-diagnostics hidden role="status"></div>
       <details><summary>本机人工 canary</summary>
         <div>先保存具体目标、日期/时段、就诊人及字段；readonly 停留医生页，prepare/submit 手动打开对应预约页。</div>
         <button type="button" data-canary-arm>启用 canary 限制</button>
@@ -3372,6 +3440,14 @@
       .querySelector('[data-action="settings"]')
       ?.addEventListener("click", () => setActiveView("settings"));
     body.querySelector('[data-action="logs"]')?.addEventListener("click", () => setActiveView("logs"));
+    body.querySelector('[data-action="diagnostics"]')?.addEventListener('click', () => {
+      const report = diagnosticSnapshot();
+      const output = body.querySelector('[data-diagnostics]');
+      output.hidden = false;
+      output.textContent = '本机自检（不发起网络请求）：\n' + report.checks.map(c => `${c.status === 'blocked' ? '需处理' : c.status === 'warning' ? '待验证' : '通过'}：${DIAGNOSTIC_MESSAGES[c.code]}`).join('\n');
+      output.style.whiteSpace = 'pre-line';
+      fitPanelToViewport(panel);
+    });
     body
       .querySelector('[data-action="reset-state"]')
       ?.addEventListener("click", resetRuntimeState);
@@ -3379,6 +3455,8 @@
     if (state.activeView === "settings") {
       wireSettingsView(body, settings);
     }
+    // Restored coordinates must also fit after the body grows or changes view.
+    fitPanelToViewport(panel);
   }
 
   function renderSettingsView(settings) {
@@ -3804,6 +3882,7 @@
   globalThis.__GRAB160_CANARY__ = { run: runCanary };
 
   globalThis.__GRAB160_DOCTOR_POLLER_TEST_HOOKS__ = {
+    diagnosticSnapshot,
     runCanary, armCanary, runCanaryFromPanel, CANARY_KEY,
     LEADER_LOCK, JOURNAL_LOCK, ownsBrowserLeader, withBrowserLeader, releaseBrowserLeader, pauseForLeaderLoss,
     runDoctorPageController, runBookingPageController, ensureSubmissionConsent, revokeConsent, writeSettings, readSettings,

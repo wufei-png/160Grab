@@ -11,7 +11,7 @@ async def test_real_browser_outputs_exclude_synthetic_dom_script_cookie_and_url(
     monkeypatch.setenv("GRAB_DEBUG_DIR", str(tmp_path))
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(service_workers="block")
+        context = await browser.new_context(service_workers="block", offline=True)
         try:
             page = await context.new_page()
 

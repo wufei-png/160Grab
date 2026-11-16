@@ -13,7 +13,7 @@ from grab.errors import (
 )
 from grab.models.schemas import DoctorPageTarget, GrabConfig, Slot
 from grab.observability.safe_logging import logger
-from grab.services.session_state import classify_schedule
+from grab.services.session_state import classify_schedule, paiban_state
 from grab.utils.rate_limit import RateLimitError
 from grab.utils.read_retry import ReadRetryBudget
 from grab.utils.runtime import parse_sleep_time
@@ -226,7 +226,7 @@ class ScheduleService:
             -1: "expired",
             -2: "stopped",
             -3: "not_open",
-        }.get(y_state, "unavailable")
+        }.get(paiban_state(y_state), "unavailable")
 
     def _slot_matches_hours(self, slot: Slot, hours: list[str]) -> bool:
         if not slot.time_range:

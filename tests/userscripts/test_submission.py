@@ -19,7 +19,7 @@ def test_single_click_and_all_runtime_actions_remain_blocked(effect):
     })()""",
         extra_js=f"""const effect = {json.dumps(effect)}; sandbox.console.log = sandbox.console.warn = () => undefined;
 const body = {{innerHTML: '', querySelector:()=>null}};
-sandbox.document.getElementById = () => ({{querySelector:()=>body}});""",
+sandbox.document.getElementById = () => ({{style:{{left:'auto'}},querySelector:()=>body}});""",
     )
     assert result["clicks"] == 1
     assert result["outcome"] == result["second"] == "OUTCOME_UNKNOWN"
@@ -54,7 +54,7 @@ def test_storage_fault_no_click(fault):
         extra_js=setup
         + """sandbox.console.log = sandbox.console.warn = () => undefined;
 const body = {innerHTML:'',querySelector:()=>null};
-sandbox.document.getElementById = () => ({querySelector:()=>body});""",
+sandbox.document.getElementById = () => ({style:{left:'auto'},querySelector:()=>body});""",
     )
     assert result == {"outcome": "OUTCOME_UNKNOWN", "clicks": 0}
 
@@ -76,7 +76,7 @@ def test_legacy_submitting_is_migrated_without_sensitive_fields():
     })()""",
         extra_js="""sandbox.console.log = sandbox.console.warn = () => undefined;
 const body = {innerHTML: '', querySelector:()=>null};
-sandbox.document.getElementById = () => ({querySelector:()=>body});""",
+sandbox.document.getElementById = () => ({style:{left:'auto'},querySelector:()=>body});""",
     )
     assert result["blocked"]
     assert "SYN_" not in json.dumps(result)
@@ -148,7 +148,7 @@ def test_revoke_preserves_pending_and_resolution_updates_panel_outcome():
     })()""",
         extra_js="""sandbox.console.log = sandbox.console.warn = () => undefined;
 const body = {innerHTML: '', querySelector:()=>null};
-sandbox.document.getElementById = () => ({querySelector:()=>body});""",
+sandbox.document.getElementById = () => ({style:{left:'auto'},querySelector:()=>body});""",
     )
     assert result["pending"]
     assert not result["blocked"]

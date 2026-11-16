@@ -47,6 +47,16 @@ def is_login_url(url: str) -> bool:
     )
 
 
+def paiban_state(value):
+    # The live doctor endpoint also encodes these enum values as JSON strings.
+    # Do not coerce whitespace, booleans, floats or unknown provider states.
+    if type(value) is int and value in {-3, -2, -1, 0, 1}:
+        return value
+    if type(value) is str and value in {"-3", "-2", "-1", "0", "1"}:
+        return int(value)
+    return None
+
+
 def valid_schedule_tree(node, depth=0) -> bool:
     if not isinstance(node, dict) or depth > 16:
         return False
@@ -54,8 +64,7 @@ def valid_schedule_tree(node, depth=0) -> bool:
         return (
             type(node.get("schedule_id")) in {str, int}
             and bool(str(node["schedule_id"]))
-            and type(node.get("y_state")) is int
-            and node["y_state"] in {-3, -2, -1, 0, 1}
+            and paiban_state(node.get("y_state")) is not None
         )
     return all(valid_schedule_tree(child, depth + 1) for child in node.values())
 

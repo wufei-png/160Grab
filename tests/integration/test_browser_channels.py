@@ -51,6 +51,7 @@ async def test_installed_channel_smoke_with_temporary_profile(
         persistent_context_enabled=persistent,
         user_data_dir=profile.path,
     ) as client:
+        await client.context.set_offline(True)
         await client.context.route("**/*", lambda route: route.abort())
         await client.goto("about:blank")
         await client.page.set_content(

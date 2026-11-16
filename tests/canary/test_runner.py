@@ -6,7 +6,14 @@ import pytest
 
 from grab.canary.policy import CanaryPolicy, canary_scope
 from grab.canary.runner import CanaryRunner
+from grab.core.leader import LeaderLost
+from grab.errors import (
+    SessionExpiredError,
+    TransientSessionRefreshError,
+    UnknownSessionError,
+)
 from grab.models.schemas import BookingForm, DoctorPageTarget, GrabConfig, Slot
+from grab.utils.rate_limit import RateLimitError
 
 
 def setup_runner(**kwargs):
@@ -111,6 +118,27 @@ async def test_no_slots_exhausts_count_budget(monkeypatch):
     monkeypatch.setattr("grab.canary.runner.asyncio.sleep", AsyncMock())
     result = await runner.run("readonly")
     assert result.status == "inconclusive_no_slots" and result.polls == 2
+    runner.booking.open_booking_form.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "error,status",
+    [
+        (UnknownSessionError("schema_drift"), "schema_blocked"),
+        (UnknownSessionError("missing_key"), "session_blocked"),
+        (SessionExpiredError(), "login_required"),
+        (TransientSessionRefreshError(), "network_blocked"),
+        (RateLimitError("Rate limited.", "schedule_polling"), "rate_limited"),
+        (LeaderLost(), "leader_blocked"),
+    ],
+)
+async def test_readonly_blocker_preserves_safe_counters_and_cause(error, status):
+    runner = setup_runner()
+    runner.schedule.poll_once.side_effect = error
+    result = await runner.run("readonly")
+    assert result.status == status
+    assert result.polls == 1 and result.submit_calls == 0
+    assert result.form_opened is False and result.state is None
     runner.booking.open_booking_form.assert_not_called()
 
 

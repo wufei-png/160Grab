@@ -19,6 +19,10 @@ SNAPSHOT_SCRIPT = """() => {
         if (node.tagName === 'TEXTAREA') copy.textContent = node.value;
         if ('checked' in node) copy.toggleAttribute('checked', node.checked);
         if (node.validity) copy.setAttribute('data-grab-valid', String(node.validity.valid));
+        if ('willValidate' in node) {
+            const submit = document.querySelector('#submitbtn, #submit_booking, #submitBooking, #suborder button[type="submit"], #suborder input[type="submit"]');
+            copy.setAttribute('data-grab-native-invalid', String(node.willValidate && !node.validity.valid && (!submit?.form || node.form === submit.form)));
+        }
         if (node.tagName === 'OPTION') copy.toggleAttribute('selected', node.selected);
         const style = getComputedStyle(node);
         const visible = Boolean(node.getClientRects().length) && style.visibility !== 'hidden';

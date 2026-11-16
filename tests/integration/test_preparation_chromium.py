@@ -39,7 +39,10 @@ async def load_case(page, case):
             if(e.target.matches('input[type="radio"]')) window.selectionClicks++;
         });
     })();""")
-    await page.goto("https://synthetic.invalid/booking")
+    await page.goto(
+        "https://www.91160.com/guahao/ystep1/uid-synthetic-unit/depid-synthetic-dept/"
+        f"schid-{case['selection']['schedule_id']}.html"
+    )
     if "native_required_valid" in case:
         assert (
             await page.locator("#suborder").evaluate("node => node.checkValidity()")

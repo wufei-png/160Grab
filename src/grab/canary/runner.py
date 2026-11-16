@@ -2,8 +2,14 @@ import asyncio
 from dataclasses import dataclass
 
 from grab.canary.policy import CanaryPolicy, canary_scope, scenario
-from grab.core.leader import check_leader, leader_scope
+from grab.core.leader import LeaderLost, check_leader, leader_scope
+from grab.errors import (
+    SessionExpiredError,
+    TransientSessionRefreshError,
+    UnknownSessionError,
+)
 from grab.models.schemas import BookingState
+from grab.utils.rate_limit import RateLimitError
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,35 @@ class CanaryRunner:
         except TimeoutError:
             return CanaryResult(
                 "inconclusive_timeout",
+                level,
+                self.polls,
+                self.form_opened,
+                BookingState.OUTCOME_UNKNOWN if self.submit_calls else None,
+                self.submit_calls,
+            )
+        except (
+            UnknownSessionError,
+            SessionExpiredError,
+            TransientSessionRefreshError,
+            RateLimitError,
+            LeaderLost,
+        ) as exc:
+            status = (
+                "schema_blocked"
+                if isinstance(exc, UnknownSessionError)
+                and exc.failure_class == "schema_drift"
+                else "session_blocked"
+                if isinstance(exc, UnknownSessionError)
+                else "login_required"
+                if isinstance(exc, SessionExpiredError)
+                else "rate_limited"
+                if isinstance(exc, RateLimitError)
+                else "leader_blocked"
+                if isinstance(exc, LeaderLost)
+                else "network_blocked"
+            )
+            return CanaryResult(
+                "stopped" if self.submit_calls else status,
                 level,
                 self.polls,
                 self.form_opened,

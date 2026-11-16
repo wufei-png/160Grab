@@ -107,6 +107,47 @@ async def test_userscript_readonly_resolves_docid_and_never_changes_form(chromiu
     ) == [0, 0, 1, False, ""]
 
 
+@pytest.mark.parametrize(
+    "payload,http_status,status",
+    [
+        (
+            {"code": 1, "sch": {"unknown": "SYN_PRIVATE_RESPONSE"}},
+            200,
+            "schema_blocked",
+        ),
+        ({"error_code": 10021}, 200, "login_required"),
+        ({}, 429, "rate_limited"),
+        ({}, 503, "network_blocked"),
+    ],
+)
+async def test_readonly_blocker_reports_cause_without_response_values(
+    chromium_page, payload, http_status, status
+):
+    page = chromium_page
+    await load(
+        page,
+        '<a id="addMark" unit_id="u" dep_id="d" doctor_id="doc"></a>',
+        "https://www.91160.com/doctors/index/docid-doc.html",
+    )
+    await page.evaluate(
+        """({payload,status}) => {
+        window._user_key = 'SYN_KEY';
+        window.fetch = async () => ({status,text:async()=>JSON.stringify(payload)});
+    }""",
+        {"payload": payload, "status": http_status},
+    )
+    result = await page.evaluate(
+        """async () => __GRAB160_CANARY__.run('readonly',{target:{unitId:'u',depId:'d',doctorId:'doc'},date:'2026-09-30',ready:async()=>true})"""
+    )
+    assert result == {
+        "status": status,
+        "level": "readonly",
+        "polls": 1,
+        "submitCalls": 0,
+        "state": None,
+    }
+
+
 async def test_userscript_ready_timeout_fences_late_continuation(chromium_page):
     page = chromium_page
     await load(
@@ -154,7 +195,9 @@ async def test_userscript_canary_owner_blockers_report_status_and_counts(
         window.fetch=async()=>{requests++;return {status:200,text:async()=>'{"result_code":1,"data":{"schedules":[]}}'}};
     }""")
     if blocker == "unavailable":
-        await page.evaluate("Object.defineProperty(navigator,'locks',{value:undefined})")
+        await page.evaluate(
+            "Object.defineProperty(navigator,'locks',{value:undefined})"
+        )
     elif blocker == "hidden":
         await page.evaluate(
             "Object.defineProperty(document,'visibilityState',{value:'hidden'})"
@@ -186,9 +229,12 @@ async def test_userscript_canary_owner_blockers_report_status_and_counts(
     if blocker == "contended":
         await page.evaluate("releaseOtherOwner()")
     if blocker == "journal":
-        assert await page.evaluate(
-            "localStorage.getItem(__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.JOURNAL_KEY)"
-        ) == "invalid-json"
+        assert (
+            await page.evaluate(
+                "localStorage.getItem(__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.JOURNAL_KEY)"
+            )
+            == "invalid-json"
+        )
 
 
 async def test_userscript_canary_owner_loss_reports_inflight_read_and_fences_callback(
@@ -223,9 +269,12 @@ async def test_userscript_canary_owner_loss_reports_inflight_read_and_fences_cal
     )
     assert await page.evaluate("[clicks,changes,requests]") == [0, 0, 1]
     assert await page.evaluate("location.pathname") == "/doctors/index/docid-doc.html"
-    assert await page.evaluate(
-        "sessionStorage.getItem(__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.CANARY_KEY)"
-    ) == "locked"
+    assert (
+        await page.evaluate(
+            "sessionStorage.getItem(__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.CANARY_KEY)"
+        )
+        == "locked"
+    )
 
 
 async def test_userscript_submit_needs_specific_approval_and_never_claims_success(
@@ -269,7 +318,7 @@ async def test_userscript_panel_can_disable_legacy_auto_start(chromium_page):
     toggle = page.locator('[data-setting="runtime.autoStart"]')
     assert await toggle.is_checked()
     await toggle.uncheck()
-    await page.locator('[data-save-settings]').click()
+    await page.locator("[data-save-settings]").click()
     assert not await page.evaluate(
         "__GRAB160_DOCTOR_POLLER_TEST_HOOKS__.readSettings().runtime.autoStart"
     )
