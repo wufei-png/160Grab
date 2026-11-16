@@ -49,7 +49,7 @@ async def test_userscript_subsecond_wait_and_stop_cancel(chromium_page):
       h.withBrowserLeader(async()=>{{window.ready=await h.waitUntilStartAt(h.normalizeSettings({{runtime:{{startAt:new Date(Date.now()+250).toISOString()}}}}),id);done=true;}});
     }}""")
     await page.wait_for_function(
-        f"{HOOKS}.readState().summary.message === 'Waiting for configured start time.'"
+        f"{HOOKS}.readState().summary?.message === 'Waiting for configured start time.'"
     )
     await page.clock.run_for(249)
     assert await page.evaluate("done") is False
@@ -57,10 +57,10 @@ async def test_userscript_subsecond_wait_and_stop_cancel(chromium_page):
     await page.wait_for_function("done")
     assert await page.evaluate("ready") is True
     await page.evaluate(
-        f"""() => {{const h={HOOKS};done=false;id=h.prepareManualControllerStart('doctor');h.withBrowserLeader(async()=>{{ready=await h.waitUntilStartAt(h.normalizeSettings({{runtime:{{startAt:new Date(Date.now()+60000).toISOString()}}}}),id);done=true;}});}}"""
+        f"""() => {{const h={HOOKS};h.writeState({{...h.readState(),summary:null}});done=false;id=h.prepareManualControllerStart('doctor');h.withBrowserLeader(async()=>{{ready=await h.waitUntilStartAt(h.normalizeSettings({{runtime:{{startAt:new Date(Date.now()+60000).toISOString()}}}}),id);done=true;}});}}"""
     )
     await page.wait_for_function(
-        f"{HOOKS}.readState().summary.message === 'Waiting for configured start time.'"
+        f"{HOOKS}.readState().summary?.message === 'Waiting for configured start time.'"
     )
     await page.evaluate(f"{HOOKS}.stopRun()")
     await page.wait_for_function("done")
@@ -77,7 +77,7 @@ async def test_userscript_controller_waits_then_requests_zone_date(chromium_page
       h.writeSettings({{runtime:{{startAt:new Date(Date.now()+250).toISOString()}}}});start();
     }}""")
     await page.wait_for_function(
-        f"{HOOKS}.readState().summary.message === 'Waiting for configured start time.'"
+        f"{HOOKS}.readState().summary?.message === 'Waiting for configured start time.'"
     )
     assert await page.evaluate("requests") == 0
     await page.clock.run_for(250)
@@ -117,6 +117,7 @@ async def test_read_interval_uses_monotonic_clock_during_wall_clock_jump(
     await page.wait_for_function("requests === 2", timeout=1000)
     await page.evaluate(f"{HOOKS}.stopRun()")
     await page.wait_for_function("finished")
+
 
 @pytest.mark.parametrize(
     "instant", ["2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00.250-04:00"]
