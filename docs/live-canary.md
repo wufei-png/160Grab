@@ -1,5 +1,7 @@
 # 本机人工 canary 与最小脱敏夹具
 
+最新实现与本次现场覆盖见 [2026-10-19 审核记录](project-status-2026-10-19.md)；本页各历史日期不代表新版本已完成现场验收。
+
 S06 工具、S09 文档收口，2026-10-01。只在本机人工执行；CI 不运行 live。
 Python 与 userscript 的现场证据分别记录，不能用一个 profile/路径的登录或 synthetic 回归代替另一路径。
 未决提交先在原站核对，禁止混跑两路径、多个 browser profile 或多机器。
@@ -85,7 +87,8 @@ prepare/submit 由人工核对医生和排班，**在已启用限制的同一标
 2. 已有本脚本时编辑原脚本，完整替换为当前工作区
    [userscript](../userscripts/91160-doctor-page-poller.user.js) 后保存，不新建副本或删除重装，保留已有设置和未决 journal。
    没有原脚本时才新建。若旧脚本正在运行，先在原页面 Stop 并启用 canary 限制，再更新。
-   当前版本号仍为 0.3.0，不能仅凭版本号判断已包含审核修复；内容应包含 `bookingSettingsMatch`。
+   当前工作区为 v0.3.1，完整内容应包含 `bookingSettingsMatch`、`diagnosticSnapshot` 和
+   `fitPanelToViewport`；旧 v0.3.0 不视为本轮修复版本。工具若拒绝扩展编辑页，由用户手动更新，不能绕过策略。
 3. 手动登录、完成 CAPTCHA，停留目标医生页。面板 Settings →「筛选时间」关闭 Auto Start；
    Appointment From 填明确验证日期，Submit mode 选择 Manual confirm，点击 Save Settings。
    readonly 无需填写就诊人、卡号、病情或地址。关闭其它预约运行；Python 路径与 userscript 顺序验证。

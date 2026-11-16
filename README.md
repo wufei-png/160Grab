@@ -8,6 +8,7 @@ S01–S09 的代码/离线验收进度见 [实施计划](docs/implementation-pla
 
 ## 文档入口
 
+- [2026-10-19 项目审核、修复与待办](docs/project-status-2026-10-19.md)
 - [当前架构与证据边界](docs/current-architecture.md)
 - [两路径预约业务合同](docs/booking-contract.md)
 - [日志、隐私、权限与清理](docs/security-and-privacy.md)
@@ -43,6 +44,10 @@ uv run --locked python main.py config.yaml
 人工等待时，交互终端会保留浏览器页面，按 Enter 结束交接后关闭；非交互运行返回退出码 2。站点协议、安全验证、支付和未验证 follow-up 始终交人工。
 
 ## 配置说明与迁移
+
+先运行 `uv run --locked python main.py config.yaml --check` 可获得安全的启动自检摘要。
+它不启动浏览器、不发请求、不改 profile 或提交记录；`blocked` 退出 2，`warning` 仍可能需要人工登录/选择。
+这项本机检查不证明服务端会话有效，现场核验使用只读 canary。
 
 完整示例见 [config/example.yaml](config/example.yaml)。
 
@@ -97,6 +102,9 @@ uv run --locked python main.py config.yaml --revoke-consent
 ## Tampermonkey
 
 导入 [userscript](userscripts/91160-doctor-page-poller.user.js)，在已登录的医生页打开右上角 Settings。配置保存于 Tampermonkey storage（无 GM 能力时使用本地 storage）；授权/attempt journal 单独存同 origin localStorage，不与 Python 共享。
+
+v0.3.1 面板的「自检」可直接查看设置、目标、互斥、页面可见性和未决记录的阻断原因。
+该操作不发网络请求、不清记录；已有脚本请更新原脚本，保留设置和未决 journal。
 
 1. 明确配置 `memberId` 或完整、唯一的 `memberLabel`；唯一正确候选才可选择，多候选/身份警告交人工。
 2. card、病情、Province/City/Area/详细地址默认全空，只用已知真实值。已有非空值不覆盖；未接受的协议不自动勾选。
