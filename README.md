@@ -14,7 +14,7 @@ S01–S09 的代码/离线验收进度见 [实施计划](docs/implementation-pla
 - [日志、隐私、权限与清理](docs/security-and-privacy.md)
 - [本机人工 canary 与脱敏夹具](docs/live-canary.md)
 - [集成验收、配置迁移与未覆盖 gate](docs/integration-acceptance.md)
-- [逐会话启动提示词](docs/implementation-session-prompts-2026-09-30.md)
+- [历史实施提示词](docs/implementation-session-prompts-2026-09-30.md)
 - [历史改进建议](docs/future-improvements.md)（历史原文不作为当前操作说明）
 
 ## Python 快速开始
@@ -60,7 +60,7 @@ uv run --locked python main.py config.yaml
 | `browser.session_refresh_interval_seconds` | 保留旧字段；正常有效轮询不再周期保活。缺 key 时仅必要低频诊断，至少 60 秒一轮 |
 | `browser.session_recovery_max_attempts` / `session_recovery_cooldown_seconds` | 仅 confirmed expired 才 bounded 人工恢复；恢复后重新捕获目标/成员/授权并核对 pending |
 | `browser.stealth` | 保留默认补丁，可关闭；不替代站点协议与限频边界 |
-| `member_id` / `doctor_ids` / `weeks` / `days` / `hours` | 就诊人和号源过滤；hours 支持整点/半小时区间，如 `8-9`、`09:00-09:30`，预约页再次精确匹配 |
+| `member_id` / `doctor_ids` / `weeks` / `days` / `hours` | 就诊人和号源过滤；hours 支持整点/半小时区间，如 `8-9`、`09:00-09:30`，预约时段与配置范围重叠即可匹配 |
 | `sleep_time` | 默认 `3000-5000` ms；轮询下限 3 秒，更小配置不能缩短该下限 |
 | `page_action_sleep_time` | 打开/提交前停顿，默认 `400-900` ms |
 | `booking_retry_sleep_time` | 仅提交前打开/准备瞬态失败间隔，默认 `2000-4000` ms，最多三次；不重试最终 click |
@@ -69,6 +69,7 @@ uv run --locked python main.py config.yaml
 | `enable_appoint` / `appoint_time` | 推荐 offset ISO（如 `2030-01-01T08:00:00+08:00`）；旧 naive 按配置时区解释并提示迁移。DST 歧义/不存在拒绝；迟到 ≤30 秒开始，超时须人工确认，非交互停止 |
 | `booking.submit_mode` | 默认 `auto`，本地明确授权独立于配置；`manual_confirm` 仅准备后交人工 |
 | `booking.clinic_card` / `disease_description` / `address` | 默认为空；只填空控件，已有值保留，冲突交人工；card 不从证件复制，地区只认唯一精确 option value/完整文字 |
+| `booking.first_visit` | 默认 false；仅确为首次到该院就诊、且当前北大深圳医院页面允许无卡时设为 true。当日号等明确需要卡号时仍会停止 |
 | `logging.jsonl_dir` / `heartbeat_interval_seconds` | 默认 `~/.160grab/logs`/300 秒，输出固定消息与白名单字段 |
 | `logging.include_sensitive_debug` | 默认 false；原始快照还需 `GRAB_DEBUG_DIR` 双开关，只落本机 |
 | `notifications.desktop` / `rate_limit_threshold` | 本地通知、持续限频阈值；消息无个人/页面值 |
@@ -103,7 +104,7 @@ uv run --locked python main.py config.yaml --revoke-consent
 
 导入 [userscript](userscripts/91160-doctor-page-poller.user.js)，在已登录的医生页打开右上角 Settings。配置保存于 Tampermonkey storage（无 GM 能力时使用本地 storage）；授权/attempt journal 单独存同 origin localStorage，不与 Python 共享。
 
-v0.3.1 面板的「自检」可直接查看设置、目标、互斥、页面可见性和未决记录的阻断原因。
+v0.3.6 面板的「自检」可直接查看设置、目标、互斥、页面可见性和未决记录的阻断原因。
 该操作不发网络请求、不清记录；已有脚本请更新原脚本，保留设置和未决 journal。
 
 1. 明确配置 `memberId` 或完整、唯一的 `memberLabel`；唯一正确候选才可选择，多候选/身份警告交人工。
@@ -119,7 +120,7 @@ v0.3.1 面板的「自检」可直接查看设置、目标、互斥、页面可�
 
 settingsVersion=5：旧版自动生成的广东/深圳/南山区、通用病情等来源不可区分，迁移时清除后需明确重新输入；v4 已明确的真实字段保留。旧 maxSubmitAttempts 只迁到最多三次的 pre-submit 预算。`autoReturnAfterSubmitFailure` 不能绕过 UNKNOWN，字段/时段不匹配或必填缺失不换号绕过。
 
-缺 key/未知 schema 停下人工核对；明确 10021/login redirect 清缓存并停下等待人工登录后按 Start，不能自动刷新重试。轮询预算/取消/冷却和 Python 合同一致。真实 Tampermonkey sandbox 仍待现场验证。
+缺 key/未知 schema 停下人工核对；明确 10021/login redirect 清缓存并停下等待人工登录后按 Start，不能自动刷新重试。轮询预算/取消/冷却和 Python 合同一致。2026-11-16 已在真实 Tampermonkey sandbox 完成只读、准备和一次提交，并在官网核对预约成功；现场范围和限制见 [现场 canary 记录](docs/live-canary.md)。
 
 ## 日志与本机调试
 

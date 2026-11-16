@@ -1,6 +1,6 @@
 # 本机人工 canary 与最小脱敏夹具
 
-最新实现与本次现场覆盖见 [2026-10-19 审核记录](project-status-2026-10-19.md)；本页各历史日期不代表新版本已完成现场验收。
+历史实现审核见 [2026-10-19 审核记录](project-status-2026-10-19.md)；每次现场结果独立记录，历史日期不代表新版本已完成现场验收。
 
 S06 工具、S09 文档收口，2026-10-01。只在本机人工执行；CI 不运行 live。
 Python 与 userscript 的现场证据分别记录，不能用一个 profile/路径的登录或 synthetic 回归代替另一路径。
@@ -20,6 +20,7 @@ Python 与 userscript 的现场证据分别记录，不能用一个 profile/路�
 JS 原生确认框可能暂停浏览器 timer；恢复后以单调 deadline 复核，超时不再填表或提交。
 人工可以随时拒绝、Stop 或关闭页面；迟到 continuation 无权恢复操作。
 无号源/超时是 inconclusive；缺场景、登录态、readiness、profile、互斥或 pending 是 blocker。
+Python readiness 结果的 `blockers` 仅包含允许公开的固定分类，未知分类归为 `unclassified`；不包含页面值。
 `submit_calls`/`submitCalls` 是提交入口调用数，**不等于确认成功或实际 click 数**。
 没有现场结果 adapter 时，已进入 click 边界的结果仍是 OUTCOME_UNKNOWN，须查原站预约记录。
 
@@ -48,8 +49,10 @@ uv run --locked pytest -s -q tests/e2e/test_live_flow.py
 prepare 另外指定 `LIVE_MEMBER_ID`、`LIVE_HOURS`（单个精确范围，如 `09:00-09:30`），
 设置 `LIVE_LEVEL=prepare`。允许填写的真实配置值可通过 `LIVE_CARD`、`LIVE_DISEASE`、
 `LIVE_ADDRESS_PROVINCE/CITY/AREA/DETAIL` 提供；默认空。已有值保留，冲突/缺必填信息停止。
+仅确认为首次到该院就诊时可设 `LIVE_FIRST_VISIT=1`；能否无卡仍取决于已验证的当前医院页面条件。
 在显示本次目标、就诊人、日期/时段及 schedule 后输入 `PREPARE` 才选成员/时段和填写字段。
 不自动接受站点协议，不提交、不点击后续控件。
+如现场表单需要本人处理，canary 会停在当前页；处理后输入 `REPAIR`，重新核对同一页面和表单，仍不会提交。
 
 submit 只有在人工已针对**本次具体场景**批准时设置 `LIVE_LEVEL=submit` 和 `LIVE_BOOKING=1`；
 再次显示最终 schedule 与时段值后输入 `SUBMIT`。该具体确认接入本次页面/运行的产品授权，
@@ -61,19 +64,20 @@ submit 只有在人工已针对**本次具体场景**批准时设置 `LIVE_LEVEL
 
 ## userscript 本机操作
 
-在 Tampermonkey 面板保存具体目标、日期、时段、就诊人及允许使用的真实字段；先关闭 Auto Start。
+在 Tampermonkey 面板保存日期、时段、就诊人及允许使用的真实字段；先关闭 Auto Start。
 展开「本机人工 canary」，点击「启用 canary 限制」。限制记录只含固定标记，
 同标签页的导航、刷新、Start/reset 都不能解除；场景批准只在当前 document 内存中有效。
 结束后关闭标签页，保留未决 journal。不复制 profile，不启用另一运行路径。
 
 readonly 停留医生页；选择 readonly，点击「运行并人工确认」，人工 ready 后有限查询并返回安全摘要。
-prepare/submit 由人工核对医生和排班，**在已启用限制的同一标签页**打开对应预约链接；
+只读查询命中后，脚本把本次医生目标、日期和可预约排班保存在该标签页的 sessionStorage 中；
+prepare/submit 由人工核对医生和排班，**在同一标签页**打开其中匹配的预约链接。日期、医院、科室或排班不匹配时会停止；
 在面板选层级，重新确认具体场景。prepare 零提交；submit 还须在本次运行勾选
 `LIVE_E2E=1`、`LIVE_BOOKING=1` 并接受具体 submit 确认及产品 consent。
 这是 JS 本机开关，不能用 Python 进程环境变量替代。不自动换号源、导航/follow-up 或恢复登录。
 
 面板入口在 userscript sandbox 内执行，不依赖向页面导出特权桥。
-本地 Chromium 测了 DOM/面板事件、Web Locks、reload 与 canary；真实 Tampermonkey sandbox 尚无现场证据。
+本地 Chromium 测了 DOM/面板事件、Web Locks、reload 与 canary。真实 Tampermonkey 的现场覆盖及限制见下方记录。
 
 ### 现场验证需要人工辅助时
 
@@ -87,7 +91,7 @@ prepare/submit 由人工核对医生和排班，**在已启用限制的同一标
 2. 已有本脚本时编辑原脚本，完整替换为当前工作区
    [userscript](../userscripts/91160-doctor-page-poller.user.js) 后保存，不新建副本或删除重装，保留已有设置和未决 journal。
    没有原脚本时才新建。若旧脚本正在运行，先在原页面 Stop 并启用 canary 限制，再更新。
-   当前工作区为 v0.3.1，完整内容应包含 `bookingSettingsMatch`、`diagnosticSnapshot` 和
+   当前工作区为 v0.3.6，完整内容应包含 `bookingSettingsMatch`、`diagnosticSnapshot` 和
    `fitPanelToViewport`；旧 v0.3.0 不视为本轮修复版本。工具若拒绝扩展编辑页，由用户手动更新，不能绕过策略。
 3. 手动登录、完成 CAPTCHA，停留目标医生页。面板 Settings →「筛选时间」关闭 Auto Start；
    Appointment From 填明确验证日期，Submit mode 选择 Manual confirm，点击 Save Settings。
@@ -96,7 +100,7 @@ prepare/submit 由人工核对医生和排班，**在已启用限制的同一标
    独立窗口不能保证工具连接或页面可见性不受干扰，页面隐藏仍会触发安全停止。
 4. 展开「本机人工 canary」，点击「启用 canary 限制」，选 readonly，再点击「运行并人工确认」。
    仅确认 ready；保留两个 LIVE 复选框未选。默认最多三次查询、120 秒，最终动作必须为零。
-5. 返回本地弹窗的 `status`、`level`、`polls`、`submitCalls`、`state`，以及脚本是否由 Tampermonkey 加载。
+5. 返回本地弹窗的 `status`、`level`、`polls`、`submitCalls`、`state` 和可选的 `reason`，以及脚本是否由 Tampermonkey 加载。
    `submitCalls` 必须为 0；无号源或 blocker 不是成功现场证据。原始 HTML、cookie 和个人表单值留在本机。
    失锁时摘要为 `leader_blocked`，保留已发起查询的计数；journal 异常仍返回 `OUTCOME_UNKNOWN`，
    必须在原站核对，不能重置 journal 后重跑。
@@ -147,12 +151,42 @@ fingerprint 只计算 schema 形状，不散列个人值。HTML 是静态 parser
 后续每次现场记录路径、日期、层级、预算/计数、安全终态、覆盖与 blocker；不记录个人值、URL query、
 原始 response/HTML。真实提交证据只能用匹配本次场景的已验证业务结果，弱页面变化仍为 UNKNOWN。
 
-## S09 保留的现场 gate
+## 2026-11-16 现场记录
 
-本轮仅运行 offline/local Chromium，没有执行上述现场命令或真实预约。Python 与 userscript
+初始只读与准备测试在同一位有号医生的页面按顺序运行，均未点击最终提交：
+
+| 路径 | 层级 | 实际结果 |
+|---|---|---|
+| Python，专用 Chromium profile | readonly | `observed`，查询 1 次，未打开预约页，提交 0 次。 |
+| Python，专用 Chromium profile | prepare | 查询 1 次并打开真实预约页，`readiness_blocked` / `AWAITING_MANUAL_CONFIRMATION`，提交 0 次；该运行未输出具体 blocker。 |
+| Tampermonkey，真实 Chrome | readonly | `observed`，查询 1 次，提交 0 次；确认脚本从真实扩展 sandbox 加载。 |
+| Tampermonkey，真实 Chrome | prepare | `readiness_blocked`，`reason=member.blocked`，提交 0 次；站点就诊人状态字段触发了当前保守检查。 |
+
+预约页将选中时段标记为 `cur`；两条路径已补充该标记的识别，并在本地 Chromium 回归中验证。
+现场也看到医院页导向 `www.rrjk160.com`；该次会话中该域名显示未登录，而 `www.91160.com` 已登录。目前未验证该域名的完整认证和预约流程，脚本仍仅匹配 `www.91160.com`。
+
+后续检查发现当前北大深圳医院页面的部分旧建档标记适用于儿童医院流程；同一控件上的固定审核提示在该页没有对应提示框。修复仅在医院、页面和官网校验标记同时匹配时采用该适配；有监护人缺失、实际提示框、明确验证警告或未知页面时仍停止。官网自己的提交和身份校验不受修改。
+
+修复后，真实 Chrome 中的 Tampermonkey v0.3.6 在该医院重新运行 prepare，返回
+`prepared`，提交 0 次；随后经具体场景批准运行 submit，记录 1 次提交入口调用并进入
+`OUTCOME_UNKNOWN`。人工查看官网成功页和对应订单详情，确认预约成功后，通过面板将该笔本机
+未决记录核对为 `CONFIRMED_SUCCESS`。费用为现场支付，现场未支付。此次成功只证明所测医院、
+页面和本次场景；它不证明所有医院的用户状态字段具有相同含义，也不构成通用结果 adapter。
+
+Python 专用浏览器随后在同院另一位医生的号源上执行 submit。首次准备被官网推广弹层挡住，
+没有提交；修复后再次运行，人工关闭弹层并按已确认的规则勾选协议。程序报告准备完成后，
+人工补选异步加载的区县，再执行 1 次提交入口调用，返回 `OUTCOME_UNKNOWN`。人工在官网订单列表核对
+同一就诊人、医生、日期和时段，确认预约成功且未支付，随后将该笔本机记录核对为已预约。
+区县异步联动暴露的准备完成判断已补充写入队列复核和本地 Chromium 回归，但该最后一项修复
+尚未重新执行现场预约。Python 与插件各有独立现场证据；不能仅根据本记录清除其他未决提交
+或放宽验证。
+
+## 历史 S09 现场 gate
+
+2026-10-01 的 S09 轮次仅运行 offline/local Chromium，没有执行上述现场命令或真实预约。Python 与 userscript
 仍分别缺专用 profile/当前目标/具体场景批准和真实 schema/结果 adapter/fixture 刷新证据；
-未决记录不能因集成验收或文档迁移被标为已核对。Tampermonkey 扩展 sandbox、Windows ready
-仍未验证。现场或远端 CI 必须记录新的实际运行，不能继承本地 synthetic 结果。
+未决记录不能因集成验收或文档迁移被标为已核对。该轮 Tampermonkey 扩展 sandbox、Windows ready
+未验证。现场或远端 CI 必须记录新的实际运行，不能继承本地 synthetic 结果。
 
 CI/release 显式设 LIVE_E2E=0/LIVE_BOOKING=0 并用 `-m "not live"` 排除现场测试，
 contract/本地 Chromium 和 offline canary 照常执行。全部验证与发布边界见
