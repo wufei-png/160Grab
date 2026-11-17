@@ -1,6 +1,6 @@
 [project]
 name = "160grab"
-version = "0.1.0"
+version = "0.4.0"
 description = "健康160医生页预约辅助工具 - 人工登录与 Playwright/Tampermonkey 自动化"
 requires-python = ">=3.11"
 dependencies = [
