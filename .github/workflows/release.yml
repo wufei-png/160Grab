@@ -137,7 +137,9 @@ jobs:
         shell: bash
         run: |
           cd release-artifacts
-          find . -type f -name '*.zip' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          find . -type f -name '*.zip' -print0 | sort -z | while IFS= read -r -d '' archive; do
+            (cd "$(dirname "$archive")" && sha256sum -- "$(basename "$archive")")
+          done > SHA256SUMS
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
