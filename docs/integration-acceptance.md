@@ -279,3 +279,31 @@ Windows 为 404 + 273 passed，5 项 POSIX 专属 skipped。每个平台 3 项 l
 这次增加的是 userscript 结果归一及测试/文档，Python、打包源码、配置模板与依赖锁文件
 相较上述 `7925f14` 构建提交均未改变；未重复构建 frozen bundle，也没有发布 Release。
 最后仅补充此 CI 结果的文档提交使用 `[skip ci]`；代码验证绑定上述确切修复提交。
+
+## 2026-11-18 工作流固定与全仓格式门禁
+
+本轮把两条 workflow 中的动作引用从浮动标签改为核实过的 commit SHA：
+`actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`（v7）、
+`actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1`（v7）、
+`actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0`（v7）；
+release.yml 另固定 `upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9`（v7）
+与 `download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333`（v8）。
+`python -m pip install --upgrade pip uv` 改为
+`astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2`（v10.3.3）安装
+uv 0.9.30 并关闭缓存，`uv sync --locked --extra dev` 保持不变。
+以锁定 Ruff 0.17.5 执行全仓 `ruff format .`（9 个 Python 文件与 1 份计划文档的代码块），
+并在 ci.yml、release.yml 加入阻断性 `uv run --locked ruff format --check .`。
+格式改动经 AST 比较为 token 一致（9/9 个 Python 文件与改动前 AST 相同），不改运行时行为。
+
+首次推送提交 `791e4cc` 的 [CI run 44233135329](https://github.com/wufei-png/160Grab/actions/runs/44233135329)
+中 Linux、macOS ARM、macOS Intel 三 job success，Windows 在 `Check Python formatting` 失败：
+runner 的 `core.autocrlf` 生成 CRLF，而格式配置为 `line-ending = "lf"`，全部文本文件显示需重排。
+新增 `.gitattributes`（`* text=auto eol=lf`）后，本地以 `core.autocrlf=true` 克隆验证
+169 个文本文件全部为 LF，提交 `8347a54` 修复。
+
+[CI run 44234420376](https://github.com/wufei-png/160Grab/actions/runs/44234420376)
+验证 `8347a54`，四个平台全部 success，`Check Python formatting` 均为 148 files already formatted：
+Linux、macOS ARM、macOS Intel 各 443 项离线测试（3 项 live deselected）+ 333 项含 Chromium 的
+contract/integration；Windows 为 437 passed + 6 项 POSIX 专属 skipped + 333 passed。
+本轮未修改依赖锁文件、Python 行为、配置模板或打包源码，未重跑 frozen bundle 与 Release；
+真实站点、设备与 provider 边界不变。最后补充此结果的文档提交使用 `[skip ci]`。
