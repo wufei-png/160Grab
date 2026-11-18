@@ -1,0 +1,5 @@
+# Check out text files with LF on every platform.
+# Windows runners otherwise get CRLF from core.autocrlf, which makes the
+# repo-wide `ruff format --check` gate (line-ending = "lf") report every
+# file as unformatted and breaks byte-compared fixtures.
+* text=auto eol=lf
