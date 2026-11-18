@@ -165,7 +165,9 @@ async def test_exported_sample_parity_in_both_browser_adapters(chromium_page):
     from tests.contracts.booking.scenarios import USERSCRIPT
 
     sample = json.loads(
-        (Path(__file__).parent / "fixtures/booking.minimal.v1.json").read_text(encoding="utf-8")
+        (Path(__file__).parent / "fixtures/booking.minimal.v1.json").read_text(
+            encoding="utf-8"
+        )
     )
     page = chromium_page
     await page.context.route(

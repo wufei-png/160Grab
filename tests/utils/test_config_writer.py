@@ -29,7 +29,9 @@ def test_write_browser_profile_name_replaces_file_atomically(tmp_path):
 
     write_browser_profile_name(config_path, "profile_9")
 
-    assert config_path.read_text(encoding="utf-8").strip().endswith(
-        "profile_name: profile_9"
+    assert (
+        config_path.read_text(encoding="utf-8")
+        .strip()
+        .endswith("profile_name: profile_9")
     )
     assert list(tmp_path.glob(".config.yaml.*.tmp")) == []

@@ -18,9 +18,7 @@ class AuthService:
 
     async def manual_login(self) -> LoginResult:
         await self.page.goto("https://user.91160.com/login.html")
-        message = (
-            "请在浏览器中手动完成登录，并导航到目标医生页。程序会在后续确认时读取当前 URL。"
-        )
+        message = "请在浏览器中手动完成登录，并导航到目标医生页。程序会在后续确认时读取当前 URL。"
         self.notify(message)
         if self.reporter is not None:
             await self.reporter.emit_event(

@@ -273,7 +273,9 @@ Expected: FAIL because `AuthService` / `OcrClient` / Playwright login flow do no
 ```python
 class OcrClient:
     async def recognize(self, image_bytes: bytes) -> str:
-        response = await self._client.post("/ocr", files={"file": ("captcha.png", image_bytes, "image/png")})
+        response = await self._client.post(
+            "/ocr", files={"file": ("captcha.png", image_bytes, "image/png")}
+        )
         return response.json()["result"]
 ```
 
@@ -385,15 +387,23 @@ git commit -m "feat: add dual-channel schedule polling and filters"
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_page_booking_strategy_builds_form_from_booking_page(page_booking_strategy, booking_page_html):
-    form = page_booking_strategy.parse_booking_form(booking_page_html, member_id="member-1")
+def test_page_booking_strategy_builds_form_from_booking_page(
+    page_booking_strategy, booking_page_html
+):
+    form = page_booking_strategy.parse_booking_form(
+        booking_page_html, member_id="member-1"
+    )
     assert form.member_id == "member-1"
     assert form.schedule_id == "sch-1001"
 
 
 @pytest.mark.asyncio
-async def test_page_booking_strategy_retries_same_slot_three_times(page_booking_strategy):
-    result = await page_booking_strategy.submit_with_retry(slot_id="sch-1001", max_attempts=3)
+async def test_page_booking_strategy_retries_same_slot_three_times(
+    page_booking_strategy,
+):
+    result = await page_booking_strategy.submit_with_retry(
+        slot_id="sch-1001", max_attempts=3
+    )
     assert result.success is True
     assert result.attempts == 3
 
@@ -411,11 +421,15 @@ Expected: FAIL because booking strategy abstraction / page strategy / submit ret
 
 ```python
 class BookingStrategy(Protocol):
-    async def submit_with_retry(self, slot_id: str, max_attempts: int = 3) -> BookingResult: ...
+    async def submit_with_retry(
+        self, slot_id: str, max_attempts: int = 3
+    ) -> BookingResult: ...
 
 
 class PageBookingStrategy:
-    async def submit_with_retry(self, slot_id: str, max_attempts: int = 3) -> BookingResult:
+    async def submit_with_retry(
+        self, slot_id: str, max_attempts: int = 3
+    ) -> BookingResult:
         for attempt in range(1, max_attempts + 1):
             form = await self.fetch_booking_form(slot_id)
             if not form.is_valid:
@@ -547,14 +561,26 @@ def pytest_collection_modifyitems(config, items):
 
 ```python
 class LiveRunner:
-    async def run(self, until: Literal["booking_confirmation", "final_submit"]) -> LiveRunResult:
+    async def run(
+        self, until: Literal["booking_confirmation", "final_submit"]
+    ) -> LiveRunResult:
         await self.auth_service.ensure_login()
         slots = await self.schedule_service.poll_until_match()
         form = await self.booking_service.open_booking_form(slots[0])
         if until == "final_submit" and os.getenv("LIVE_BOOKING") == "1":
             submit_result = await self.booking_service.submit_open_form(form)
-            return LiveRunResult(logged_in=True, schedule_checked=True, booking_form_opened=True, submitted=submit_result.success)
-        return LiveRunResult(logged_in=True, schedule_checked=True, booking_form_opened=True, submitted=False)
+            return LiveRunResult(
+                logged_in=True,
+                schedule_checked=True,
+                booking_form_opened=True,
+                submitted=submit_result.success,
+            )
+        return LiveRunResult(
+            logged_in=True,
+            schedule_checked=True,
+            booking_form_opened=True,
+            submitted=False,
+        )
 ```
 
 - [ ] **Step 4: Run test to verify it passes**

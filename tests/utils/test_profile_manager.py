@@ -142,7 +142,10 @@ def test_create_profile_writes_expected_marker(tmp_path):
 @pytest.mark.parametrize("channel", ["chromium", "chrome", "msedge"])
 def test_profile_channel_bound_on_create_load_and_resolve(tmp_path, channel):
     profile = create_profile(tmp_path, channel=channel)
-    assert json.loads(profile.marker_path.read_text(encoding="utf-8"))["channel"] == channel
+    assert (
+        json.loads(profile.marker_path.read_text(encoding="utf-8"))["channel"]
+        == channel
+    )
     assert load_profile(tmp_path, profile.name, channel=channel) == profile
     resolved = resolve_profile_for_run(
         root_dir=tmp_path,

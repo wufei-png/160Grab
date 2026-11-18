@@ -111,7 +111,9 @@ async def install_site(page, *, userscript=False, expire_first=False):
     """
     # Keep initialization and userscript in one script; Playwright does not
     # guarantee the order of multiple add_init_script registrations.
-    await page.add_init_script(init + (USERSCRIPT.read_text(encoding="utf-8") if userscript else ""))
+    await page.add_init_script(
+        init + (USERSCRIPT.read_text(encoding="utf-8") if userscript else "")
+    )
     await page.goto(DOCTOR)
     return counts, unexpected
 
@@ -240,7 +242,9 @@ async def test_python_runner_consent_unknown_recovery_and_privacy(
         )
         assert notifications
         assert "notification_delivery_failed" in sink.path.read_text(encoding="utf-8")
-        assert_clean([logs, notifications, sink.path.read_text(encoding="utf-8"), store.read()])
+        assert_clean(
+            [logs, notifications, sink.path.read_text(encoding="utf-8"), store.read()]
+        )
         assert not unexpected
     finally:
         raw_logger.remove(handle)
