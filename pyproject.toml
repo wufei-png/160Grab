@@ -64,6 +64,8 @@ select = [
 ]
 ignore = ["E501", "W505", "F403"]
 
+extend-select = ["B", "ASYNC210", "ASYNC220", "ASYNC221", "ASYNC230", "ASYNC251", "DTZ005", "DTZ006", "DTZ007", "S501", "S502", "S506", "S608"]
+
 fixable = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
