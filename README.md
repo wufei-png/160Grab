@@ -145,6 +145,7 @@ GRAB_DEBUG_DIR="$HOME/.160grab/debug" uv run --locked python main.py config.yaml
 uv sync --locked --extra dev
 uv run --locked playwright install chromium
 uv run --locked ruff check .
+uv run --locked ruff format --check .
 node --check userscripts/91160-doctor-page-poller.user.js
 node --check tests/contracts/booking/node_harness.cjs
 uv run --locked pytest -q -m "not live" --ignore=tests/contracts --ignore=tests/integration
@@ -153,7 +154,7 @@ uv run --locked pytest -q tests/contracts/ tests/integration/ -m "not live" --br
 
 已有环境可用 `--offline --no-sync`。Node 缺失不能跳过 JS 验收；临时 Chromium context 和 synthetic route 不读取用户 profile，不访问真实站点。完整检查可执行 `uv run --locked pytest -q`，未显式启用 live 时三个现场层级跳过。
 
-PR/push CI 与 release 验证前置安装 Node/Chromium，强制 Ruff、两份 Node 语法、单元/离线 canary、contract/本地 Chromium，设置 LIVE_E2E=0/LIVE_BOOKING=0 并排除 live。CI 矩阵覆盖 Linux、Windows、macOS arm64/Intel，也可手动运行。本地同命令通过不代表远端 CI 已执行，最新结果见 [验收索引](docs/integration-acceptance.md)。
+PR/push CI 与 release 验证前置安装 Node/Chromium，强制 Ruff lint 与全仓格式检查、两份 Node 语法、单元/离线 canary、contract/本地 Chromium，设置 LIVE_E2E=0/LIVE_BOOKING=0 并排除 live。CI 矩阵覆盖 Linux、Windows、macOS arm64/Intel，也可手动运行。本地同命令通过不代表远端 CI 已执行，最新结果见 [验收索引](docs/integration-acceptance.md)。
 
 ## 打包与发布
 
